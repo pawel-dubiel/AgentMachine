@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added `AGENTS.md` with repository guidance for future agents.
+- Added `plan.md` to track postponed work with dates.
 - Added Credo as a dev/test linter dependency.
 - Added a `mix quality` alias for format checks, warnings-as-errors compilation, Credo strict mode, and tests.
 - Added a `.credo.exs` configuration file.
