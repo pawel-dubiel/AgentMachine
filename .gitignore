@@ -1,0 +1,14 @@
+/_build/
+/cover/
+/deps/
+/doc/
+/.elixir_ls/
+.fetch
+*.app
+*.ez
+*.beam
+erl_crash.dump
+.env
+.env.*
+!.env.example
+.DS_Store
