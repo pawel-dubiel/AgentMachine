@@ -9,6 +9,7 @@ defmodule AgentMachine.AgentResult do
     :agent_id,
     :status,
     :output,
+    :next_agents,
     :usage,
     :error,
     :started_at,

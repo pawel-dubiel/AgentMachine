@@ -12,8 +12,9 @@ defmodule AgentMachine.AgentRunner do
 
   defp execute(agent, opts, run_id, started_at) do
     case agent.provider.complete(agent, opts) do
-      {:ok, %{output: output, usage: provider_usage}} when is_binary(output) ->
+      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
         usage = Usage.from_provider!(agent, run_id, provider_usage)
+        next_agents = next_agents_from_payload!(payload)
         :ok = UsageLedger.record!(usage)
 
         %AgentResult{
@@ -21,6 +22,7 @@ defmodule AgentMachine.AgentRunner do
           agent_id: agent.id,
           status: :ok,
           output: output,
+          next_agents: next_agents,
           usage: usage,
           started_at: started_at,
           finished_at: DateTime.utc_now()
@@ -61,5 +63,29 @@ defmodule AgentMachine.AgentRunner do
       started_at: started_at,
       finished_at: DateTime.utc_now()
     }
+  end
+
+  defp next_agents_from_payload!(payload) when is_map(payload) do
+    case fetch_optional_payload_field(payload, :next_agents) do
+      :error ->
+        []
+
+      {:ok, specs} when is_list(specs) ->
+        Enum.map(specs, &Agent.new!/1)
+
+      {:ok, specs} ->
+        raise ArgumentError,
+              "provider next_agents must be a list of agent specs, got: #{inspect(specs)}"
+    end
+  end
+
+  defp fetch_optional_payload_field(payload, field) do
+    string_field = Atom.to_string(field)
+
+    cond do
+      Map.has_key?(payload, field) -> {:ok, Map.fetch!(payload, field)}
+      Map.has_key?(payload, string_field) -> {:ok, Map.fetch!(payload, string_field)}
+      true -> :error
+    end
   end
 end

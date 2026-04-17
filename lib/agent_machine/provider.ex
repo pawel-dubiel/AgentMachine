@@ -9,7 +9,8 @@ defmodule AgentMachine.Provider do
               {:ok,
                %{
                  required(:output) => binary(),
-                 required(:usage) => map()
+                 required(:usage) => map(),
+                 optional(:next_agents) => [map() | keyword() | Agent.t()]
                }}
               | {:error, term()}
 end

@@ -10,6 +10,7 @@ It is intentionally compact. The project is not trying to be a giant agent frame
 - Record usage and estimated cost per agent.
 - Keep node-wide usage totals in a simple ledger.
 - Plug in model providers through a tiny `complete/2` contract.
+- Let an agent delegate explicit follow-up agents for the next step.
 - Fail fast when required configuration is missing.
 
 ## Why This Is Interesting
@@ -24,6 +25,11 @@ AgentMachine uses those strengths directly:
 - Usage and cost accounting happen in one normalized path.
 
 That means you can start with a local echo provider, swap in the OpenAI Responses provider, and later add more providers without changing orchestration code.
+
+The current agentic layer is deliberately small: an agent can return follow-up
+agent specs through `next_agents`, and the orchestrator decides whether to
+schedule them. This gives the project a real planner-to-workers loop without
+adding durable memory, tools, retries, or a large framework.
 
 ## Project Shape
 
@@ -74,7 +80,7 @@ mix test
 Expected result:
 
 ```text
-5 tests, 0 failures
+8 tests, 0 failures
 ```
 
 ## Start An IEx Session
@@ -124,6 +130,61 @@ Inspect node-wide totals:
 ```elixir
 AgentMachine.UsageLedger.totals()
 AgentMachine.UsageLedger.all()
+```
+
+## Dynamic Delegation
+
+A provider may return `next_agents` together with its normal output and usage.
+Those delegated agents are validated with the same strict contract as initial
+agents. The orchestrator starts them only after the parent result is collected.
+
+Because dynamic delegation can otherwise grow without a bound, any run that
+actually delegates work must pass an explicit `:max_steps` value. Missing or
+exceeded limits fail the run with a clear error instead of silently falling back
+to a default.
+
+```elixir
+defmodule MyPlannerProvider do
+  @behaviour AgentMachine.Provider
+
+  def complete(agent, _opts) do
+    {:ok,
+     %{
+       output: "Created two follow-up tasks.",
+       usage: %{input_tokens: 10, output_tokens: 6, total_tokens: 16},
+       next_agents: [
+         %{
+           id: "worker-a",
+           provider: AgentMachine.Providers.Echo,
+           model: "echo",
+           input: "Handle part A.",
+           pricing: agent.pricing
+         },
+         %{
+           id: "worker-b",
+           provider: AgentMachine.Providers.Echo,
+           model: "echo",
+           input: "Handle part B.",
+           pricing: agent.pricing
+         }
+       ]
+     }}
+  end
+end
+
+agents = [
+  %{
+    id: "planner",
+    provider: MyPlannerProvider,
+    model: "planner",
+    input: "Split this task.",
+    pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+  }
+]
+
+{:ok, run} = AgentMachine.Orchestrator.run(agents, timeout: 5_000, max_steps: 3)
+run.agent_order
+run.results["worker-a"].output
 ```
 
 ## Async Orchestration
@@ -245,6 +306,14 @@ Providers implement `AgentMachine.Provider`:
 @callback complete(AgentMachine.Agent.t(), keyword()) ::
             {:ok, %{output: binary(), usage: map()}}
             | {:error, term()}
+```
+
+Successful provider payloads may also include:
+
+```elixir
+%{
+  next_agents: [%{id: "worker", provider: MyProvider, model: "model", input: "...", pricing: %{...}}]
+}
 ```
 
 The returned usage must include:
