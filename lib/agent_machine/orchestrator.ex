@@ -53,7 +53,8 @@ defmodule AgentMachine.Orchestrator do
     if Map.has_key?(state.runs, run_id) do
       {:reply, {:error, {:run_exists, run_id}}, state}
     else
-      tasks = spawn_agents(agents, opts)
+      run_context = %{results: %{}, artifacts: %{}}
+      tasks = spawn_agents(agents, opts, run_context, nil)
 
       run = %{
         id: run_id,
@@ -61,6 +62,7 @@ defmodule AgentMachine.Orchestrator do
         agent_order: Enum.map(agents, & &1.id),
         tasks: tasks,
         results: %{},
+        artifacts: %{},
         usage: nil,
         opts: opts,
         step_count: length(agents),
@@ -136,7 +138,7 @@ defmodule AgentMachine.Orchestrator do
     end
   end
 
-  defp validate_agents!(agent_specs) when is_list(agent_specs) and length(agent_specs) > 0 do
+  defp validate_agents!([_agent | _rest] = agent_specs) do
     Enum.map(agent_specs, &Agent.new!/1)
   end
 
@@ -192,12 +194,19 @@ defmodule AgentMachine.Orchestrator do
     end)
   end
 
-  defp spawn_agents(agents, opts) do
+  defp spawn_agents(agents, opts, run_context, parent_agent_id) do
     Map.new(agents, fn agent ->
+      agent_opts =
+        Keyword.put(
+          opts,
+          :run_context,
+          build_agent_context(opts, agent, run_context, parent_agent_id)
+        )
+
       task =
         Task.Supervisor.async_nolink(AgentMachine.AgentSupervisor, AgentRunner, :run, [
           agent,
-          opts
+          agent_opts
         ])
 
       {task.ref, %{pid: task.pid, agent_id: agent.id}}
@@ -210,21 +219,33 @@ defmodule AgentMachine.Orchestrator do
 
     run = %{run | tasks: tasks, results: results}
 
+    case merge_result_artifacts(run, result) do
+      {:ok, run} -> continue_run_after_result(run, result)
+      {:error, reason} -> fail_run(run, reason)
+    end
+  end
+
+  defp continue_run_after_result(run, result) do
     if result.status == :ok and has_next_agents?(result) do
-      case schedule_next_agents(run, result) do
-        {:ok, updated_run} -> finish_if_idle(updated_run)
-        {:error, reason} -> fail_run(run, reason)
-      end
+      schedule_next_agents(run, result)
+      |> finish_or_fail(run)
     else
       finish_if_idle(run)
     end
   end
 
+  defp finish_or_fail({:ok, updated_run}, _run), do: finish_if_idle(updated_run)
+  defp finish_or_fail({:error, reason}, run), do: fail_run(run, reason)
+
   defp schedule_next_agents(run, result) do
     with {:ok, max_steps} <- fetch_max_steps(run.opts),
          {:ok, next_agents} <- validate_next_agents(run, result.next_agents),
          {:ok, step_count} <- reserve_steps(run.step_count, length(next_agents), max_steps) do
-      tasks = Map.merge(run.tasks, spawn_agents(next_agents, run.opts))
+      run_context = %{results: run.results, artifacts: run.artifacts}
+
+      tasks =
+        Map.merge(run.tasks, spawn_agents(next_agents, run.opts, run_context, result.agent_id))
+
       agent_order = run.agent_order ++ Enum.map(next_agents, & &1.id)
 
       {:ok, %{run | tasks: tasks, agent_order: agent_order, step_count: step_count}}
@@ -278,6 +299,43 @@ defmodule AgentMachine.Orchestrator do
 
   defp has_next_agents?(%AgentResult{next_agents: agents}) when is_list(agents), do: agents != []
   defp has_next_agents?(_result), do: false
+
+  defp merge_result_artifacts(run, %{status: :ok, artifacts: artifacts})
+       when is_map(artifacts) and map_size(artifacts) > 0 do
+    duplicate_keys = artifacts |> Map.keys() |> Enum.filter(&Map.has_key?(run.artifacts, &1))
+
+    case duplicate_keys do
+      [] ->
+        {:ok, %{run | artifacts: Map.merge(run.artifacts, artifacts)}}
+
+      keys ->
+        {:error, "agent artifacts must not overwrite existing keys: #{inspect(keys)}"}
+    end
+  end
+
+  defp merge_result_artifacts(run, _result), do: {:ok, run}
+
+  defp build_agent_context(opts, agent, run_context, parent_agent_id) do
+    %{
+      run_id: Keyword.fetch!(opts, :run_id),
+      agent_id: agent.id,
+      parent_agent_id: parent_agent_id,
+      results: context_results(run_context.results),
+      artifacts: run_context.artifacts
+    }
+  end
+
+  defp context_results(results) do
+    Map.new(results, fn {agent_id, result} ->
+      {agent_id,
+       %{
+         status: result.status,
+         output: result.output,
+         error: result.error,
+         artifacts: result.artifacts || %{}
+       }}
+    end)
+  end
 
   defp fetch_max_steps(opts) do
     case Keyword.fetch(opts, :max_steps) do

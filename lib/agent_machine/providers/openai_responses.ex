@@ -37,7 +37,9 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     case :httpc.request(
            :post,
            {@url, headers, ~c"application/json", body},
-           [{:timeout, timeout_ms}], body_format: :binary) do
+           [{:timeout, timeout_ms}],
+           body_format: :binary
+         ) do
       {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
         decoded = JSON.decode!(response_body)
 

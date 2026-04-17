@@ -11,6 +11,7 @@ It is intentionally compact. The project is not trying to be a giant agent frame
 - Keep node-wide usage totals in a simple ledger.
 - Plug in model providers through a tiny `complete/2` contract.
 - Let an agent delegate explicit follow-up agents for the next step.
+- Share run-scoped artifacts with later delegated agents.
 - Fail fast when required configuration is missing.
 
 ## Why This Is Interesting
@@ -27,9 +28,9 @@ AgentMachine uses those strengths directly:
 That means you can start with a local echo provider, swap in the OpenAI Responses provider, and later add more providers without changing orchestration code.
 
 The current agentic layer is deliberately small: an agent can return follow-up
-agent specs through `next_agents`, and the orchestrator decides whether to
-schedule them. This gives the project a real planner-to-workers loop without
-adding durable memory, tools, retries, or a large framework.
+agent specs through `next_agents`, write run-scoped `artifacts`, and read prior
+results through `:run_context`. This gives the project a real planner-to-workers
+loop without adding durable memory, tools, retries, or a large framework.
 
 ## Project Shape
 
@@ -80,7 +81,24 @@ mix test
 Expected result:
 
 ```text
-8 tests, 0 failures
+10 tests, 0 failures
+```
+
+## Quality Checks
+
+Run the full local quality gate:
+
+```sh
+mix quality
+```
+
+That alias runs:
+
+```sh
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix credo --strict
+mix test
 ```
 
 ## Start An IEx Session
@@ -186,6 +204,48 @@ agents = [
 run.agent_order
 run.results["worker-a"].output
 ```
+
+## Run Context And Artifacts
+
+Every provider receives a `:run_context` option. The context is a snapshot taken
+when the agent task is started:
+
+```elixir
+%{
+  run_id: "run-1",
+  agent_id: "worker-a",
+  parent_agent_id: "planner",
+  results: %{
+    "planner" => %{
+      status: :ok,
+      output: "Created follow-up tasks.",
+      error: nil,
+      artifacts: %{plan: "shared plan"}
+    }
+  },
+  artifacts: %{plan: "shared plan"}
+}
+```
+
+Providers may return `artifacts` to store shared state for later delegated
+agents:
+
+```elixir
+def complete(agent, opts) do
+  context = Keyword.fetch!(opts, :run_context)
+  plan = Map.fetch!(context.artifacts, :plan)
+
+  {:ok,
+   %{
+     output: "Used #{plan}.",
+     artifacts: %{worker_summary: "Finished part A."},
+     usage: %{input_tokens: 5, output_tokens: 4, total_tokens: 9}
+   }}
+end
+```
+
+Artifact keys are not overwritten. If two agents return the same artifact key,
+the run fails with an explicit error.
 
 ## Async Orchestration
 
@@ -312,7 +372,10 @@ Successful provider payloads may also include:
 
 ```elixir
 %{
-  next_agents: [%{id: "worker", provider: MyProvider, model: "model", input: "...", pricing: %{...}}]
+  next_agents: [
+    %{id: "worker", provider: MyProvider, model: "model", input: "...", pricing: %{...}}
+  ],
+  artifacts: %{plan: "shared plan"}
 }
 ```
 

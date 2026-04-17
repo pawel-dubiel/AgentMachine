@@ -7,7 +7,8 @@ defmodule AgentMachine.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: []
+      deps: deps(),
+      aliases: aliases()
     ]
   end
 
@@ -15,6 +16,31 @@ defmodule AgentMachine.MixProject do
     [
       extra_applications: [:logger, :inets, :ssl],
       mod: {AgentMachine.Application, []}
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        quality: :test
+      ]
+    ]
+  end
+
+  defp deps do
+    [
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      quality: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "credo --strict",
+        "test"
+      ]
     ]
   end
 end

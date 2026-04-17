@@ -5,6 +5,7 @@ defmodule AgentMachine.AgentRunner do
 
   def run(%Agent{} = agent, opts) when is_list(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
+    _run_context = Keyword.fetch!(opts, :run_context)
     started_at = DateTime.utc_now()
 
     execute(agent, opts, run_id, started_at)
@@ -15,6 +16,7 @@ defmodule AgentMachine.AgentRunner do
       {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
         usage = Usage.from_provider!(agent, run_id, provider_usage)
         next_agents = next_agents_from_payload!(payload)
+        artifacts = artifacts_from_payload!(payload)
         :ok = UsageLedger.record!(usage)
 
         %AgentResult{
@@ -23,6 +25,7 @@ defmodule AgentMachine.AgentRunner do
           status: :ok,
           output: output,
           next_agents: next_agents,
+          artifacts: artifacts,
           usage: usage,
           started_at: started_at,
           finished_at: DateTime.utc_now()
@@ -76,6 +79,19 @@ defmodule AgentMachine.AgentRunner do
       {:ok, specs} ->
         raise ArgumentError,
               "provider next_agents must be a list of agent specs, got: #{inspect(specs)}"
+    end
+  end
+
+  defp artifacts_from_payload!(payload) when is_map(payload) do
+    case fetch_optional_payload_field(payload, :artifacts) do
+      :error ->
+        %{}
+
+      {:ok, artifacts} when is_map(artifacts) ->
+        artifacts
+
+      {:ok, artifacts} ->
+        raise ArgumentError, "provider artifacts must be a map, got: #{inspect(artifacts)}"
     end
   end
 
