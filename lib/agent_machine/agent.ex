@@ -10,11 +10,11 @@ defmodule AgentMachine.Agent do
   - `:input`
   - `:pricing`
 
-  `:instructions` and `:metadata` are optional.
+  `:instructions`, `:metadata`, and `:depends_on` are optional.
   """
 
   @enforce_keys [:id, :provider, :model, :input, :pricing]
-  defstruct [:id, :provider, :model, :input, :instructions, :pricing, :metadata]
+  defstruct [:id, :provider, :model, :input, :instructions, :pricing, :metadata, depends_on: []]
 
   @type t :: %__MODULE__{
           id: binary(),
@@ -23,7 +23,8 @@ defmodule AgentMachine.Agent do
           input: binary(),
           instructions: binary() | nil,
           pricing: map(),
-          metadata: map() | nil
+          metadata: map() | nil,
+          depends_on: [binary()]
         }
 
   @required_fields [:id, :provider, :model, :input, :pricing]
@@ -76,6 +77,7 @@ defmodule AgentMachine.Agent do
     require_non_empty_binary!(agent.input, :input)
     require_optional_binary!(agent.instructions, :instructions)
     require_optional_map!(agent.metadata, :metadata)
+    require_dependency_list!(agent.depends_on)
     AgentMachine.Pricing.validate!(agent.pricing)
     agent
   end
@@ -118,5 +120,16 @@ defmodule AgentMachine.Agent do
 
   defp require_optional_map!(value, field) do
     raise ArgumentError, "agent #{inspect(field)} must be nil or a map, got: #{inspect(value)}"
+  end
+
+  defp require_dependency_list!(depends_on) when is_list(depends_on) do
+    Enum.each(depends_on, fn dependency ->
+      require_non_empty_binary!(dependency, :depends_on)
+    end)
+  end
+
+  defp require_dependency_list!(depends_on) do
+    raise ArgumentError,
+          "agent :depends_on must be a list of non-empty binaries, got: #{inspect(depends_on)}"
   end
 end

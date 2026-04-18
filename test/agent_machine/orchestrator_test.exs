@@ -27,6 +27,7 @@ defmodule AgentMachine.OrchestratorTest do
     ]
 
     assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000)
+
     assert run.status == :completed
     assert Map.keys(run.results) |> Enum.sort() == ["planner", "reviewer"]
     assert run.results["planner"].status == :ok
@@ -163,6 +164,360 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.status == :failed
     assert run.error =~ "agent artifacts must not overwrite existing keys"
     assert run.artifacts == %{plan: "original plan"}
+  end
+
+  test "runs a finalizer after delegated agents finish" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.Finalizing,
+        model: "test",
+        input: "plan final output",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    finalizer = %{
+      id: "finalizer",
+      provider: AgentMachine.TestProviders.Finalizing,
+      model: "test",
+      input: "combine worker outputs",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+
+    assert {:ok, run} =
+             Orchestrator.run(agents, timeout: 1_000, max_steps: 4, finalizer: finalizer)
+
+    assert run.status == :completed
+    assert run.agent_order == ["planner", "worker-a", "worker-b", "finalizer"]
+    assert run.results["finalizer"].output == "finalized worker-a output + worker-b output"
+    assert run.artifacts.final_output == "finalized worker-a output + worker-b output"
+    assert run.usage.agents == 4
+  end
+
+  test "fails fast when finalizer id duplicates an agent id" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "make a plan",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    finalizer = %{
+      id: "planner",
+      provider: AgentMachine.Providers.Echo,
+      model: "echo",
+      input: "combine",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+
+    assert_raise ArgumentError, ~r/agent ids must be unique/, fn ->
+      Orchestrator.run(agents, timeout: 1_000, finalizer: finalizer)
+    end
+  end
+
+  test "counts finalizer against max_steps" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.Finalizing,
+        model: "test",
+        input: "plan final output",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    finalizer = %{
+      id: "finalizer",
+      provider: AgentMachine.TestProviders.Finalizing,
+      model: "test",
+      input: "combine worker outputs",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents, timeout: 1_000, max_steps: 3, finalizer: finalizer)
+
+    assert run.status == :failed
+    assert run.error =~ "exceed max_steps 3"
+    refute Map.has_key?(run.results, "finalizer")
+  end
+
+  test "records structured events for a finalized run" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.Finalizing,
+        model: "test",
+        input: "plan final output",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    finalizer = %{
+      id: "finalizer",
+      provider: AgentMachine.TestProviders.Finalizing,
+      model: "test",
+      input: "combine worker outputs",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+
+    assert {:ok, run} =
+             Orchestrator.run(agents, timeout: 1_000, max_steps: 4, finalizer: finalizer)
+
+    assert hd(run.events).type == :run_started
+    assert List.last(run.events).type == :run_completed
+
+    assert run.events
+           |> Enum.filter(&(&1.type == :agent_started))
+           |> Enum.map(& &1.agent_id)
+           |> Enum.sort() == ["finalizer", "planner", "worker-a", "worker-b"]
+
+    assert run.events
+           |> Enum.filter(&(&1.type == :agent_finished))
+           |> Enum.map(& &1.agent_id)
+           |> Enum.sort() == ["finalizer", "planner", "worker-a", "worker-b"]
+
+    worker_parent_ids =
+      run.events
+      |> Enum.filter(&(&1.type == :agent_started and &1.agent_id in ["worker-a", "worker-b"]))
+      |> Enum.map(& &1.parent_agent_id)
+
+    assert worker_parent_ids == ["planner", "planner"]
+    assert Enum.all?(run.events, &match?(%DateTime{}, &1.at))
+  end
+
+  test "records a run_failed event" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.ConflictingArtifacts,
+        model: "test",
+        input: "create conflicting artifacts",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} = Orchestrator.run(agents, timeout: 1_000, max_steps: 2)
+
+    assert List.last(run.events).type == :run_failed
+    assert List.last(run.events).reason =~ "agent artifacts must not overwrite existing keys"
+  end
+
+  test "retries a failed agent until it succeeds" do
+    agents = [
+      %{
+        id: "flaky",
+        provider: AgentMachine.TestProviders.Flaky,
+        model: "test",
+        input: "eventually succeed",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_attempts: 2)
+
+    assert run.status == :completed
+    assert run.results["flaky"].status == :ok
+    assert run.results["flaky"].attempt == 2
+    assert run.results["flaky"].output == "succeeded on attempt 2"
+
+    assert run.events
+           |> Enum.filter(&(&1.type == :agent_retry_scheduled))
+           |> Enum.map(& &1.next_attempt) == [2]
+  end
+
+  test "stores the final error when retry attempts are exhausted" do
+    agents = [
+      %{
+        id: "always-fails",
+        provider: AgentMachine.TestProviders.AlwaysFails,
+        model: "test",
+        input: "never succeeds",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_attempts: 2)
+
+    assert run.status == :completed
+    assert run.results["always-fails"].status == :error
+    assert run.results["always-fails"].attempt == 2
+    assert run.results["always-fails"].error == ":planned_failure"
+
+    assert run.events
+           |> Enum.filter(&(&1.type == :agent_finished and &1.agent_id == "always-fails"))
+           |> Enum.map(& &1.attempt) == [1, 2]
+  end
+
+  test "runs initial agents after their dependencies finish" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "make a plan",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      },
+      %{
+        id: "reviewer",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "review the plan",
+        depends_on: ["planner"],
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      },
+      %{
+        id: "publisher",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "publish the result",
+        depends_on: ["reviewer"],
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000)
+
+    assert run.status == :completed
+    assert run.agent_order == ["planner", "reviewer", "publisher"]
+    assert Map.keys(run.results) |> Enum.sort() == ["planner", "publisher", "reviewer"]
+  end
+
+  test "fails fast when an agent dependency is missing" do
+    agents = [
+      %{
+        id: "reviewer",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "review the plan",
+        depends_on: ["planner"],
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert_raise ArgumentError, ~r/depends on missing agent id/, fn ->
+      Orchestrator.run(agents, timeout: 1_000)
+    end
+  end
+
+  test "fails fast when agent dependencies contain a cycle" do
+    agents = [
+      %{
+        id: "a",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "a",
+        depends_on: ["b"],
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      },
+      %{
+        id: "b",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "b",
+        depends_on: ["a"],
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert_raise ArgumentError, ~r/dependency graph contains a cycle/, fn ->
+      Orchestrator.run(agents, timeout: 1_000)
+    end
+  end
+
+  test "executes provider tool calls and stores tool results" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100
+             )
+
+    assert run.results["tool-user"].status == :ok
+
+    assert run.results["tool-user"].tool_results == %{
+             "uppercase" => %{value: "HELLO", attempt: 1}
+           }
+  end
+
+  test "returns an agent error when a tool call fails" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolFailing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Failing],
+               tool_timeout_ms: 100
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "tool AgentMachine.TestTools.Failing failed"
+  end
+
+  test "rejects a tool call outside allowed_tools" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Failing],
+               tool_timeout_ms: 100
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "not in :allowed_tools"
+  end
+
+  test "returns an agent error when a tool call times out" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolSleeping,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Sleeping],
+               tool_timeout_ms: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "timed out after 1ms"
   end
 end
 
@@ -336,5 +691,279 @@ defmodule AgentMachine.TestProviders.ConflictingArtifacts do
     text
     |> String.split(~r/\s+/, trim: true)
     |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.Finalizing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    output = "planned final output"
+
+    {:ok,
+     %{
+       output: output,
+       artifacts: %{plan: "final plan"},
+       usage: usage(agent, output),
+       next_agents: [
+         worker("worker-a", "do final part a", agent.pricing),
+         worker("worker-b", "do final part b", agent.pricing)
+       ]
+     }}
+  end
+
+  def complete(%Agent{id: "finalizer"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+    worker_a = context.results |> Map.fetch!("worker-a") |> Map.fetch!(:output)
+    worker_b = context.results |> Map.fetch!("worker-b") |> Map.fetch!(:output)
+    output = "finalized #{worker_a} + #{worker_b}"
+
+    {:ok,
+     %{
+       output: output,
+       artifacts: %{final_output: output},
+       usage: usage(agent, output)
+     }}
+  end
+
+  def complete(%Agent{} = agent, _opts) do
+    output = "#{agent.id} output"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp worker(id, input, pricing) do
+    %{
+      id: id,
+      provider: __MODULE__,
+      model: "test",
+      input: input,
+      pricing: pricing
+    }
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.Flaky do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.fetch!(opts, :attempt) do
+      1 ->
+        {:error, :planned_failure}
+
+      attempt ->
+        output = "succeeded on attempt #{attempt}"
+
+        {:ok,
+         %{
+           output: output,
+           usage: usage(agent, output)
+         }}
+    end
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.AlwaysFails do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = _agent, _opts), do: {:error, :planned_failure}
+end
+
+defmodule AgentMachine.TestProviders.ToolUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, _opts) do
+    output = "called uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "uppercase",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: agent.input}
+         }
+       ],
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.ToolFailing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, _opts) do
+    output = "called failing tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "failing",
+           tool: AgentMachine.TestTools.Failing,
+           input: %{value: agent.input}
+         }
+       ],
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.ToolSleeping do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, _opts) do
+    output = "called sleeping tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "sleeping",
+           tool: AgentMachine.TestTools.Sleeping,
+           input: %{sleep_ms: 20}
+         }
+       ],
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestTools.Uppercase do
+  @behaviour AgentMachine.Tool
+
+  @impl true
+  def run(input, opts) do
+    value = Map.fetch!(input, :value)
+    attempt = Keyword.fetch!(opts, :attempt)
+
+    {:ok, %{value: String.upcase(value), attempt: attempt}}
+  end
+end
+
+defmodule AgentMachine.TestTools.Failing do
+  @behaviour AgentMachine.Tool
+
+  @impl true
+  def run(_input, _opts), do: {:error, :planned_tool_failure}
+end
+
+defmodule AgentMachine.TestTools.Sleeping do
+  @behaviour AgentMachine.Tool
+
+  @impl true
+  def run(input, _opts) do
+    input |> Map.fetch!(:sleep_ms) |> Process.sleep()
+    {:ok, %{slept: true}}
   end
 end

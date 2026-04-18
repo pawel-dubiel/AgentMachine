@@ -45,9 +45,16 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - `AgentMachine.Orchestrator` owns run state, task spawning, result aggregation, dynamic delegation, run artifacts, and usage totals.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - Providers implement `AgentMachine.Provider.complete/2`.
+- Tools implement `AgentMachine.Tool.run/2`.
 - Agents may return `next_agents` for dynamic delegation.
 - Agents may return `artifacts` for run-scoped memory.
+- Agents may return `tool_calls` for explicit tool execution.
+- Initial agents may use `depends_on` for dependency-ordered execution.
+- Runs may use `finalizer` to synthesize a final result after all other work.
+- Runs may use `max_attempts` for explicit retry attempts.
+- Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
+- Tool calls require `allowed_tools` and `tool_timeout_ms`.
 
 ## Deferred Direction
 

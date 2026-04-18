@@ -4,6 +4,24 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Updated `AGENTS.md` with the current finalizer, retry, dependency, events, and tool architecture.
+- Added explicit `:tool_timeout_ms` enforcement for provider tool calls.
+- Added a test for tool timeout failures.
+- Added explicit `:allowed_tools` enforcement for provider tool calls.
+- Added a test for rejecting tool calls outside the allowlist.
+- Added `AgentMachine.Tool` and provider `tool_calls` execution.
+- Added `tool_results` to agent results and run context.
+- Added tool execution tests for success and failure.
+- Added optional `depends_on` support for initial agent dependency graphs.
+- Added dependency graph validation for missing dependencies, duplicate dependency entries, self-dependencies, and cycles.
+- Added tests for dependency scheduling and invalid dependency graphs.
+- Added explicit `:max_attempts` retry support for failed agent attempts.
+- Added `:attempt` provider option and retry events.
+- Added retry tests for eventual success and exhausted attempts.
+- Added in-memory run events for run start, agent start, agent finish, run completion, and run failure.
+- Added event tests for finalized runs and failed runs.
+- Added optional finalizer agents that run after normal and delegated agents finish.
+- Added finalizer tests for synthesis, duplicate IDs, and `:max_steps` enforcement.
 - Added `AGENTS.md` with repository guidance for future agents.
 - Added `plan.md` to track postponed work with dates.
 - Added Credo as a dev/test linter dependency.

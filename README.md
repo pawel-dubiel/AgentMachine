@@ -42,6 +42,7 @@ lib/
     agent_runner.ex                 # executes one agent through its provider
     agent.ex                        # strict agent spec validation
     provider.ex                     # provider behaviour
+    tool.ex                         # tool behaviour
     usage.ex                        # normalized usage and cost entry
     usage_ledger.ex                 # in-memory node-wide usage ledger
     pricing.ex                      # explicit per-million-token cost calculation
@@ -81,7 +82,7 @@ mix test
 Expected result:
 
 ```text
-10 tests, 0 failures
+24 tests, 0 failures
 ```
 
 ## Quality Checks
@@ -247,6 +248,170 @@ end
 Artifact keys are not overwritten. If two agents return the same artifact key,
 the run fails with an explicit error.
 
+## Agent Dependencies
+
+Initial agents may declare dependencies on other initial agents:
+
+```elixir
+agents = [
+  %{
+    id: "planner",
+    provider: AgentMachine.Providers.Echo,
+    model: "echo",
+    input: "Make a plan.",
+    pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+  },
+  %{
+    id: "reviewer",
+    provider: AgentMachine.Providers.Echo,
+    model: "echo",
+    input: "Review the plan.",
+    depends_on: ["planner"],
+    pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+  }
+]
+```
+
+The orchestrator starts agents whose dependencies are already satisfied and
+keeps the rest pending. A dependency is satisfied when the prerequisite agent has
+a result, whether that result is `:ok` or `:error`.
+
+Missing dependencies, duplicate dependency entries, self-dependencies, and
+cycles fail before the run starts.
+
+## Finalizer
+
+Pass a `:finalizer` agent when a run should produce one synthesized output after
+all normal and delegated agents finish:
+
+```elixir
+finalizer = %{
+  id: "finalizer",
+  provider: MyFinalizerProvider,
+  model: "finalizer-model",
+  input: "Combine worker outputs into the final answer.",
+  pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+}
+
+{:ok, run} =
+  AgentMachine.Orchestrator.run(agents,
+    timeout: 5_000,
+    max_steps: 4,
+    finalizer: finalizer
+  )
+
+run.results["finalizer"].output
+run.artifacts.final_output
+```
+
+The finalizer receives the same `:run_context` shape as delegated agents, with
+all prior results and artifacts. If `:max_steps` is provided, the finalizer
+counts as one step. A finalizer must not return `next_agents`.
+
+## Retry Attempts
+
+Pass `:max_attempts` when failed agent attempts should be retried:
+
+```elixir
+{:ok, run} =
+  AgentMachine.Orchestrator.run(agents,
+    timeout: 5_000,
+    max_attempts: 2
+  )
+```
+
+Providers receive the current attempt number:
+
+```elixir
+def complete(agent, opts) do
+  attempt = Keyword.fetch!(opts, :attempt)
+  # attempt starts at 1
+end
+```
+
+Missing `:max_attempts` means no retry. If provided, it must be a positive
+integer. Exhausted retries store the final error result for that agent.
+
+## Tools
+
+Providers may return explicit `tool_calls`. The runner validates and executes
+each tool module, then stores results in `AgentResult.tool_results`:
+
+```elixir
+defmodule UppercaseTool do
+  @behaviour AgentMachine.Tool
+
+  def run(input, opts) do
+    value = Map.fetch!(input, :value)
+    attempt = Keyword.fetch!(opts, :attempt)
+
+    {:ok, %{value: String.upcase(value), attempt: attempt}}
+  end
+end
+
+def complete(agent, _opts) do
+  {:ok,
+   %{
+     output: "Called a tool.",
+     usage: %{input_tokens: 3, output_tokens: 3, total_tokens: 6},
+     tool_calls: [
+       %{
+         id: "uppercase",
+         tool: UppercaseTool,
+         input: %{value: agent.input}
+       }
+     ]
+   }}
+end
+```
+
+Tool calls must include:
+
+- `:id` as a non-empty binary
+- `:tool` as a loaded module exporting `run/2`
+- `:input` as a map
+
+Tools must return `{:ok, map()}` or `{:error, reason}`. Tool failures turn the
+agent attempt into an error result. Later agents can read prior tool results
+from `:run_context.results[agent_id].tool_results`.
+
+Runs that execute tools must explicitly allow them:
+
+```elixir
+{:ok, run} =
+  AgentMachine.Orchestrator.run(agents,
+    timeout: 5_000,
+    allowed_tools: [UppercaseTool],
+    tool_timeout_ms: 1_000
+  )
+```
+
+If a provider requests a tool that is not in `:allowed_tools`, that agent attempt
+fails with an explicit error. If a tool does not finish within
+`:tool_timeout_ms`, that agent attempt also fails with an explicit error.
+
+## Run Events
+
+Every run records simple in-memory events in `run.events`:
+
+```elixir
+run.events
+```
+
+Events include:
+
+```elixir
+%{type: :run_started, run_id: "run-1", at: ~U[...]}
+%{type: :agent_started, run_id: "run-1", agent_id: "planner", parent_agent_id: nil, attempt: 1, at: ~U[...]}
+%{type: :agent_finished, run_id: "run-1", agent_id: "planner", status: :ok, attempt: 1, duration_ms: 12, at: ~U[...]}
+%{type: :agent_retry_scheduled, run_id: "run-1", agent_id: "planner", next_attempt: 2, reason: "error", at: ~U[...]}
+%{type: :run_completed, run_id: "run-1", at: ~U[...]}
+%{type: :run_failed, run_id: "run-1", reason: "explicit error", at: ~U[...]}
+```
+
+This is intentionally local and lightweight. Durable traces and external
+telemetry can be added later without changing provider contracts.
+
 ## Async Orchestration
 
 Use `run/2` when you want to block until a run completes. Use `start_run/2` plus `await_run/2` when you want to start a run and monitor it separately.
@@ -348,6 +513,7 @@ An agent is a map or keyword list with this shape:
   model: "model-name",
   instructions: "Optional provider instructions.",
   input: "The task for this agent.",
+  depends_on: ["another-agent-id"],
   metadata: %{optional: "provider metadata"},
   pricing: %{
     input_per_million: 0.0,
@@ -356,7 +522,7 @@ An agent is a map or keyword list with this shape:
 }
 ```
 
-Only `:instructions` and `:metadata` are optional.
+Only `:instructions`, `:metadata`, and `:depends_on` are optional.
 
 ## Provider Contract
 
@@ -375,7 +541,10 @@ Successful provider payloads may also include:
   next_agents: [
     %{id: "worker", provider: MyProvider, model: "model", input: "...", pricing: %{...}}
   ],
-  artifacts: %{plan: "shared plan"}
+  artifacts: %{plan: "shared plan"},
+  tool_calls: [
+    %{id: "call-id", tool: MyTool, input: %{value: "..."}}
+  ]
 }
 ```
 
