@@ -1,0 +1,84 @@
+defmodule AgentMachine.ClientRunner do
+  @moduledoc """
+  High-level client runner used by CLI and TUI frontends.
+  """
+
+  alias AgentMachine.{JSON, Orchestrator, RunSpec}
+  alias AgentMachine.Workflows.Basic
+
+  def run!(attrs) do
+    spec = RunSpec.new!(attrs)
+    {agents, opts} = Basic.build!(spec)
+
+    case Orchestrator.run(agents, opts) do
+      {:ok, run} -> summarize_run(run)
+      {:error, {:failed, run}} -> summarize_run(run)
+      {:error, {:timeout, run}} -> summarize_timeout(run)
+      {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
+    end
+  end
+
+  def json!(summary) when is_map(summary) do
+    JSON.encode!(summary)
+  end
+
+  defp summarize_timeout(run) do
+    run
+    |> summarize_run()
+    |> Map.put(:status, "timeout")
+  end
+
+  defp summarize_run(run) do
+    %{
+      run_id: run.id,
+      status: Atom.to_string(run.status),
+      final_output: final_output(run),
+      results: summarize_results(run.results),
+      artifacts: stringify_map(run.artifacts),
+      usage: run.usage || empty_usage(),
+      events: Enum.map(run.events, &summarize_event/1)
+    }
+  end
+
+  defp final_output(run) do
+    case Map.fetch(run.results, "finalizer") do
+      {:ok, %{output: output}} -> output
+      :error -> nil
+    end
+  end
+
+  defp summarize_results(results) do
+    Map.new(results, fn {agent_id, result} ->
+      {agent_id,
+       %{
+         status: Atom.to_string(result.status),
+         output: result.output,
+         error: result.error,
+         attempt: result.attempt,
+         artifacts: result.artifacts || %{},
+         tool_results: result.tool_results || %{}
+       }}
+    end)
+  end
+
+  defp summarize_event(event) do
+    Map.new(event, fn
+      {:type, type} -> {:type, Atom.to_string(type)}
+      {key, value} when is_atom(value) and not is_nil(value) -> {key, Atom.to_string(value)}
+      {:at, %DateTime{} = at} -> {:at, DateTime.to_iso8601(at)}
+      {key, value} -> {key, value}
+    end)
+  end
+
+  defp stringify_map(map) when is_map(map), do: map
+
+  defp empty_usage do
+    %{
+      agents: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      cost_usd: 0.0
+    }
+  end
+end

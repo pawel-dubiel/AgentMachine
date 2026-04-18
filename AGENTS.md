@@ -43,6 +43,7 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 ## Current Architecture
 
 - `AgentMachine.Orchestrator` owns run state, task spawning, result aggregation, dynamic delegation, run artifacts, and usage totals.
+- `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - Providers implement `AgentMachine.Provider.complete/2`.
 - Tools implement `AgentMachine.Tool.run/2`.
@@ -55,6 +56,8 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
 - Tool calls require `allowed_tools` and `tool_timeout_ms`.
+- `mix agent_machine.run` is the stable CLI boundary for clients.
+- `tui/` contains the Go Bubble Tea client and should call the CLI boundary instead of reimplementing orchestration.
 
 ## Deferred Direction
 

@@ -4,6 +4,8 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
+- [2026-04-18] Add OpenAI provider selection and required pricing/model fields to the Bubble Tea TUI.
+- [2026-04-18] Add a Codex skill wrapper that uses `mix agent_machine.run` as its command boundary.
 - [2026-04-18] Add durable run state so runs can be resumed after a node restart or crash.
 - [2026-04-18] Add durable retry checkpoints so retry state can survive node restarts.
 - [2026-04-18] Add approval flow and stronger sandbox boundaries for tool execution.

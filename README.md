@@ -38,9 +38,11 @@ loop without adding durable memory, tools, retries, or a large framework.
 lib/
   agent_machine/
     application.ex                  # OTP supervision tree
+    client_runner.ex                # high-level runner for CLI/TUI clients
     orchestrator.ex                 # starts runs, spawns agents, collects results
     agent_runner.ex                 # executes one agent through its provider
     agent.ex                        # strict agent spec validation
+    run_spec.ex                     # high-level client run spec validation
     provider.ex                     # provider behaviour
     tool.ex                         # tool behaviour
     usage.ex                        # normalized usage and cost entry
@@ -50,6 +52,12 @@ lib/
     providers/
       echo.ex                       # local provider for development/tests
       openai_responses.ex           # OpenAI Responses API provider
+    workflows/
+      basic.ex                      # simple client workflow
+  mix/tasks/
+    agent_machine.run.ex            # CLI boundary for clients
+tui/
+  main.go                           # Bubble Tea TUI client
 test/
   agent_machine/
 ```
@@ -58,6 +66,7 @@ test/
 
 - Elixir `1.19.5`
 - Erlang/OTP `28`
+- Go `1.24.2` for the Bubble Tea TUI
 
 If you are on macOS with Homebrew:
 
@@ -82,7 +91,7 @@ mix test
 Expected result:
 
 ```text
-24 tests, 0 failures
+27 tests, 0 failures
 ```
 
 ## Quality Checks
@@ -109,6 +118,58 @@ iex -S mix
 ```
 
 Now you can run agents from the shell.
+
+## Simple CLI Client
+
+Use the high-level CLI when you want to run a task without building agent maps by
+hand:
+
+```sh
+mix agent_machine.run \
+  --provider echo \
+  --timeout-ms 5000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  "Review this project and summarize the next step"
+```
+
+For machine-readable output, add `--json`:
+
+```sh
+mix agent_machine.run \
+  --provider echo \
+  --timeout-ms 5000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --json \
+  "Review this project and summarize the next step"
+```
+
+The command uses `AgentMachine.RunSpec` plus the basic workflow. The local Echo
+profile runs an assistant agent and then a finalizer.
+
+## Bubble Tea TUI
+
+Run the terminal UI:
+
+```sh
+cd tui
+go run .
+```
+
+The TUI asks for a task, runs the local Echo workflow through
+`mix agent_machine.run --json`, and shows the final output, usage, status, and
+events.
+
+Current TUI controls:
+
+- `Enter`: run the task
+- `Esc`: start a new task after a run
+- `q`: quit after a run
+- `Ctrl+C`: quit anytime
+
+The TUI currently uses the local Echo profile. OpenAI provider selection is
+tracked in `plan.md` as a deferred client feature.
 
 ## Quick Demo With Local Agents
 

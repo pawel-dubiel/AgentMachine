@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, and `AgentMachine.ClientRunner` as a high-level client boundary.
+- Added `mix agent_machine.run` with text and JSON output.
+- Added a Go Bubble Tea TUI client in `tui/`.
+- Added Go TUI tests and Elixir client runner tests.
 - Updated `AGENTS.md` with the current finalizer, retry, dependency, events, and tool architecture.
 - Added explicit `:tool_timeout_ms` enforcement for provider tool calls.
 - Added a test for tool timeout failures.
