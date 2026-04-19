@@ -4,7 +4,11 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
-- [2026-04-18] Add OpenAI provider selection and required pricing/model fields to the Bubble Tea TUI.
+- [2026-04-19] Add JSONL event streaming so the TUI can show live agent progress during a run.
+- [2026-04-19] Add cancellation and retry commands to the TUI after event streaming exists.
+- [2026-04-19] Replace plaintext TUI API key config with OS keychain integration.
+- [2026-04-19] Add searchable model picker UI for large provider model lists.
+- [2026-04-19] Add a documented process for keeping built-in OpenAI TUI pricing profiles current.
 - [2026-04-18] Add a Codex skill wrapper that uses `mix agent_machine.run` as its command boundary.
 - [2026-04-18] Add durable run state so runs can be resumed after a node restart or crash.
 - [2026-04-18] Add durable retry checkpoints so retry state can survive node restarts.

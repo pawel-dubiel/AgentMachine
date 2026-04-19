@@ -46,6 +46,7 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - Providers implement `AgentMachine.Provider.complete/2`.
+- Built-in providers are Echo, OpenAI Responses, and OpenRouter Chat.
 - Tools implement `AgentMachine.Tool.run/2`.
 - Agents may return `next_agents` for dynamic delegation.
 - Agents may return `artifacts` for run-scoped memory.
@@ -57,7 +58,10 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
 - Tool calls require `allowed_tools` and `tool_timeout_ms`.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
-- `tui/` contains the Go Bubble Tea client and should call the CLI boundary instead of reimplementing orchestration.
+- `tui/` contains the Go Bubble Tea conversation client with slash commands and should call the CLI boundary instead of reimplementing orchestration.
+- The TUI may persist remote provider API keys in its local config file and inject them into the `mix` child process environment.
+- The TUI resolves remote-provider pricing itself before calling the CLI; do not expose token price fields as normal user inputs.
+- The TUI loads remote provider model lists from OpenAI/OpenRouter and should keep model selection provider-specific.
 
 ## Deferred Direction
 

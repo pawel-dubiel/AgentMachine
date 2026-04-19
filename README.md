@@ -52,6 +52,7 @@ lib/
     providers/
       echo.ex                       # local provider for development/tests
       openai_responses.ex           # OpenAI Responses API provider
+      openrouter_chat.ex            # OpenRouter Chat Completions provider
     workflows/
       basic.ex                      # simple client workflow
   mix/tasks/
@@ -148,6 +149,25 @@ mix agent_machine.run \
 The command uses `AgentMachine.RunSpec` plus the basic workflow. The local Echo
 profile runs an assistant agent and then a finalizer.
 
+Remote providers require explicit model, pricing, HTTP timeout, and API key
+configuration:
+
+```sh
+export OPENROUTER_API_KEY="..."
+
+mix agent_machine.run \
+  --provider openrouter \
+  --model "YOUR_OPENROUTER_MODEL" \
+  --timeout-ms 30000 \
+  --http-timeout-ms 25000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --json \
+  "Review this project and summarize the next step"
+```
+
 ## Bubble Tea TUI
 
 Run the terminal UI:
@@ -157,19 +177,62 @@ cd tui
 go run .
 ```
 
-The TUI asks for a task, runs the local Echo workflow through
-`mix agent_machine.run --json`, and shows the final output, usage, status, and
-events.
+The TUI is a conversation client. Type a normal message to run the selected
+AgentMachine workflow through `mix agent_machine.run --json`. Use slash commands
+to change session settings, load models, and inspect the last run.
+
+Remote provider API keys can be entered directly in the TUI. They are saved in a
+local JSON config file with `0600` permissions and injected into the `mix`
+process environment when a run starts. By default the config file is under the
+platform user config directory:
+
+```text
+macOS: ~/Library/Application Support/agent-machine/tui-config.json
+Linux: ~/.config/agent-machine/tui-config.json
+```
+
+Set `AGENT_MACHINE_TUI_CONFIG` to use a different config path.
+
+The saved key fields are:
+
+- `OPENAI_API_KEY` for OpenAI
+- `OPENROUTER_API_KEY` for OpenRouter
+
+The TUI does not ask for token prices. OpenAI pricing is resolved from the
+TUI's built-in model pricing table. OpenRouter pricing is resolved from
+OpenRouter's public models API for the selected model. Remote runs use these
+timeout defaults:
+
+- run timeout: `30000ms`
+- HTTP timeout: `25000ms`
+
+Remote model lists are loaded by provider:
+
+- OpenAI models are loaded from `GET https://api.openai.com/v1/models` with the saved `OPENAI_API_KEY`, then filtered to models with known TUI pricing profiles.
+- OpenRouter models are loaded from `GET https://openrouter.ai/api/v1/models`.
+
+Core commands:
+
+- `/provider echo|openai|openrouter`
+- `/key <api-key>`
+- `/models reload`
+- `/models`
+- `/model <id|next|prev>`
+- `/settings`
+- `/agents`
+- `/agent <id>`
+- `/back`
+- `/clear`
+- `/quit`
+
+`/agents` lists the agents from the last completed run. `/agent <id>` shows one
+agent's status, attempt, output, and error. This is completed-run inspection;
+live agent progress will require a later event-streaming CLI mode.
 
 Current TUI controls:
 
-- `Enter`: run the task
-- `Esc`: start a new task after a run
-- `q`: quit after a run
+- `Enter`: submit a message or slash command
 - `Ctrl+C`: quit anytime
-
-The TUI currently uses the local Echo profile. OpenAI provider selection is
-tracked in `plan.md` as a deferred client feature.
 
 ## Quick Demo With Local Agents
 
@@ -492,14 +555,17 @@ If the wait limit is reached, the orchestrator returns the current run state:
   AgentMachine.Orchestrator.await_run(run_id, 1)
 ```
 
-## Run With OpenAI
+## Run With OpenAI Or OpenRouter
 
 The OpenAI provider uses the Responses API through Erlang `:httpc`. It does not pull extra Hex dependencies.
+The OpenRouter provider uses the OpenAI-compatible Chat Completions API through
+the same dependency-free HTTP path.
 
 Set the required environment variables:
 
 ```sh
 export OPENAI_API_KEY="sk-..."
+export OPENROUTER_API_KEY="..."
 export OPENAI_INPUT_PRICE_PER_MILLION="0.25"
 export OPENAI_OUTPUT_PRICE_PER_MILLION="2.00"
 ```
@@ -558,8 +624,9 @@ Required fields are deliberately strict:
 - `:input`
 - `:pricing`
 - `:timeout` for `Orchestrator.run/2`
-- `:http_timeout_ms` when using `AgentMachine.Providers.OpenAIResponses`
+- `:http_timeout_ms` when using `AgentMachine.Providers.OpenAIResponses` or `AgentMachine.Providers.OpenRouterChat`
 - `OPENAI_API_KEY` when using `AgentMachine.Providers.OpenAIResponses`
+- `OPENROUTER_API_KEY` when using `AgentMachine.Providers.OpenRouterChat`
 
 Missing values raise explicit errors instead of falling back to hidden defaults.
 

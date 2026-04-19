@@ -62,10 +62,20 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp provider_from_opts!(opts) do
     case Keyword.fetch(opts, :provider) do
-      {:ok, "echo"} -> :echo
-      {:ok, "openai"} -> :openai
-      {:ok, provider} -> Mix.raise("--provider must be echo or openai, got: #{inspect(provider)}")
-      :error -> Mix.raise("missing required --provider option")
+      {:ok, "echo"} ->
+        :echo
+
+      {:ok, "openai"} ->
+        :openai
+
+      {:ok, "openrouter"} ->
+        :openrouter
+
+      {:ok, provider} ->
+        Mix.raise("--provider must be echo, openai, or openrouter, got: #{inspect(provider)}")
+
+      :error ->
+        Mix.raise("missing required --provider option")
     end
   end
 

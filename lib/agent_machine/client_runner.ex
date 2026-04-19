@@ -22,6 +22,10 @@ defmodule AgentMachine.ClientRunner do
     JSON.encode!(summary)
   end
 
+  if Mix.env() == :test do
+    def summarize_for_test!(run), do: summarize_run(run)
+  end
+
   defp summarize_timeout(run) do
     run
     |> summarize_run()
@@ -29,9 +33,12 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp summarize_run(run) do
+    failed_results = failed_results(run.results)
+
     %{
       run_id: run.id,
-      status: Atom.to_string(run.status),
+      status: summary_status(run, failed_results),
+      error: summary_error(run, failed_results),
       final_output: final_output(run),
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
@@ -40,10 +47,36 @@ defmodule AgentMachine.ClientRunner do
     }
   end
 
+  defp summary_status(%{status: :completed}, failed_results) when failed_results != [],
+    do: "failed"
+
+  defp summary_status(run, _failed_results), do: Atom.to_string(run.status)
+
+  defp summary_error(%{error: error}, _failed_results) when not is_nil(error), do: error
+
+  defp summary_error(_run, failed_results) do
+    case failed_results do
+      [] ->
+        nil
+
+      results ->
+        Enum.map_join(results, "\n", fn result ->
+          "#{result.agent_id}: #{result.error || "unknown error"}"
+        end)
+    end
+  end
+
+  defp failed_results(results) do
+    results
+    |> Map.values()
+    |> Enum.filter(&(&1.status == :error))
+  end
+
   defp final_output(run) do
     case Map.fetch(run.results, "finalizer") do
-      {:ok, %{output: output}} -> output
+      {:ok, %{status: :ok, output: output}} -> output
       :error -> nil
+      _other -> nil
     end
   end
 

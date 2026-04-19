@@ -4,6 +4,19 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Converted the Bubble Tea TUI from a run form into a conversation client with slash commands.
+- Added TUI commands for provider, key, model loading, settings, and last-run agent inspection.
+- Marked client/TUI summaries as failed when any agent result failed and surfaced result errors.
+- Added provider-specific model loading to the TUI for OpenAI and OpenRouter.
+- Added TUI model cycling from loaded provider model lists.
+- Removed manual price and timeout fields from the TUI remote-provider form.
+- Added TUI pricing resolution from OpenAI model profiles and the OpenRouter models API.
+- Added TUI run and HTTP timeout defaults for provider runs.
+- Added TUI API key entry, local config persistence, and provider-specific key injection for remote runs.
+- Added `AgentMachine.Providers.OpenRouterChat` with explicit `OPENROUTER_API_KEY` configuration.
+- Added `openrouter` support to `AgentMachine.RunSpec`, the basic workflow, and `mix agent_machine.run`.
+- Added Echo/OpenAI/OpenRouter provider selection to the Bubble Tea TUI.
+- Added TUI validation for remote model, pricing, HTTP timeout, and provider API key configuration.
 - Added `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, and `AgentMachine.ClientRunner` as a high-level client boundary.
 - Added `mix agent_machine.run` with text and JSON output.
 - Added a Go Bubble Tea TUI client in `tui/`.

@@ -17,7 +17,7 @@ defmodule AgentMachine.RunSpec do
 
   @type t :: %__MODULE__{
           task: binary(),
-          provider: :echo | :openai,
+          provider: :echo | :openai | :openrouter,
           model: binary() | nil,
           timeout_ms: pos_integer(),
           max_steps: pos_integer(),
@@ -55,7 +55,8 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_provider_options!(%__MODULE__{provider: :echo}), do: :ok
 
-  defp validate_provider_options!(%__MODULE__{provider: :openai} = spec) do
+  defp validate_provider_options!(%__MODULE__{provider: provider} = spec)
+       when provider in [:openai, :openrouter] do
     require_non_empty_binary!(spec.model, :model)
     require_positive_integer!(spec.http_timeout_ms, :http_timeout_ms)
     AgentMachine.Pricing.validate!(spec.pricing)
@@ -71,10 +72,11 @@ defmodule AgentMachine.RunSpec do
     end)
   end
 
-  defp require_provider!(provider) when provider in [:echo, :openai], do: :ok
+  defp require_provider!(provider) when provider in [:echo, :openai, :openrouter], do: :ok
 
   defp require_provider!(provider) do
-    raise ArgumentError, "run spec :provider must be :echo or :openai, got: #{inspect(provider)}"
+    raise ArgumentError,
+          "run spec :provider must be :echo, :openai, or :openrouter, got: #{inspect(provider)}"
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0 do
