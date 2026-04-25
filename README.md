@@ -95,6 +95,38 @@ Expected result:
 27 tests, 0 failures
 ```
 
+## Make Targets
+
+The repository includes a small `Makefile` for common local commands:
+
+```sh
+make help
+make deps
+make test
+make quality
+make tui
+make tui-test
+```
+
+CLI run targets require explicit task input and fail fast when required values
+are missing:
+
+```sh
+make run-echo TASK="Review this project and summarize the next step"
+make run-echo-jsonl TASK="Review this project and summarize the next step"
+```
+
+OpenRouter runs also require `OPENROUTER_API_KEY` in the environment plus model
+and pricing variables:
+
+```sh
+make run-openrouter-jsonl \
+  TASK="Review this project and summarize the next step" \
+  MODEL="YOUR_OPENROUTER_MODEL" \
+  INPUT_PRICE_PER_MILLION="0.15" \
+  OUTPUT_PRICE_PER_MILLION="0.60"
+```
+
 ## Quality Checks
 
 Run the full local quality gate:
