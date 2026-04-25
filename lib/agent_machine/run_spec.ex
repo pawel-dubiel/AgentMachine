@@ -3,9 +3,10 @@ defmodule AgentMachine.RunSpec do
   High-level run request used by clients.
   """
 
-  @enforce_keys [:task, :provider, :timeout_ms, :max_steps, :max_attempts]
+  @enforce_keys [:task, :workflow, :provider, :timeout_ms, :max_steps, :max_attempts]
   defstruct [
     :task,
+    :workflow,
     :provider,
     :model,
     :timeout_ms,
@@ -17,6 +18,7 @@ defmodule AgentMachine.RunSpec do
 
   @type t :: %__MODULE__{
           task: binary(),
+          workflow: :basic | :agentic,
           provider: :echo | :openai | :openrouter,
           model: binary() | nil,
           timeout_ms: pos_integer(),
@@ -45,6 +47,7 @@ defmodule AgentMachine.RunSpec do
 
   defp validate!(%__MODULE__{} = spec) do
     require_non_empty_binary!(spec.task, :task)
+    require_workflow!(spec.workflow)
     require_provider!(spec.provider)
     require_positive_integer!(spec.timeout_ms, :timeout_ms)
     require_positive_integer!(spec.max_steps, :max_steps)
@@ -70,6 +73,13 @@ defmodule AgentMachine.RunSpec do
       {key, _value}, _acc ->
         raise ArgumentError, "run spec keys must be atoms, got key: #{inspect(key)}"
     end)
+  end
+
+  defp require_workflow!(workflow) when workflow in [:basic, :agentic], do: :ok
+
+  defp require_workflow!(workflow) do
+    raise ArgumentError,
+          "run spec :workflow must be :basic or :agentic, got: #{inspect(workflow)}"
   end
 
   defp require_provider!(provider) when provider in [:echo, :openai, :openrouter], do: :ok

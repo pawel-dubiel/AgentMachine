@@ -3,7 +3,7 @@ defmodule AgentMachine.ClientRunnerTest do
   import ExUnit.CaptureIO
 
   alias AgentMachine.{AgentResult, ClientRunner, JSON, RunSpec, UsageLedger}
-  alias AgentMachine.Workflows.Basic
+  alias AgentMachine.Workflows.{Agentic, Basic}
   alias Mix.Tasks.AgentMachine.Run
 
   setup do
@@ -12,9 +12,20 @@ defmodule AgentMachine.ClientRunnerTest do
   end
 
   test "validates required high-level run spec fields" do
+    assert_raise ArgumentError, ~r/:workflow/, fn ->
+      RunSpec.new!(%{
+        task: "do work",
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1
+      })
+    end
+
     assert_raise ArgumentError, ~r/run spec :task must be a non-empty binary/, fn ->
       RunSpec.new!(%{
         task: "",
+        workflow: :basic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -27,6 +38,7 @@ defmodule AgentMachine.ClientRunnerTest do
                  fn ->
                    RunSpec.new!(%{
                      task: "do work",
+                     workflow: :basic,
                      provider: :unknown,
                      timeout_ms: 1_000,
                      max_steps: 2,
@@ -39,6 +51,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "do work",
+        workflow: :basic,
         provider: :openrouter,
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
@@ -61,10 +74,34 @@ defmodule AgentMachine.ClientRunnerTest do
            } = Keyword.fetch!(opts, :finalizer)
   end
 
+  test "builds the agentic workflow with an opt-in structured planner" do
+    spec =
+      RunSpec.new!(%{
+        task: "do work",
+        workflow: :agentic,
+        provider: :openrouter,
+        model: "openai/gpt-4o-mini",
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        http_timeout_ms: 25_000,
+        pricing: %{input_per_million: 0.15, output_per_million: 0.60}
+      })
+
+    {[planner], opts} = Agentic.build!(spec)
+
+    assert planner.id == "planner"
+    assert planner.metadata == %{agent_machine_response: "delegation"}
+    assert planner.instructions =~ "Return only JSON"
+    assert Keyword.fetch!(opts, :max_steps) == 6
+    assert Keyword.fetch!(opts, :finalizer).id == "finalizer"
+  end
+
   test "runs the basic echo workflow and returns a client summary" do
     summary =
       ClientRunner.run!(%{
         task: "summarize the project",
+        workflow: :basic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -85,6 +122,7 @@ defmodule AgentMachine.ClientRunnerTest do
       ClientRunner.run!(
         %{
           task: "summarize the project",
+          workflow: :basic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 2,
@@ -107,6 +145,7 @@ defmodule AgentMachine.ClientRunnerTest do
       ClientRunner.run!(
         %{
           task: "summarize the project",
+          workflow: :basic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 2,
@@ -174,6 +213,8 @@ defmodule AgentMachine.ClientRunnerTest do
     Mix.Task.reenable("agent_machine.run")
 
     Run.run([
+      "--workflow",
+      "basic",
       "--provider",
       "echo",
       "--timeout-ms",
@@ -199,6 +240,8 @@ defmodule AgentMachine.ClientRunnerTest do
     output =
       capture_io(fn ->
         Run.run([
+          "--workflow",
+          "basic",
           "--provider",
           "echo",
           "--timeout-ms",

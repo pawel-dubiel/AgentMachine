@@ -6,17 +6,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "review this project",
+		Workflow: workflowBasic,
 		Provider: providerEcho,
 	})
 
 	expected := []string{
 		"agent_machine.run",
+		"--workflow", "basic",
 		"--provider", "echo",
 		"--timeout-ms", defaultRunTimeoutMS,
 		"--max-steps", "2",
@@ -39,6 +42,7 @@ func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:        "review this project",
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		Model:       "openai/gpt-4o-mini",
 		InputPrice:  "0.15",
@@ -48,9 +52,10 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
+		"--workflow", "agentic",
 		"--provider", "openrouter",
 		"--timeout-ms", defaultRunTimeoutMS,
-		"--max-steps", "2",
+		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
 		"--model", "openai/gpt-4o-mini",
@@ -74,6 +79,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
+		Workflow:    workflowBasic,
 		Provider:    providerOpenRouter,
 		APIKey:      "",
 		Model:       "openai/gpt-4o-mini",
@@ -90,6 +96,7 @@ func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
+		Workflow:    workflowBasic,
 		Provider:    providerOpenRouter,
 		APIKey:      "test-key",
 		Model:       "openai/gpt-4o-mini",
@@ -106,6 +113,7 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 func TestResolveConfigUsesOpenAIPricingProfileAndTimeoutDefault(t *testing.T) {
 	resolved, err := resolveConfig(runConfig{
 		Task:     "review this project",
+		Workflow: workflowBasic,
 		Provider: providerOpenAI,
 		APIKey:   "test-key",
 		Model:    "gpt-4o-mini",
@@ -143,6 +151,7 @@ func TestResolveConfigUsesOpenRouterPricingLookup(t *testing.T) {
 
 	resolved, err := resolveConfig(runConfig{
 		Task:     "review this project",
+		Workflow: workflowBasic,
 		Provider: providerOpenRouter,
 		APIKey:   "test-key",
 		Model:    "openai/gpt-4o-mini",
@@ -224,6 +233,8 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 	}
 	m.provider = providerOpenRouter
 	m.providerSet = true
+	m.workflow = workflowBasic
+	m.workflowSet = true
 	m.savedConfig.OpenRouterAPIKey = "test-key"
 	m.selectedModel = "openai/gpt-4o-mini"
 	m.modelOptions = []modelOption{
@@ -305,8 +316,27 @@ func TestInitialModelRequiresSetupBeforeRun(t *testing.T) {
 	if result.view != viewSetup {
 		t.Fatalf("expected setup view, got %v", result.view)
 	}
-	if !strings.Contains(result.messages[len(result.messages)-1].Text, "select a provider") {
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "select a workflow") {
 		t.Fatalf("unexpected message: %#v", result.messages[len(result.messages)-1])
+	}
+}
+
+func TestWorkflowCommandSwitchesSessionWorkflow(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/workflow agentic")
+	result := updated.(model)
+
+	if result.workflow != workflowAgentic {
+		t.Fatalf("unexpected workflow: %q", result.workflow)
+	}
+	if !result.workflowSet {
+		t.Fatal("expected workflow to be explicit")
 	}
 }
 
@@ -419,6 +449,64 @@ func TestInputKeepsCommonTerminalShortcutHandling(t *testing.T) {
 	}
 }
 
+func TestInputHistoryUsesUpAndDownOutsideAgentList(t *testing.T) {
+	m := model{
+		view:         viewChat,
+		inputHistory: []string{"/provider echo", "review this project"},
+		historyIndex: 2,
+	}
+	m.input = textInputForTest()
+	m.input.SetValue("draft")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	result := updated.(model)
+	if result.input.Value() != "review this project" {
+		t.Fatalf("expected last history entry, got %q", result.input.Value())
+	}
+
+	updated, _ = result.Update(tea.KeyMsg{Type: tea.KeyUp})
+	result = updated.(model)
+	if result.input.Value() != "/provider echo" {
+		t.Fatalf("expected previous history entry, got %q", result.input.Value())
+	}
+
+	updated, _ = result.Update(tea.KeyMsg{Type: tea.KeyDown})
+	result = updated.(model)
+	if result.input.Value() != "review this project" {
+		t.Fatalf("expected next history entry, got %q", result.input.Value())
+	}
+
+	updated, _ = result.Update(tea.KeyMsg{Type: tea.KeyDown})
+	result = updated.(model)
+	if result.input.Value() != "draft" {
+		t.Fatalf("expected draft restore, got %q", result.input.Value())
+	}
+}
+
+func TestUpDownKeepSelectingAgentsInAgentList(t *testing.T) {
+	m := model{
+		view: viewAgents,
+		agents: map[string]agentState{
+			"planner": {ID: "planner"},
+			"worker":  {ID: "worker"},
+		},
+		agentOrder:   []string{"planner", "worker"},
+		inputHistory: []string{"review this project"},
+		historyIndex: 1,
+	}
+	m.input = textInputForTest()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	result := updated.(model)
+
+	if result.selectedAgentIndex != 1 {
+		t.Fatalf("expected agent selection to move, got %d", result.selectedAgentIndex)
+	}
+	if result.input.Value() != "" {
+		t.Fatalf("expected input history untouched in agents view, got %q", result.input.Value())
+	}
+}
+
 func TestModelsReloadCommandStartsModelLoadingForRemoteProvider(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
@@ -509,6 +597,12 @@ func countEnv(env []string, name string) int {
 	}
 
 	return count
+}
+
+func textInputForTest() textinput.Model {
+	input := textinput.New()
+	input.Focus()
+	return input
 }
 
 func TestParseSummary(t *testing.T) {

@@ -4,12 +4,12 @@ defmodule AgentMachine.ClientRunner do
   """
 
   alias AgentMachine.{JSON, Orchestrator, RunSpec}
-  alias AgentMachine.Workflows.Basic
+  alias AgentMachine.Workflows.{Agentic, Basic}
 
   def run!(attrs, opts \\ []) when is_list(opts) do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
-    {agents, run_opts} = Basic.build!(spec)
+    {agents, run_opts} = workflow_module(spec).build!(spec)
     run_opts = put_event_sink(run_opts, opts)
 
     case Orchestrator.run(agents, run_opts) do
@@ -19,6 +19,9 @@ defmodule AgentMachine.ClientRunner do
       {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
     end
   end
+
+  defp workflow_module(%RunSpec{workflow: :basic}), do: Basic
+  defp workflow_module(%RunSpec{workflow: :agentic}), do: Agentic
 
   def json!(summary) when is_map(summary) do
     JSON.encode!(summary)

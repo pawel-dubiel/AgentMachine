@@ -49,12 +49,15 @@ lib/
     usage_ledger.ex                 # in-memory node-wide usage ledger
     pricing.ex                      # explicit per-million-token cost calculation
     json.ex                         # small JSON codec for dependency-free OpenAI calls
+    delegation_response.ex          # opt-in planner JSON to worker specs adapter
+    run_context_prompt.ex           # shared run context prompt formatter
     providers/
       echo.ex                       # local provider for development/tests
       openai_responses.ex           # OpenAI Responses API provider
       openrouter_chat.ex            # OpenRouter Chat Completions provider
     workflows/
       basic.ex                      # simple client workflow
+      agentic.ex                    # planner-to-workers client workflow
   mix/tasks/
     agent_machine.run.ex            # CLI boundary for clients
 tui/
@@ -92,7 +95,7 @@ mix test
 Expected result:
 
 ```text
-27 tests, 0 failures
+37 tests, 0 failures
 ```
 
 ## Make Targets
@@ -114,6 +117,7 @@ are missing:
 ```sh
 make run-echo TASK="Review this project and summarize the next step"
 make run-echo-jsonl TASK="Review this project and summarize the next step"
+make run-agentic-echo-jsonl TASK="Review this project and summarize the next step"
 ```
 
 OpenRouter runs also require `OPENROUTER_API_KEY` in the environment plus model
@@ -126,6 +130,8 @@ make run-openrouter-jsonl \
   INPUT_PRICE_PER_MILLION="0.15" \
   OUTPUT_PRICE_PER_MILLION="0.60"
 ```
+
+Use `run-agentic-openrouter-jsonl` with the same variables for the planner-to-workers workflow.
 
 ## Quality Checks
 
@@ -159,6 +165,7 @@ hand:
 
 ```sh
 mix agent_machine.run \
+  --workflow basic \
   --provider echo \
   --timeout-ms 5000 \
   --max-steps 2 \
@@ -170,6 +177,7 @@ For machine-readable output, add `--json`:
 
 ```sh
 mix agent_machine.run \
+  --workflow basic \
   --provider echo \
   --timeout-ms 5000 \
   --max-steps 2 \
@@ -183,6 +191,7 @@ event lines as agents start/finish, followed by one final summary line.
 
 ```sh
 mix agent_machine.run \
+  --workflow basic \
   --provider echo \
   --timeout-ms 5000 \
   --max-steps 2 \
@@ -203,8 +212,10 @@ The final JSONL line uses this shape:
 {"type":"summary","summary":{"run_id":"run-1","status":"completed"}}
 ```
 
-The command uses `AgentMachine.RunSpec` plus the basic workflow. The local Echo
-profile runs an assistant agent and then a finalizer.
+The command uses `AgentMachine.RunSpec` plus an explicit workflow:
+
+- `basic` starts one assistant agent and then a finalizer.
+- `agentic` starts a planner agent that may emit worker agents, then a finalizer.
 
 Remote providers require explicit model, pricing, HTTP timeout, and API key
 configuration:
@@ -213,6 +224,7 @@ configuration:
 export OPENROUTER_API_KEY="..."
 
 mix agent_machine.run \
+  --workflow basic \
   --provider openrouter \
   --model "YOUR_OPENROUTER_MODEL" \
   --timeout-ms 30000 \
@@ -225,6 +237,12 @@ mix agent_machine.run \
   "Review this project and summarize the next step"
 ```
 
+The agentic workflow expects the planner model to return strict JSON with an
+`output` string and `next_agents` list. Delegated worker specs intentionally stay
+small: each worker provides `id`, `input`, and optional `instructions`,
+`metadata`, and `depends_on`; the runtime assigns the same provider, model, and
+pricing as the planner.
+
 ## Bubble Tea TUI
 
 Run the terminal UI:
@@ -235,7 +253,7 @@ go run .
 ```
 
 The TUI is a conversation client with separate setup and usage views. Choose a
-provider in Setup before sending normal messages. Runs execute through
+workflow and provider in Setup before sending normal messages. Runs execute through
 `mix agent_machine.run --jsonl`, so agent start, retry, finish, and final summary
 events update the interface live without reimplementing orchestration in Go.
 
@@ -272,6 +290,7 @@ Remote model lists are loaded by provider:
 Core commands:
 
 - `/setup`
+- `/workflow basic|agentic`
 - `/provider echo|openai|openrouter`
 - `/key <api-key>`
 - `/models reload`
@@ -301,7 +320,7 @@ Current TUI controls:
 - `Enter`: submit a message or slash command
 - `Tab` / `Shift+Tab`: switch between Setup, Chat, Agents, and Help
 - `Esc`: back
-- `Up` / `Down`: move the selected agent in the Agents view
+- `Up` / `Down`: command history, or selected agent movement in the Agents view
 - `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+W`: common terminal input editing
 - `Ctrl+C`: quit anytime
 
@@ -694,6 +713,7 @@ run.usage
 
 Required fields are deliberately strict:
 
+- `:workflow` for `AgentMachine.RunSpec`
 - `:id`
 - `:provider`
 - `:model`

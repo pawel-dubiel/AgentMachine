@@ -17,6 +17,63 @@ Prefer small changes that move the architecture forward without turning the proj
 - Prefer clear data structures over implicit behavior.
 - Preserve OTP supervision and task isolation.
 - Avoid broad rewrites unless they are necessary for the requested change.
+- Treat tests as a first-class design tool. Prefer TDD for new behavior: write
+  or update the smallest meaningful failing test, implement the behavior, then
+  run the relevant focused tests before the full quality gate.
+- Do not merge behavior changes without automated coverage unless the change is
+  documentation-only or explicitly not testable; say so clearly.
+
+## Responsibility Boundaries
+
+Keep these ownership lines explicit. If a change does not fit one of these
+boundaries, pause and simplify the design before adding code.
+
+- Orchestration belongs in `AgentMachine.Orchestrator`: run state, task spawning,
+  dependency scheduling, retries, finalizers, event recording, dynamic
+  delegation, artifacts, and usage aggregation.
+- Agent execution belongs in `AgentMachine.AgentRunner`: call exactly one
+  validated provider, normalize its payload, run explicitly allowed tools, and
+  return an `AgentResult`.
+- Client workflow shape belongs in `AgentMachine.Workflows.*`: choose the initial
+  agents and finalizer for a high-level client run. Workflows must stay small and
+  must not duplicate orchestrator scheduling logic.
+- Provider modules belong at the model/API boundary only: translate an agent and
+  options into an external/local provider call, then return the provider payload.
+  Providers must not spawn agents, manage run state, or know about TUI behavior.
+- Structured model-output adapters belong in small runtime modules such as
+  `AgentMachine.DelegationResponse`, not inside providers or the TUI.
+- Prompt/context formatting belongs in small helpers such as
+  `AgentMachine.RunContextPrompt` when shared by providers.
+- CLI code in `mix agent_machine.run` is the stable client boundary: parse flags,
+  fail fast on missing required options, call `AgentMachine.ClientRunner`, and
+  print text/JSON/JSONL output.
+- `tui/` is only a thin Go client over the CLI boundary. All agent runtime logic
+  belongs in Elixir. The TUI may manage terminal state, local key storage, model
+  lists, pricing lookup, command history, and display live events, but it must
+  not reimplement orchestration, dependency scheduling, retries, workflow
+  behavior, delegation parsing, tool execution, usage aggregation, run context,
+  or provider contracts.
+- TUI code should keep a clean internal split: Bubble Tea model/update/view code,
+  CLI process adapter, config persistence, provider model/pricing lookup, and
+  rendering helpers should stay separate enough that the TUI remains easy to
+  audit as a wrapper.
+- `Makefile` targets are local developer conveniences. They must call public
+  commands and keep required runtime values explicit.
+
+## Drift Checks
+
+- Do not track generated binaries or build artifacts.
+- Do not add a generic framework layer when one explicit workflow or helper will
+  solve the current problem.
+- Do not let UI convenience create hidden runtime defaults.
+- Do not put runtime behavior into the TUI to avoid adding an Elixir API or CLI
+  option. Add the explicit runtime boundary instead.
+- Do not add provider-specific behavior to shared orchestration paths unless the
+  provider contract actually changed.
+- Prefer adding one narrow module over growing a central module with unrelated
+  responsibilities.
+- If a file starts accumulating unrelated responsibilities, split it before
+  adding more behavior.
 
 ## Documentation Rules
 
@@ -43,8 +100,10 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 ## Current Architecture
 
 - `AgentMachine.Orchestrator` owns run state, task spawning, result aggregation, dynamic delegation, run artifacts, and usage totals.
-- `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
+- `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, `AgentMachine.Workflows.Agentic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
+- `AgentMachine.DelegationResponse` parses opt-in structured planner output into delegated worker specs.
+- `AgentMachine.RunContextPrompt` formats prior results and artifacts for remote provider prompts.
 - Providers implement `AgentMachine.Provider.complete/2`.
 - Built-in providers are Echo, OpenAI Responses, and OpenRouter Chat.
 - Tools implement `AgentMachine.Tool.run/2`.
@@ -53,6 +112,7 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Agents may return `tool_calls` for explicit tool execution.
 - Initial agents may use `depends_on` for dependency-ordered execution.
 - Runs may use `finalizer` to synthesize a final result after all other work.
+- Runs choose an explicit client `workflow`; `basic` starts an assistant plus finalizer, and `agentic` starts a planner that may delegate workers plus finalizer.
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.

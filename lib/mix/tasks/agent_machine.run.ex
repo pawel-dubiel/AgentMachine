@@ -8,6 +8,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   @shortdoc "Runs a high-level AgentMachine task"
 
   @switches [
+    workflow: :string,
     provider: :string,
     model: :string,
     timeout_ms: :integer,
@@ -66,6 +67,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   defp attrs_from_opts(opts, positional) do
     %{
       task: task_from_positional!(positional),
+      workflow: workflow_from_opts!(opts),
       provider: provider_from_opts!(opts),
       model: Keyword.get(opts, :model),
       timeout_ms: fetch_required_option!(opts, :timeout_ms),
@@ -80,6 +82,22 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp task_from_positional!(positional) do
     Mix.raise("expected exactly one non-empty task argument, got: #{inspect(positional)}")
+  end
+
+  defp workflow_from_opts!(opts) do
+    case Keyword.fetch(opts, :workflow) do
+      {:ok, "basic"} ->
+        :basic
+
+      {:ok, "agentic"} ->
+        :agentic
+
+      {:ok, workflow} ->
+        Mix.raise("--workflow must be basic or agentic, got: #{inspect(workflow)}")
+
+      :error ->
+        Mix.raise("missing required --workflow option")
+    end
   end
 
   defp provider_from_opts!(opts) do

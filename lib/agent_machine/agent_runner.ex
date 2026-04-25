@@ -1,7 +1,7 @@
 defmodule AgentMachine.AgentRunner do
   @moduledoc false
 
-  alias AgentMachine.{Agent, AgentResult, Usage, UsageLedger}
+  alias AgentMachine.{Agent, AgentResult, DelegationResponse, Usage, UsageLedger}
 
   def run(%Agent{} = agent, opts) when is_list(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
@@ -15,6 +15,8 @@ defmodule AgentMachine.AgentRunner do
   defp execute(agent, opts, run_id, attempt, started_at) do
     case agent.provider.complete(agent, opts) do
       {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
+        payload = DelegationResponse.normalize_payload!(agent, payload)
+        output = payload.output
         usage = Usage.from_provider!(agent, run_id, provider_usage)
         next_agents = next_agents_from_payload!(payload)
         artifacts = artifacts_from_payload!(payload)

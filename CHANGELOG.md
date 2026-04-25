@@ -4,6 +4,16 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Strengthened AGENTS.md around TUI thin-wrapper rules, TDD/testing priority, and TUI clean architecture.
+- Split the TUI CLI/process adapter out of the Bubble Tea model file.
+- Added AGENTS.md responsibility boundaries and drift checks for runtime, workflows, providers, CLI, TUI, and Makefile.
+- Moved opt-in delegation response parsing out of `AgentRunner` into a dedicated module.
+- Removed the generated TUI binary from source control and ignored future local builds.
+- Added an explicit `agentic` workflow with planner-driven structured delegation.
+- Added opt-in parsing for planner JSON output into delegated worker agents.
+- Added explicit workflow selection to `RunSpec`, `mix agent_machine.run`, and the TUI setup flow.
+- Added run context to remote provider prompts so finalizers can see prior agent outputs.
+- Added in-memory TUI command/message history navigation with `Up` and `Down`.
 - Added a root `Makefile` for common local test, quality, TUI, and explicit CLI run commands.
 - Added `mix agent_machine.run --jsonl` for live event streaming plus a final summary envelope.
 - Added a validated client/orchestrator event sink for live run progress consumers.

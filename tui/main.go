@@ -1,15 +1,11 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -115,8 +111,17 @@ const (
 
 var providers = []provider{providerEcho, providerOpenAI, providerOpenRouter}
 
+type runWorkflow string
+
+const (
+	workflowBasic   runWorkflow = "basic"
+	workflowAgentic runWorkflow = "agentic"
+)
+
 const (
 	defaultRunTimeoutMS  = "30000"
+	defaultBasicSteps    = "2"
+	defaultAgenticSteps  = "6"
 	defaultHTTPTimeoutMS = "25000"
 	openAIModelsURL      = "https://api.openai.com/v1/models"
 	openRouterModelsURL  = "https://openrouter.ai/api/v1/models"
@@ -140,6 +145,7 @@ var openRouterPricingLookup = fetchOpenRouterPricing
 
 type runConfig struct {
 	Task        string
+	Workflow    runWorkflow
 	Provider    provider
 	APIKey      string
 	Model       string
@@ -187,6 +193,8 @@ const (
 
 type model struct {
 	input              textinput.Model
+	workflow           runWorkflow
+	workflowSet        bool
 	provider           provider
 	providerSet        bool
 	savedConfig        savedConfig
@@ -196,6 +204,9 @@ type model struct {
 	selectedModel      string
 	modelStatus        string
 	messages           []chatMessage
+	inputHistory       []string
+	historyIndex       int
+	historyDraft       string
 	view               viewMode
 	selectedAgent      string
 	selectedAgentIndex int
@@ -237,7 +248,7 @@ func initialModel() (model, error) {
 		savedConfig: savedConfig,
 		configPath:  configPath,
 		messages: []chatMessage{
-			{Role: "system", Text: "Open Setup and select a provider before running AgentMachine."},
+			{Role: "system", Text: "Open Setup and select a workflow and provider before running AgentMachine."},
 		},
 		view:   viewSetup,
 		agents: map[string]agentState{},
@@ -268,9 +279,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveAgentSelection(-1)
 				return m, nil
 			}
+			if msg.String() == "up" && !m.running && m.canUseInputHistory() {
+				m.previousHistory()
+				return m, nil
+			}
 		case "down", "j":
 			if m.view == viewAgents {
 				m.moveAgentSelection(1)
+				return m, nil
+			}
+			if msg.String() == "down" && !m.running && m.canUseInputHistory() {
+				m.nextHistory()
 				return m, nil
 			}
 		case "enter":
@@ -373,7 +392,10 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.rememberInput(text)
 	m.input.SetValue("")
+	m.historyIndex = len(m.inputHistory)
+	m.historyDraft = ""
 
 	if strings.HasPrefix(text, "/") {
 		return m.handleCommand(text)
@@ -383,6 +405,12 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
+	if !m.workflowSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a workflow in Setup before running"})
+		m.view = viewSetup
+		return m, nil
+	}
+
 	if !m.providerSet {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider in Setup before running"})
 		m.view = viewSetup
@@ -436,6 +464,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.view = viewHelp
 	case "setup":
 		m.view = viewSetup
+	case "workflow":
+		return m.handleWorkflowCommand(args)
 	case "provider":
 		return m.handleProviderCommand(args)
 	case "key":
@@ -461,6 +491,33 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown command: /" + name})
 	}
 
+	return m, nil
+}
+
+func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		if !m.workflowSet {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow: (missing)"})
+			return m, nil
+		}
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow: " + string(m.workflow)})
+		return m, nil
+	}
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /workflow basic|agentic"})
+		return m, nil
+	}
+
+	nextWorkflow, err := parseWorkflow(args[0])
+	if err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	m.workflow = nextWorkflow
+	m.workflowSet = true
+	m.view = viewChat
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow set to " + string(m.workflow)})
 	return m, nil
 }
 
@@ -683,6 +740,7 @@ func (m *model) applySummaryResults(summary summary) {
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
 		Task:     task,
+		Workflow: m.workflow,
 		Provider: m.provider,
 		APIKey:   m.apiKey(),
 		Model:    m.modelID(),
@@ -783,6 +841,11 @@ func (m model) View() string {
 
 func (m model) statusLine() string {
 	parts := []string{"view=" + m.viewName()}
+	if !m.workflowSet {
+		parts = append(parts, "workflow=missing")
+	} else {
+		parts = append(parts, "workflow="+string(m.workflow))
+	}
 	if !m.providerSet {
 		parts = append(parts, "provider=missing")
 		return strings.Join(parts, " | ")
@@ -826,6 +889,10 @@ func (m model) chatView() string {
 }
 
 func (m model) setupView() string {
+	workflowValue := "(missing)"
+	if m.workflowSet {
+		workflowValue = string(m.workflow)
+	}
 	providerValue := "(missing)"
 	if m.providerSet {
 		providerValue = string(m.provider)
@@ -833,6 +900,7 @@ func (m model) setupView() string {
 
 	return strings.Join([]string{
 		labelStyle.Render("Setup"),
+		"workflow: " + workflowValue,
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
@@ -841,6 +909,7 @@ func (m model) setupView() string {
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
 		"Commands",
+		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/models reload",
@@ -905,118 +974,15 @@ func (m model) helpView() string {
 	return helpText()
 }
 
-func runCommand(config runConfig) tea.Cmd {
-	return func() tea.Msg {
-		summary, raw, err := runAgentMachine(config)
-		return runResultMsg{Summary: summary, Raw: raw, Err: err}
-	}
-}
-
-func startStreamingCommand(config runConfig) tea.Cmd {
-	return func() tea.Msg {
-		session, err := startAgentMachineStream(config)
-		if err != nil {
-			return streamDoneMsg{Err: err}
-		}
-		return streamStartedMsg{Session: session}
-	}
-}
-
-func readStreamCommand(session *streamSession) tea.Cmd {
-	return func() tea.Msg {
-		if session.scanner.Scan() {
-			return streamLineMsg{Session: session, Line: session.scanner.Text()}
-		}
-		if err := session.scanner.Err(); err != nil {
-			return streamDoneMsg{Session: session, Err: err}
-		}
-		err := session.cmd.Wait()
-		if err != nil {
-			stderr := strings.TrimSpace(session.stderr.String())
-			if stderr != "" {
-				return streamDoneMsg{Session: session, Err: fmt.Errorf("mix command failed: %w\n%s", err, stderr)}
-			}
-			return streamDoneMsg{Session: session, Err: fmt.Errorf("mix command failed: %w", err)}
-		}
-		return streamDoneMsg{Session: session}
-	}
-}
-
-func startAgentMachineStream(config runConfig) (*streamSession, error) {
-	args := buildRunArgs(config)
-	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
-	cmd.Env = commandEnv(os.Environ(), config)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open AgentMachine stdout: %w", err)
-	}
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start AgentMachine: %w", err)
-	}
-
-	scanner := newLineScanner(stdout)
-	return &streamSession{cmd: cmd, scanner: scanner, stderr: stderr}, nil
-}
-
-func newLineScanner(reader io.Reader) *bufio.Scanner {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	return scanner
-}
-
-func runAgentMachine(config runConfig) (summary, string, error) {
-	args := buildRunArgs(config)
-	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
-	cmd.Env = commandEnv(os.Environ(), config)
-
-	output, err := cmd.CombinedOutput()
-	raw := strings.TrimSpace(string(output))
-	if err != nil {
-		return summary{}, raw, fmt.Errorf("mix command failed: %w", err)
-	}
-
-	parsed, parseErr := parseSummary(raw)
-	if parseErr != nil {
-		return summary{}, raw, parseErr
-	}
-	if parsed.Status == "failed" {
-		return parsed, raw, fmt.Errorf("AgentMachine run failed: %s", summaryError(parsed))
-	}
-
-	return parsed, raw, nil
-}
-
-func buildRunArgs(config runConfig) []string {
-	args := []string{
-		"agent_machine.run",
-		"--provider", string(config.Provider),
-		"--timeout-ms", defaultRunTimeoutMS,
-		"--max-steps", "2",
-		"--max-attempts", "1",
-		"--jsonl",
-	}
-
-	if config.Provider != providerEcho {
-		args = append(args,
-			"--model", config.Model,
-			"--http-timeout-ms", config.HTTPTimeout,
-			"--input-price-per-million", config.InputPrice,
-			"--output-price-per-million", config.OutputPrice,
-		)
-	}
-
-	return append(args, config.Task)
-}
-
 func validateConfig(config runConfig) error {
 	if config.Task == "" {
 		return errors.New("task must not be empty")
+	}
+	if config.Workflow == "" {
+		return errors.New("workflow must not be empty")
+	}
+	if _, err := parseWorkflow(string(config.Workflow)); err != nil {
+		return err
 	}
 
 	switch config.Provider {
@@ -1338,6 +1304,17 @@ func parseProvider(value string) (provider, error) {
 	}
 }
 
+func parseWorkflow(value string) (runWorkflow, error) {
+	switch strings.ToLower(value) {
+	case "basic":
+		return workflowBasic, nil
+	case "agentic":
+		return workflowAgentic, nil
+	default:
+		return "", fmt.Errorf("unsupported workflow: %s", value)
+	}
+}
+
 func (p provider) Label() string {
 	switch p {
 	case providerEcho:
@@ -1428,55 +1405,6 @@ func saveSavedConfig(path string, config savedConfig) error {
 	return nil
 }
 
-func parseSummary(raw string) (summary, error) {
-	var parsed summary
-	jsonLine := lastJSONLine(raw)
-	if jsonLine == "" {
-		return summary{}, errors.New("AgentMachine output did not contain a JSON summary")
-	}
-
-	if err := json.Unmarshal([]byte(jsonLine), &parsed); err != nil {
-		return summary{}, fmt.Errorf("failed to parse AgentMachine JSON output: %w", err)
-	}
-	if parsed.RunID == "" {
-		envelope, ok, err := parseJSONLLine(jsonLine)
-		if err != nil {
-			return summary{}, err
-		}
-		if ok && envelope.Type == "summary" {
-			return envelope.Summary, nil
-		}
-	}
-	return parsed, nil
-}
-
-func parseJSONLLine(line string) (jsonlEnvelope, bool, error) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
-		return jsonlEnvelope{}, false, nil
-	}
-
-	var envelope jsonlEnvelope
-	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return jsonlEnvelope{}, false, fmt.Errorf("failed to parse AgentMachine JSONL line: %w", err)
-	}
-	if envelope.Type == "" {
-		return jsonlEnvelope{}, false, nil
-	}
-	return envelope, true, nil
-}
-
-func lastJSONLine(raw string) string {
-	lines := strings.Split(strings.TrimSpace(raw), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
-			return line
-		}
-	}
-	return ""
-}
-
 func summaryError(summary summary) string {
 	if strings.TrimSpace(summary.Error) != "" {
 		return summary.Error
@@ -1493,32 +1421,6 @@ func summaryError(summary summary) string {
 		return "unknown error"
 	}
 	return strings.Join(errorsByAgent, "\n")
-}
-
-func projectRoot() string {
-	if root := os.Getenv("AGENT_MACHINE_ROOT"); root != "" {
-		return root
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-
-	if fileExists(filepath.Join(cwd, "mix.exs")) {
-		return cwd
-	}
-
-	parent := filepath.Clean(filepath.Join(cwd, ".."))
-	if fileExists(filepath.Join(parent, "mix.exs")) {
-		return parent
-	}
-	return cwd
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func sortedResultIDs(results map[string]runResultSummary) []string {
@@ -1587,6 +1489,49 @@ func (m *model) moveAgentSelection(delta int) {
 		return
 	}
 	m.selectedAgentIndex = (m.selectedAgentIndex + delta + len(visible)) % len(visible)
+}
+
+func (m model) canUseInputHistory() bool {
+	return m.view != viewAgents && m.view != viewAgentDetail
+}
+
+func (m *model) rememberInput(value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == value {
+		return
+	}
+	m.inputHistory = append(m.inputHistory, value)
+}
+
+func (m *model) previousHistory() {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.historyIndex == len(m.inputHistory) {
+		m.historyDraft = m.input.Value()
+	}
+	if m.historyIndex > 0 {
+		m.historyIndex--
+	}
+	m.input.SetValue(m.inputHistory[m.historyIndex])
+	m.input.CursorEnd()
+}
+
+func (m *model) nextHistory() {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.historyIndex < len(m.inputHistory) {
+		m.historyIndex++
+	}
+	if m.historyIndex == len(m.inputHistory) {
+		m.input.SetValue(m.historyDraft)
+	} else {
+		m.input.SetValue(m.inputHistory[m.historyIndex])
+	}
+	m.input.CursorEnd()
 }
 
 func (m model) openSelectedAgent() (tea.Model, tea.Cmd) {
@@ -1705,11 +1650,13 @@ func helpText() string {
 		"Tab / Shift+Tab: switch views",
 		"Esc: back",
 		"Enter: submit or open selected agent",
+		"Up / Down: command history, or agent selection in Agents",
 		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
 		"Ctrl+C: quit",
 		"",
 		"Commands:",
 		"/setup",
+		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/models reload",

@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON}
+  alias AgentMachine.{Agent, JSON, RunContextPrompt}
 
   @url ~c"https://api.openai.com/v1/responses"
 
@@ -21,7 +21,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     timeout_ms = Keyword.fetch!(opts, :http_timeout_ms)
 
     body =
-      %{"model" => agent.model, "input" => agent.input}
+      %{"model" => agent.model, "input" => input(agent, opts)}
       |> put_optional("instructions", agent.instructions)
       |> put_optional("metadata", agent.metadata)
       |> JSON.encode!()
@@ -59,6 +59,13 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
   defp put_optional(map, _key, nil), do: map
   defp put_optional(map, key, value), do: Map.put(map, key, value)
+
+  defp input(agent, opts) do
+    case RunContextPrompt.text(opts) do
+      "" -> agent.input
+      context -> agent.input <> "\n\nRun context:\n" <> context
+    end
+  end
 
   defp ensure_started!(app) do
     case Application.ensure_all_started(app) do

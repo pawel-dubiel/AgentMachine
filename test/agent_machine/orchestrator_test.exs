@@ -92,6 +92,27 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.usage.agents == 3
   end
 
+  test "parses opt-in structured delegation output into follow-up agents" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.StructuredDelegating,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_response: "delegation"}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_steps: 3)
+    assert run.status == :completed
+    assert run.agent_order == ["planner", "worker-a", "worker-b"]
+    assert run.results["planner"].output == "Created two workers."
+    assert run.results["planner"].next_agents |> Enum.map(& &1.id) == ["worker-a", "worker-b"]
+    assert run.results["worker-a"].output == "finished worker-a"
+    assert run.results["worker-b"].output == "finished worker-b"
+  end
+
   test "fails a dynamic run when max_steps is missing" do
     agents = [
       %{
@@ -619,6 +640,55 @@ defmodule AgentMachine.TestProviders.ContextAwareDelegating do
        artifacts: %{worker_summary: "worker used #{plan}"},
        usage: usage(agent, output)
      }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.StructuredDelegating do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.{Agent, JSON}
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    output =
+      JSON.encode!(%{
+        output: "Created two workers.",
+        next_agents: [
+          %{
+            id: "worker-a",
+            input: "do part a",
+            instructions: "handle only part a"
+          },
+          %{
+            id: "worker-b",
+            input: "do part b"
+          }
+        ]
+      })
+
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  def complete(%Agent{} = agent, _opts) do
+    output = "finished #{agent.id}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
   end
 
   defp usage(agent, output) do

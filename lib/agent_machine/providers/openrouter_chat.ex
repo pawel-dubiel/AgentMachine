@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON}
+  alias AgentMachine.{Agent, JSON, RunContextPrompt}
 
   @url ~c"https://openrouter.ai/api/v1/chat/completions"
 
@@ -23,7 +23,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     body =
       %{
         "model" => agent.model,
-        "messages" => messages(agent)
+        "messages" => messages(agent, opts)
       }
       |> JSON.encode!()
 
@@ -59,17 +59,24 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     end
   end
 
-  defp messages(%Agent{instructions: nil, input: input}) do
+  defp messages(%Agent{instructions: nil} = agent, opts) do
     [
-      %{"role" => "user", "content" => input}
+      %{"role" => "user", "content" => input(agent, opts)}
     ]
   end
 
-  defp messages(%Agent{instructions: instructions, input: input}) do
+  defp messages(%Agent{instructions: instructions} = agent, opts) do
     [
       %{"role" => "system", "content" => instructions},
-      %{"role" => "user", "content" => input}
+      %{"role" => "user", "content" => input(agent, opts)}
     ]
+  end
+
+  defp input(agent, opts) do
+    case RunContextPrompt.text(opts) do
+      "" -> agent.input
+      context -> agent.input <> "\n\nRun context:\n" <> context
+    end
   end
 
   defp ensure_started!(app) do
