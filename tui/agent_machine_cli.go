@@ -15,6 +15,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+type streamSession struct {
+	cmd     *exec.Cmd
+	scanner *bufio.Scanner
+	stderr  *bytes.Buffer
+}
+
 func runCommand(config runConfig) tea.Cmd {
 	return func() tea.Msg {
 		summary, raw, err := runAgentMachine(config)

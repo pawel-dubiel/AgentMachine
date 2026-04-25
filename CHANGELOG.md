@@ -5,6 +5,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 ## Latest Changes
 
 - Strengthened AGENTS.md around TUI thin-wrapper rules, TDD/testing priority, and TUI clean architecture.
+- Split TUI view rendering helpers out of the Bubble Tea update/command logic.
+- Split TUI provider model loading and pricing lookup out of the Bubble Tea model file.
+- Split the TUI config persistence and process environment adapter out of the Bubble Tea model file.
 - Split the TUI CLI/process adapter out of the Bubble Tea model file.
 - Added AGENTS.md responsibility boundaries and drift checks for runtime, workflows, providers, CLI, TUI, and Makefile.
 - Moved opt-in delegation response parsing out of `AgentRunner` into a dedicated module.

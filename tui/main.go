@@ -4,13 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -75,12 +71,6 @@ type streamDoneMsg struct {
 	Err     error
 }
 
-type streamSession struct {
-	cmd     *exec.Cmd
-	scanner *bufio.Scanner
-	stderr  *bytes.Buffer
-}
-
 type jsonlEnvelope struct {
 	Type    string          `json:"type"`
 	Event   eventSummary    `json:"event"`
@@ -123,25 +113,7 @@ const (
 	defaultBasicSteps    = "2"
 	defaultAgenticSteps  = "6"
 	defaultHTTPTimeoutMS = "25000"
-	openAIModelsURL      = "https://api.openai.com/v1/models"
-	openRouterModelsURL  = "https://openrouter.ai/api/v1/models"
 )
-
-var openAIPricingByModel = map[string]modelPricing{
-	"gpt-4.1":       {InputPerMillion: 2.00, OutputPerMillion: 8.00},
-	"gpt-4.1-mini":  {InputPerMillion: 0.40, OutputPerMillion: 1.60},
-	"gpt-4.1-nano":  {InputPerMillion: 0.10, OutputPerMillion: 0.40},
-	"gpt-4o":        {InputPerMillion: 2.50, OutputPerMillion: 10.00},
-	"gpt-4o-mini":   {InputPerMillion: 0.15, OutputPerMillion: 0.60},
-	"gpt-5.4":       {InputPerMillion: 2.50, OutputPerMillion: 15.00},
-	"gpt-5.4-mini":  {InputPerMillion: 0.75, OutputPerMillion: 4.50},
-	"gpt-5.4-nano":  {InputPerMillion: 0.20, OutputPerMillion: 1.25},
-	"gpt-5.2":       {InputPerMillion: 1.75, OutputPerMillion: 14.00},
-	"gpt-5.2-codex": {InputPerMillion: 1.75, OutputPerMillion: 14.00},
-}
-
-var providerModelLookup = fetchProviderModelOptions
-var openRouterPricingLookup = fetchOpenRouterPricing
 
 type runConfig struct {
 	Task        string
@@ -154,25 +126,9 @@ type runConfig struct {
 	HTTPTimeout string
 }
 
-type modelPricing struct {
-	InputPerMillion  float64
-	OutputPerMillion float64
-}
-
-type modelOption struct {
-	ID      string
-	Pricing modelPricing
-}
-
 type savedConfig struct {
 	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
 	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
-}
-
-type modelListMsg struct {
-	Provider provider
-	Models   []modelOption
-	Err      error
 }
 
 type chatMessage struct {
@@ -805,175 +761,6 @@ func (m model) loadModelsCommand() tea.Cmd {
 	return loadModelsCommand(m.provider, m.apiKey())
 }
 
-func (m model) View() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("AgentMachine TUI"))
-	b.WriteString("\n")
-	b.WriteString(hintStyle.Render(m.statusLine()))
-	b.WriteString("\n\n")
-
-	switch m.view {
-	case viewSetup:
-		b.WriteString(m.setupView())
-	case viewSettings:
-		b.WriteString(m.setupView())
-	case viewAgents:
-		b.WriteString(m.agentsView())
-	case viewAgentDetail:
-		b.WriteString(m.agentDetailView())
-	case viewHelp:
-		b.WriteString(m.helpView())
-	default:
-		b.WriteString(m.chatView())
-	}
-
-	b.WriteString("\n\n")
-	if m.running {
-		b.WriteString(hintStyle.Render("Running. Tab navigates; Agents shows live agent state."))
-	} else {
-		b.WriteString("> ")
-		b.WriteString(m.input.View())
-		b.WriteString("\n")
-		b.WriteString(hintStyle.Render("Type a message or /help. Tab changes view. Esc goes back."))
-	}
-	return b.String()
-}
-
-func (m model) statusLine() string {
-	parts := []string{"view=" + m.viewName()}
-	if !m.workflowSet {
-		parts = append(parts, "workflow=missing")
-	} else {
-		parts = append(parts, "workflow="+string(m.workflow))
-	}
-	if !m.providerSet {
-		parts = append(parts, "provider=missing")
-		return strings.Join(parts, " | ")
-	}
-	parts = append(parts, "provider="+string(m.provider))
-	if m.provider != providerEcho {
-		parts = append(parts, "model="+emptyAsNone(m.selectedModel))
-		parts = append(parts, apiKeyName(m.provider)+"="+keyStatus(m.apiKey()))
-	}
-	if m.running {
-		parts = append(parts, "run=running")
-	}
-	if m.modelStatus != "" {
-		parts = append(parts, "models="+m.modelStatus)
-	}
-	return strings.Join(parts, " | ")
-}
-
-func (m model) chatView() string {
-	if len(m.messages) == 0 {
-		return hintStyle.Render("No messages yet.")
-	}
-
-	start := len(m.messages) - 14
-	if start < 0 {
-		start = 0
-	}
-
-	var b strings.Builder
-	for _, message := range m.messages[start:] {
-		b.WriteString(labelStyle.Render(message.Role))
-		b.WriteString(": ")
-		if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
-			b.WriteString(errorStyle.Render(message.Text))
-		} else {
-			b.WriteString(message.Text)
-		}
-		b.WriteString("\n\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m model) setupView() string {
-	workflowValue := "(missing)"
-	if m.workflowSet {
-		workflowValue = string(m.workflow)
-	}
-	providerValue := "(missing)"
-	if m.providerSet {
-		providerValue = string(m.provider)
-	}
-
-	return strings.Join([]string{
-		labelStyle.Render("Setup"),
-		"workflow: " + workflowValue,
-		"provider: " + providerValue,
-		"model: " + emptyAsNone(m.modelID()),
-		"key: " + keyStatus(m.apiKey()),
-		"config: " + m.configPath,
-		"run timeout ms: " + defaultRunTimeoutMS,
-		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
-		"",
-		"Commands",
-		"/workflow basic|agentic",
-		"/provider echo|openai|openrouter",
-		"/key <api-key>",
-		"/models reload",
-		"/model <id|next|prev>",
-		"/back",
-	}, "\n")
-}
-
-func (m model) agentsView() string {
-	if len(m.agentOrder) == 0 {
-		return "No agents yet. Send a message after setup."
-	}
-
-	lines := []string{labelStyle.Render("Agents")}
-	visible := m.visibleAgentIDs()
-	for index, id := range visible {
-		agent := m.agents[id]
-		prefix := "  "
-		if index == m.selectedAgentIndex {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+m.agentTreeLine(agent))
-	}
-	lines = append(lines, "", "Enter opens selected agent. Use /agent <id>, Tab, Esc, or /back.")
-	return strings.Join(lines, "\n")
-}
-
-func (m model) agentDetailView() string {
-	agent, ok := m.agents[m.selectedAgent]
-	if !ok {
-		return "No selected agent. Use /agents."
-	}
-
-	duration := "(none)"
-	if agent.DurationMS != nil {
-		duration = fmt.Sprintf("%dms", *agent.DurationMS)
-	}
-
-	return strings.Join([]string{
-		labelStyle.Render("Agent " + m.selectedAgent),
-		"status: " + emptyAsNone(agent.Status),
-		fmt.Sprintf("attempt: %d", agent.Attempt),
-		"parent: " + emptyAsNone(agent.ParentAgentID),
-		"started: " + emptyAsNone(agent.StartedAt),
-		"finished: " + emptyAsNone(agent.FinishedAt),
-		"duration: " + duration,
-		"",
-		labelStyle.Render("Output"),
-		emptyAsNone(agent.Output),
-		"",
-		labelStyle.Render("Error"),
-		emptyAsNone(agent.Error),
-		"",
-		labelStyle.Render("Events"),
-		agentEventLines(agent.Events),
-		"",
-		"Esc or /back",
-	}, "\n")
-}
-
-func (m model) helpView() string {
-	return helpText()
-}
-
 func validateConfig(config runConfig) error {
 	if config.Task == "" {
 		return errors.New("task must not be empty")
@@ -1060,24 +847,6 @@ func hasResolvedRuntimeOptions(config runConfig) bool {
 	return config.InputPrice != "" && config.OutputPrice != "" && config.HTTPTimeout != ""
 }
 
-func loadModelsCommand(provider provider, apiKey string) tea.Cmd {
-	return func() tea.Msg {
-		models, err := providerModelLookup(provider, apiKey)
-		return modelListMsg{Provider: provider, Models: models, Err: err}
-	}
-}
-
-func fetchProviderModelOptions(provider provider, apiKey string) ([]modelOption, error) {
-	switch provider {
-	case providerOpenAI:
-		return fetchOpenAIModelOptions(apiKey)
-	case providerOpenRouter:
-		return fetchOpenRouterModelOptions()
-	default:
-		return nil, fmt.Errorf("unsupported provider for model loading: %s", provider)
-	}
-}
-
 func requireRemoteIdentity(config runConfig) error {
 	if config.Model == "" {
 		return errors.New("model must not be empty for remote providers")
@@ -1093,202 +862,6 @@ func applyResolvedPricing(config runConfig, pricing modelPricing) runConfig {
 	config.OutputPrice = formatPrice(pricing.OutputPerMillion)
 	config.HTTPTimeout = defaultHTTPTimeoutMS
 	return config
-}
-
-func formatPrice(value float64) string {
-	return strconv.FormatFloat(value, 'f', -1, 64)
-}
-
-func commandEnv(base []string, config runConfig) []string {
-	keyName := apiKeyName(config.Provider)
-	if keyName == "" {
-		return base
-	}
-	env := removeEnv(base, keyName)
-	return append(env, keyName+"="+config.APIKey)
-}
-
-func removeEnv(env []string, name string) []string {
-	prefix := name + "="
-	filtered := make([]string, 0, len(env))
-	for _, value := range env {
-		if !strings.HasPrefix(value, prefix) {
-			filtered = append(filtered, value)
-		}
-	}
-	return filtered
-}
-
-type openRouterModelsResponse struct {
-	Data []openRouterModel `json:"data"`
-}
-
-type openRouterModel struct {
-	ID      string            `json:"id"`
-	Pricing openRouterPricing `json:"pricing"`
-}
-
-type openRouterPricing struct {
-	Prompt     string `json:"prompt"`
-	Completion string `json:"completion"`
-}
-
-type openAIModelsResponse struct {
-	Data []openAIModel `json:"data"`
-}
-
-type openAIModel struct {
-	ID string `json:"id"`
-}
-
-func fetchOpenAIModelOptions(apiKey string) ([]modelOption, error) {
-	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("OPENAI_API_KEY must not be empty to load OpenAI models")
-	}
-
-	request, err := http.NewRequest(http.MethodGet, openAIModelsURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build OpenAI models request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OpenAI models: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("failed to fetch OpenAI models: HTTP %d", response.StatusCode)
-	}
-
-	var payload openAIModelsResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI models: %w", err)
-	}
-
-	options := openAIModelOptions(payload.Data)
-	if len(options) == 0 {
-		return nil, errors.New("OpenAI returned no models with known TUI pricing profiles")
-	}
-	return options, nil
-}
-
-func openAIModelOptions(models []openAIModel) []modelOption {
-	options := make([]modelOption, 0, len(models))
-	for _, model := range models {
-		pricing, ok := openAIPricingByModel[model.ID]
-		if ok {
-			options = append(options, modelOption{ID: model.ID, Pricing: pricing})
-		}
-	}
-	sortModelOptions(options)
-	return options
-}
-
-func fetchOpenRouterModelOptions() ([]modelOption, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Get(openRouterModelsURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OpenRouter models: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("failed to fetch OpenRouter models: HTTP %d", response.StatusCode)
-	}
-
-	var payload openRouterModelsResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenRouter models: %w", err)
-	}
-
-	options := make([]modelOption, 0, len(payload.Data))
-	for _, model := range payload.Data {
-		pricing, err := openRouterModelPricing(model)
-		if err == nil {
-			options = append(options, modelOption{ID: model.ID, Pricing: pricing})
-		}
-	}
-	sortModelOptions(options)
-	if len(options) == 0 {
-		return nil, errors.New("OpenRouter returned no models with usable pricing")
-	}
-	return options, nil
-}
-
-func sortModelOptions(options []modelOption) {
-	sort.Slice(options, func(left int, right int) bool {
-		return options[left].ID < options[right].ID
-	})
-}
-
-func selectedModelIndex(models []modelOption, selected string) int {
-	for index, model := range models {
-		if model.ID == selected {
-			return index
-		}
-	}
-	return 0
-}
-
-func fetchOpenRouterPricing(model string) (modelPricing, error) {
-	if strings.TrimSpace(model) == "" {
-		return modelPricing{}, errors.New("model must not be empty for remote providers")
-	}
-
-	models, err := fetchOpenRouterModelOptions()
-	if err != nil {
-		return modelPricing{}, err
-	}
-	for _, candidate := range models {
-		if candidate.ID == model {
-			return candidate.Pricing, nil
-		}
-	}
-	return modelPricing{}, fmt.Errorf("no OpenRouter pricing found for model %q", model)
-}
-
-func openRouterModelPricing(model openRouterModel) (modelPricing, error) {
-	inputPerToken, err := strconv.ParseFloat(model.Pricing.Prompt, 64)
-	if err != nil {
-		return modelPricing{}, fmt.Errorf("invalid OpenRouter prompt price for model %q", model.ID)
-	}
-
-	outputPerToken, err := strconv.ParseFloat(model.Pricing.Completion, 64)
-	if err != nil {
-		return modelPricing{}, fmt.Errorf("invalid OpenRouter completion price for model %q", model.ID)
-	}
-
-	return modelPricing{
-		InputPerMillion:  inputPerToken * 1_000_000,
-		OutputPerMillion: outputPerToken * 1_000_000,
-	}, nil
-}
-
-func validateNonNegativeFloat(value string, label string) error {
-	if value == "" {
-		return fmt.Errorf("%s must not be empty", label)
-	}
-
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || parsed < 0 {
-		return fmt.Errorf("%s must be a non-negative number", label)
-	}
-	return nil
-}
-
-func validatePositiveInt(value string, label string) error {
-	if value == "" {
-		return fmt.Errorf("%s must not be empty", label)
-	}
-
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return fmt.Errorf("%s must be a positive integer", label)
-	}
-	return nil
 }
 
 func parseProvider(value string) (provider, error) {
@@ -1357,54 +930,6 @@ func (config savedConfig) apiKeyFor(provider provider) string {
 	}
 }
 
-func tuiConfigPath() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("AGENT_MACHINE_TUI_CONFIG")); path != "" {
-		return path, nil
-	}
-
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to locate user config directory: %w", err)
-	}
-	return filepath.Join(configDir, "agent-machine", "tui-config.json"), nil
-}
-
-func loadSavedConfig(path string) (savedConfig, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return savedConfig{}, nil
-	}
-	if err != nil {
-		return savedConfig{}, fmt.Errorf("failed to read TUI config %s: %w", path, err)
-	}
-
-	var config savedConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return savedConfig{}, fmt.Errorf("failed to parse TUI config %s: %w", path, err)
-	}
-	return config, nil
-}
-
-func saveSavedConfig(path string, config savedConfig) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("failed to create TUI config directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to encode TUI config: %w", err)
-	}
-
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("failed to write TUI config %s: %w", path, err)
-	}
-
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("failed to restrict TUI config permissions %s: %w", path, err)
-	}
-	return nil
-}
-
 func summaryError(summary summary) string {
 	if strings.TrimSpace(summary.Error) != "" {
 		return summary.Error
@@ -1421,15 +946,6 @@ func summaryError(summary summary) string {
 		return "unknown error"
 	}
 	return strings.Join(errorsByAgent, "\n")
-}
-
-func sortedResultIDs(results map[string]runResultSummary) []string {
-	ids := make([]string, 0, len(results))
-	for id := range results {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 func (m model) visibleAgentIDs() []string {
@@ -1602,94 +1118,6 @@ func (m model) viewName() string {
 	default:
 		return "chat"
 	}
-}
-
-func agentEventLines(events []eventSummary) string {
-	if len(events) == 0 {
-		return "(none)"
-	}
-	lines := make([]string, 0, len(events))
-	for _, event := range events {
-		label := event.Type
-		if event.Status != "" {
-			label += " " + event.Status
-		}
-		if event.Reason != "" {
-			label += " " + event.Reason
-		}
-		lines = append(lines, label)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func modelListText(models []modelOption, selected int) string {
-	lines := []string{"models:"}
-	limit := len(models)
-	if limit > 12 {
-		limit = 12
-	}
-
-	for index := 0; index < limit; index++ {
-		prefix := "  "
-		if index == selected {
-			prefix = "* "
-		}
-		lines = append(lines, prefix+models[index].ID)
-	}
-	if len(models) > limit {
-		lines = append(lines, fmt.Sprintf("... %d more", len(models)-limit))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func helpText() string {
-	return strings.Join([]string{
-		labelStyle.Render("Help"),
-		"",
-		"Keys:",
-		"Tab / Shift+Tab: switch views",
-		"Esc: back",
-		"Enter: submit or open selected agent",
-		"Up / Down: command history, or agent selection in Agents",
-		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
-		"Ctrl+C: quit",
-		"",
-		"Commands:",
-		"/setup",
-		"/workflow basic|agentic",
-		"/provider echo|openai|openrouter",
-		"/key <api-key>",
-		"/models reload",
-		"/models",
-		"/model <id|next|prev>",
-		"/settings",
-		"/agents",
-		"/agent <id>",
-		"/back",
-		"/clear",
-		"/quit",
-	}, "\n")
-}
-
-func emptyAsNone(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "(none)"
-	}
-	return value
-}
-
-func emptyAs(value string, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}
-
-func emptyAsUnknown(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "unknown error"
-	}
-	return value
 }
 
 func main() {
