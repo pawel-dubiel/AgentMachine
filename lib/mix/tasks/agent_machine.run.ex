@@ -17,6 +17,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     http_timeout_ms: :integer,
     tool_harness: :string,
     tool_timeout_ms: :integer,
+    tool_root: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
@@ -133,7 +134,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
       http_timeout_ms: Keyword.get(opts, :http_timeout_ms),
       pricing: pricing_from_opts(opts),
       tool_harness: tool_harness_from_opts!(opts),
-      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms)
+      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
+      tool_root: Keyword.get(opts, :tool_root)
     }
   end
 
@@ -180,9 +182,17 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp tool_harness_from_opts!(opts) do
     case Keyword.fetch(opts, :tool_harness) do
-      {:ok, "demo"} -> :demo
-      {:ok, harness} -> Mix.raise("--tool-harness must be demo, got: #{inspect(harness)}")
-      :error -> nil
+      {:ok, "demo"} ->
+        :demo
+
+      {:ok, "local-files"} ->
+        :local_files
+
+      {:ok, harness} ->
+        Mix.raise("--tool-harness must be demo or local-files, got: #{inspect(harness)}")
+
+      :error ->
+        nil
     end
   end
 

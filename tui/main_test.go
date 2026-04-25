@@ -76,6 +76,48 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:        "create hello",
+		Workflow:    workflowBasic,
+		Provider:    providerOpenRouter,
+		Model:       "qwen/qwen3.5-flash-02-23",
+		InputPrice:  "0.01",
+		OutputPrice: "0.01",
+		HTTPTimeout: "25000",
+		ToolHarness: "local-files",
+		ToolRoot:    "/Users/pawel/mywiki",
+		ToolTimeout: "1000",
+	})
+
+	expected := []string{
+		"agent_machine.run",
+		"--workflow", "basic",
+		"--provider", "openrouter",
+		"--timeout-ms", defaultRunTimeoutMS,
+		"--max-steps", defaultBasicSteps,
+		"--max-attempts", "1",
+		"--jsonl",
+		"--model", "qwen/qwen3.5-flash-02-23",
+		"--http-timeout-ms", "25000",
+		"--input-price-per-million", "0.01",
+		"--output-price-per-million", "0.01",
+		"--tool-harness", "local-files",
+		"--tool-timeout-ms", "1000",
+		"--tool-root", "/Users/pawel/mywiki",
+		"create hello",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
 func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
@@ -107,6 +149,20 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected valid config, got %v", err)
+	}
+}
+
+func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:        "write a file",
+		Workflow:    workflowBasic,
+		Provider:    providerEcho,
+		ToolHarness: "local-files",
+		ToolTimeout: "1000",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "tool root") {
+		t.Fatalf("expected tool root error, got %v", err)
 	}
 }
 
@@ -299,6 +355,26 @@ func TestProviderCommandSwitchesSessionProvider(t *testing.T) {
 	}
 }
 
+func TestProviderCommandPersistsSelectedProvider(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	_, _ = m.handleCommand("/provider openrouter")
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.Provider != "openrouter" {
+		t.Fatalf("expected provider to persist, got %q", loaded.Provider)
+	}
+}
+
 func TestInitialModelRequiresSetupBeforeRun(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
@@ -340,10 +416,82 @@ func TestWorkflowCommandSwitchesSessionWorkflow(t *testing.T) {
 	}
 }
 
+func TestWorkflowCommandPersistsSelectedWorkflow(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	_, _ = m.handleCommand("/workflow agentic")
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.Workflow != "agentic" {
+		t.Fatalf("expected workflow to persist, got %q", loaded.Workflow)
+	}
+}
+
+func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000")
+	result := updated.(model)
+
+	if result.savedConfig.ToolHarness != "local-files" {
+		t.Fatalf("expected local-files harness, got %q", result.savedConfig.ToolHarness)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" {
+		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestToolsOffClearsToolHarness(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		ToolHarness: "local-files",
+		ToolRoot:    "/Users/pawel/mywiki",
+		ToolTimeout: "1000",
+	}); err != nil {
+		t.Fatalf("expected saved config write to succeed, got %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools off")
+	result := updated.(model)
+
+	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" || result.savedConfig.ToolTimeout != "" {
+		t.Fatalf("expected cleared tool config, got %#v", result.savedConfig)
+	}
+}
+
 func TestModelCommandSelectsLoadedModel(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
 		provider:    providerOpenRouter,
 		providerSet: true,
+		configPath:  configPath,
 		modelOptions: []modelOption{
 			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
 			{ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
@@ -355,6 +503,51 @@ func TestModelCommandSelectsLoadedModel(t *testing.T) {
 
 	if result.selectedModel != "openai/gpt-4o-mini" {
 		t.Fatalf("unexpected selected model: %q", result.selectedModel)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.OpenRouterModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected model to persist, got %q", loaded.OpenRouterModel)
+	}
+}
+
+func TestInitialModelLoadsSavedSetup(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		Workflow:        "agentic",
+		Provider:        "openrouter",
+		OpenRouterModel: "openai/gpt-4o-mini",
+		ToolHarness:     "local-files",
+		ToolRoot:        "/Users/pawel/mywiki",
+		ToolTimeout:     "1000",
+	}); err != nil {
+		t.Fatalf("expected saved config write to succeed, got %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if !m.workflowSet || m.workflow != workflowAgentic {
+		t.Fatalf("expected saved workflow, got set=%v workflow=%q", m.workflowSet, m.workflow)
+	}
+	if !m.providerSet || m.provider != providerOpenRouter {
+		t.Fatalf("expected saved provider, got set=%v provider=%q", m.providerSet, m.provider)
+	}
+	if m.selectedModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected saved model, got %q", m.selectedModel)
+	}
+	if m.view != viewChat {
+		t.Fatalf("expected chat view for saved setup, got %v", m.view)
+	}
+	if m.savedConfig.ToolHarness != "local-files" {
+		t.Fatalf("expected saved tools, got %#v", m.savedConfig)
 	}
 }
 
@@ -734,6 +927,13 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 	err := saveSavedConfig(path, savedConfig{
 		OpenAIAPIKey:     "openai-key",
 		OpenRouterAPIKey: "openrouter-key",
+		Workflow:         "agentic",
+		Provider:         "openrouter",
+		OpenAIModel:      "gpt-4o-mini",
+		OpenRouterModel:  "openai/gpt-4o-mini",
+		ToolHarness:      "local-files",
+		ToolRoot:         "/Users/pawel/mywiki",
+		ToolTimeout:      "1000",
 	})
 	if err != nil {
 		t.Fatalf("expected save to succeed, got %v", err)
@@ -750,6 +950,27 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 
 	if loaded.OpenRouterAPIKey != "openrouter-key" {
 		t.Fatalf("unexpected OpenRouter key: %q", loaded.OpenRouterAPIKey)
+	}
+	if loaded.Workflow != "agentic" {
+		t.Fatalf("unexpected workflow: %q", loaded.Workflow)
+	}
+	if loaded.Provider != "openrouter" {
+		t.Fatalf("unexpected provider: %q", loaded.Provider)
+	}
+	if loaded.OpenAIModel != "gpt-4o-mini" {
+		t.Fatalf("unexpected OpenAI model: %q", loaded.OpenAIModel)
+	}
+	if loaded.OpenRouterModel != "openai/gpt-4o-mini" {
+		t.Fatalf("unexpected OpenRouter model: %q", loaded.OpenRouterModel)
+	}
+	if loaded.ToolHarness != "local-files" {
+		t.Fatalf("unexpected tool harness: %q", loaded.ToolHarness)
+	}
+	if loaded.ToolRoot != "/Users/pawel/mywiki" {
+		t.Fatalf("unexpected tool root: %q", loaded.ToolRoot)
+	}
+	if loaded.ToolTimeout != "1000" {
+		t.Fatalf("unexpected tool timeout: %q", loaded.ToolTimeout)
 	}
 
 	info, err := os.Stat(path)

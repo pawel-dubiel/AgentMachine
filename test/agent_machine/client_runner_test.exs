@@ -107,6 +107,42 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "builds local file tool options from explicit harness and root" do
+    spec =
+      RunSpec.new!(%{
+        task: "write a file",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :local_files,
+        tool_timeout_ms: 100,
+        tool_root: "/tmp/agent-machine"
+      })
+
+    {_agents, opts} = Basic.build!(spec)
+
+    assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.WriteFile]
+    assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
+    assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
+  end
+
+  test "requires tool root for local file harness" do
+    assert_raise ArgumentError, ~r/:tool_root/, fn ->
+      RunSpec.new!(%{
+        task: "write a file",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :local_files,
+        tool_timeout_ms: 100
+      })
+    end
+  end
+
   test "builds the agentic workflow with an opt-in structured planner" do
     spec =
       RunSpec.new!(%{

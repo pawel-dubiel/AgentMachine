@@ -19,6 +19,10 @@ defmodule AgentMachine.ToolHarnessTest do
            } = body
   end
 
+  test "built-in local files harness exposes write_file" do
+    assert ToolHarness.builtin!(:local_files) == [AgentMachine.Tools.WriteFile]
+  end
+
   test "builds OpenRouter tool definitions from allowed tools" do
     body =
       ToolHarness.put_openrouter_tools!(%{"model" => "test"},

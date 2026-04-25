@@ -6,7 +6,8 @@ defmodule AgentMachine.ToolHarness do
   alias AgentMachine.JSON
 
   @builtin_harnesses %{
-    demo: [AgentMachine.Tools.Now]
+    demo: [AgentMachine.Tools.Now],
+    local_files: [AgentMachine.Tools.WriteFile]
   }
 
   def builtin!(nil), do: []

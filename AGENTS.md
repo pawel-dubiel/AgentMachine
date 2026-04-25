@@ -126,11 +126,16 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Tool calls require `allowed_tools` and `tool_timeout_ms`.
 - `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>` exposes the
   safe built-in demo harness through the high-level client boundary.
+- `mix agent_machine.run --tool-harness local-files --tool-root <path>
+  --tool-timeout-ms <ms>` exposes constrained local file writing under the
+  explicit root.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
   plus the final summary to an explicit file path.
 - `tui/` contains the Go Bubble Tea conversation client with slash commands and should call the CLI boundary instead of reimplementing orchestration.
-- The TUI may persist remote provider API keys in its local config file and inject them into the `mix` child process environment.
+- The TUI may persist workflow, provider, provider-specific selected model, tool
+  harness setup, and remote provider API keys in its local config file. It may
+  inject saved API keys into the `mix` child process environment.
 - The TUI resolves remote-provider pricing itself before calling the CLI; do not expose token price fields as normal user inputs.
 - The TUI loads remote provider model lists from OpenAI/OpenRouter and should keep model selection provider-specific.
 

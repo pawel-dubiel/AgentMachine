@@ -124,11 +124,21 @@ type runConfig struct {
 	InputPrice  string
 	OutputPrice string
 	HTTPTimeout string
+	ToolHarness string
+	ToolRoot    string
+	ToolTimeout string
 }
 
 type savedConfig struct {
 	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
 	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
+	Workflow         string `json:"workflow,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	OpenAIModel      string `json:"openai_model,omitempty"`
+	OpenRouterModel  string `json:"openrouter_model,omitempty"`
+	ToolHarness      string `json:"tool_harness,omitempty"`
+	ToolRoot         string `json:"tool_root,omitempty"`
+	ToolTimeout      string `json:"tool_timeout_ms,omitempty"`
 }
 
 type chatMessage struct {
@@ -203,7 +213,7 @@ func initialModel() (model, error) {
 	input.Width = 96
 	input.Focus()
 
-	return model{
+	m := model{
 		input:       input,
 		savedConfig: savedConfig,
 		configPath:  configPath,
@@ -212,7 +222,13 @@ func initialModel() (model, error) {
 		},
 		view:   viewSetup,
 		agents: map[string]agentState{},
-	}, nil
+	}
+
+	if err := m.applySavedSettings(); err != nil {
+		return model{}, err
+	}
+
+	return m, nil
 }
 
 func (m model) Init() tea.Cmd {
@@ -469,6 +485,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleProviderCommand(args)
 	case "key":
 		return m.handleKeyCommand(args)
+	case "tools":
+		return m.handleToolsCommand(args)
 	case "models":
 		return m.handleModelsCommand(args)
 	case "model":
@@ -515,6 +533,11 @@ func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
 
 	m.workflow = nextWorkflow
 	m.workflowSet = true
+	m.savedConfig.Workflow = string(nextWorkflow)
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
 	m.view = viewChat
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow set to " + string(m.workflow)})
 	return m, nil
@@ -538,6 +561,8 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 
 	m.provider = nextProvider
 	m.providerSet = true
+	m.savedConfig.Provider = string(nextProvider)
+	m.savedConfig.rememberModel(nextProvider, "")
 	m.modelOptions = nil
 	m.modelIndex = 0
 	m.selectedModel = ""
@@ -547,6 +572,10 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 	m.modelPickerQuery = ""
 	m.view = viewChat
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider set to " + m.provider.Label()})
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
 
 	if m.provider != providerEcho {
 		return m, m.loadModelsCommand()
@@ -577,6 +606,50 @@ func (m model) handleKeyCommand(args []string) (tea.Model, tea.Cmd) {
 
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved " + apiKeyName(m.provider)})
 	return m, m.loadModelsCommand()
+}
+
+func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.toolsStatus()})
+		return m, nil
+	}
+
+	switch args[0] {
+	case "off":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off"})
+			return m, nil
+		}
+		m.savedConfig.ToolHarness = ""
+		m.savedConfig.ToolRoot = ""
+		m.savedConfig.ToolTimeout = ""
+	case "local-files":
+		if len(args) != 3 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools local-files <root> <timeout-ms>"})
+			return m, nil
+		}
+		if strings.TrimSpace(args[1]) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool root must not be empty"})
+			return m, nil
+		}
+		if err := validatePositiveInt(args[2], "tool timeout ms"); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		m.savedConfig.ToolHarness = "local-files"
+		m.savedConfig.ToolRoot = args[1]
+		m.savedConfig.ToolTimeout = args[2]
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files <root> <timeout-ms>"})
+		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.toolsStatus()})
+	return m, nil
 }
 
 func (m model) handleModelsCommand(args []string) (tea.Model, tea.Cmd) {
@@ -650,6 +723,11 @@ func (m model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 		m.selectedModel = m.modelOptions[index].ID
 	}
 
+	m.savedConfig.rememberModel(m.provider, m.selectedModel)
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "model set to " + m.selectedModel})
 	return m, nil
 }
@@ -669,7 +747,12 @@ func (m model) selectModelFromPicker() (tea.Model, tea.Cmd) {
 	}
 	m.modelIndex = m.modelPickerIndex
 	m.selectedModel = m.modelOptions[m.modelIndex].ID
+	m.savedConfig.rememberModel(m.provider, m.selectedModel)
 	m.modelPickerOpen = false
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "model set to " + m.selectedModel})
 	return m, nil
 }
@@ -772,11 +855,14 @@ func (m *model) applySummaryResults(summary summary) {
 
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
-		Task:     task,
-		Workflow: m.workflow,
-		Provider: m.provider,
-		APIKey:   m.apiKey(),
-		Model:    m.modelID(),
+		Task:        task,
+		Workflow:    m.workflow,
+		Provider:    m.provider,
+		APIKey:      m.apiKey(),
+		Model:       m.modelID(),
+		ToolHarness: m.savedConfig.ToolHarness,
+		ToolRoot:    m.savedConfig.ToolRoot,
+		ToolTimeout: m.savedConfig.ToolTimeout,
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -903,6 +989,9 @@ func validateConfig(config runConfig) error {
 	if _, err := parseWorkflow(string(config.Workflow)); err != nil {
 		return err
 	}
+	if err := validateToolConfig(config); err != nil {
+		return err
+	}
 
 	switch config.Provider {
 	case providerEcho:
@@ -935,6 +1024,26 @@ func validateConfig(config runConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
+	}
+}
+
+func validateToolConfig(config runConfig) error {
+	switch config.ToolHarness {
+	case "":
+		if config.ToolRoot != "" || config.ToolTimeout != "" {
+			return errors.New("tool root and timeout require a selected tool harness")
+		}
+		return nil
+	case "local-files":
+		if strings.TrimSpace(config.ToolRoot) == "" {
+			return errors.New("tool root must not be empty for local-files")
+		}
+		if err := validatePositiveInt(config.ToolTimeout, "tool timeout ms"); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported tool harness: %s", config.ToolHarness)
 	}
 }
 
@@ -1051,6 +1160,59 @@ func keyStatus(apiKey string) string {
 	return "saved"
 }
 
+func (m model) toolsStatus() string {
+	switch m.savedConfig.ToolHarness {
+	case "":
+		return "tools: off"
+	case "local-files":
+		return "tools: local-files root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout)
+	default:
+		return "tools: unsupported " + m.savedConfig.ToolHarness
+	}
+}
+
+func (m *model) applySavedSettings() error {
+	if strings.TrimSpace(m.savedConfig.Workflow) != "" {
+		workflow, err := parseWorkflow(m.savedConfig.Workflow)
+		if err != nil {
+			return fmt.Errorf("invalid saved workflow in TUI config: %w", err)
+		}
+		m.workflow = workflow
+		m.workflowSet = true
+	}
+
+	if strings.TrimSpace(m.savedConfig.Provider) != "" {
+		provider, err := parseProvider(m.savedConfig.Provider)
+		if err != nil {
+			return fmt.Errorf("invalid saved provider in TUI config: %w", err)
+		}
+		m.provider = provider
+		m.providerSet = true
+		m.selectedModel = m.savedConfig.modelFor(provider)
+	}
+
+	if strings.TrimSpace(m.savedConfig.ToolHarness) != "" {
+		if err := validateToolConfig(runConfig{
+			Workflow:    workflowBasic,
+			Provider:    providerEcho,
+			ToolHarness: m.savedConfig.ToolHarness,
+			ToolRoot:    m.savedConfig.ToolRoot,
+			ToolTimeout: m.savedConfig.ToolTimeout,
+		}); err != nil {
+			return fmt.Errorf("invalid saved tools in TUI config: %w", err)
+		}
+	}
+
+	if m.workflowSet && m.providerSet {
+		m.view = viewChat
+		m.messages = []chatMessage{
+			{Role: "system", Text: "Loaded saved TUI setup. Use /setup to change it."},
+		}
+	}
+
+	return nil
+}
+
 func (config savedConfig) apiKeyFor(provider provider) string {
 	switch provider {
 	case providerOpenAI:
@@ -1059,6 +1221,26 @@ func (config savedConfig) apiKeyFor(provider provider) string {
 		return config.OpenRouterAPIKey
 	default:
 		return ""
+	}
+}
+
+func (config savedConfig) modelFor(provider provider) string {
+	switch provider {
+	case providerOpenAI:
+		return config.OpenAIModel
+	case providerOpenRouter:
+		return config.OpenRouterModel
+	default:
+		return ""
+	}
+}
+
+func (config *savedConfig) rememberModel(provider provider, model string) {
+	switch provider {
+	case providerOpenAI:
+		config.OpenAIModel = model
+	case providerOpenRouter:
+		config.OpenRouterModel = model
 	}
 }
 

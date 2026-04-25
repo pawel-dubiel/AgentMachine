@@ -274,6 +274,27 @@ mix agent_machine.run \
 ```
 
 The first built-in harness is `demo`, which exposes `AgentMachine.Tools.Now`.
+The `local-files` harness exposes `AgentMachine.Tools.WriteFile` and requires an
+explicit `--tool-root`; write requests outside that root fail.
+
+```sh
+mix agent_machine.run \
+  --workflow basic \
+  --provider openrouter \
+  --model "YOUR_OPENROUTER_MODEL" \
+  --timeout-ms 30000 \
+  --http-timeout-ms 25000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --tool-harness local-files \
+  --tool-root /Users/pawel/mywiki \
+  --tool-timeout-ms 1000 \
+  --json \
+  "Create hello_world.md with Hello World"
+```
+
 The CLI intentionally has no hidden default tool set. More capable tools should
 be added as explicit harnesses with tests and a permission model.
 
@@ -297,10 +318,11 @@ workflow and provider in Setup before sending normal messages. Runs execute thro
 `mix agent_machine.run --jsonl`, so agent start, retry, finish, and final summary
 events update the interface live without reimplementing orchestration in Go.
 
-Remote provider API keys can be entered directly in the TUI. They are saved in a
-local JSON config file with `0600` permissions and injected into the `mix`
-process environment when a run starts. By default the config file is under the
-platform user config directory:
+Remote provider API keys and selected setup values can be entered directly in
+the TUI. Workflow, provider, provider-specific selected model, and API keys are
+saved in a local JSON config file with `0600` permissions. API keys are injected
+into the `mix` process environment when a run starts. By default the config file
+is under the platform user config directory:
 
 ```text
 macOS: ~/Library/Application Support/agent-machine/tui-config.json
@@ -313,6 +335,9 @@ The saved key fields are:
 
 - `OPENAI_API_KEY` for OpenAI
 - `OPENROUTER_API_KEY` for OpenRouter
+
+Saved setup fields are loaded on TUI startup. If workflow and provider were
+previously selected, the TUI opens in Chat with those explicit saved choices.
 
 The TUI does not ask for token prices. OpenAI pricing is resolved from the
 TUI's built-in model pricing table. OpenRouter pricing is resolved from
@@ -333,6 +358,8 @@ Core commands:
 - `/workflow basic|agentic`
 - `/provider echo|openai|openrouter`
 - `/key <api-key>`
+- `/tools local-files <root> <timeout-ms>`
+- `/tools off`
 - `/models reload`
 - `/models`
 - `/model` opens a searchable model picker
@@ -650,6 +677,11 @@ be exposed to OpenAI Responses or OpenRouter Chat must also implement
 those definitions using the provider's standard function/tool calling shape, then
 `AgentMachine.ToolHarness` converts returned provider tool calls into runtime
 `tool_calls`.
+
+Built-in harnesses:
+
+- `demo`: exposes `AgentMachine.Tools.Now`.
+- `local-files`: exposes `AgentMachine.Tools.WriteFile` and requires `:tool_root`.
 
 Runs that execute tools must explicitly allow them:
 

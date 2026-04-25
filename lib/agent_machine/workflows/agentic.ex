@@ -74,11 +74,21 @@ defmodule AgentMachine.Workflows.Agentic do
 
   defp put_tool_opts(opts, %RunSpec{tool_harness: nil}), do: opts
 
-  defp put_tool_opts(opts, %RunSpec{tool_harness: harness, tool_timeout_ms: tool_timeout_ms}) do
+  defp put_tool_opts(
+         opts,
+         %RunSpec{tool_harness: harness, tool_timeout_ms: tool_timeout_ms} = spec
+       ) do
     opts
     |> Keyword.put(:allowed_tools, AgentMachine.ToolHarness.builtin!(harness))
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
+    |> maybe_put_tool_root(harness, spec)
   end
+
+  defp maybe_put_tool_root(opts, :local_files, %RunSpec{tool_root: root}) do
+    Keyword.put(opts, :tool_root, root)
+  end
+
+  defp maybe_put_tool_root(opts, _harness, _spec), do: opts
 
   defp planner_instructions do
     """
@@ -88,6 +98,8 @@ defmodule AgentMachine.Workflows.Agentic do
     {"output":"short planning note","next_agents":[{"id":"worker-id","input":"worker task","instructions":"optional worker instructions"}]}
 
     Use an empty next_agents list when no split is useful. Keep worker ids short, lowercase, and unique.
+    If the task needs external side effects such as writing files, delegate that exact action to a worker and require it to use available tools.
+    Do not claim side effects happened unless tool_results confirm them.
     """
     |> String.trim()
   end
@@ -96,6 +108,7 @@ defmodule AgentMachine.Workflows.Agentic do
     """
     Create the final user-facing answer from the completed run context.
     Use worker outputs when they exist. Do not delegate follow-up agents.
+    Only report side effects that are present in prior results or tool_results.
     """
     |> String.trim()
   end

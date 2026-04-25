@@ -128,6 +128,16 @@ func buildRunArgs(config runConfig) []string {
 		)
 	}
 
+	if config.ToolHarness != "" {
+		args = append(args,
+			"--tool-harness", config.ToolHarness,
+			"--tool-timeout-ms", config.ToolTimeout,
+		)
+		if config.ToolRoot != "" {
+			args = append(args, "--tool-root", config.ToolRoot)
+		}
+	}
+
 	return append(args, config.Task)
 }
 

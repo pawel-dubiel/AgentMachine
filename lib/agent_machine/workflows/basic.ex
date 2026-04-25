@@ -75,17 +75,38 @@ defmodule AgentMachine.Workflows.Basic do
 
   defp put_tool_opts(opts, %RunSpec{tool_harness: nil}), do: opts
 
-  defp put_tool_opts(opts, %RunSpec{tool_harness: harness, tool_timeout_ms: tool_timeout_ms}) do
+  defp put_tool_opts(
+         opts,
+         %RunSpec{tool_harness: harness, tool_timeout_ms: tool_timeout_ms} = spec
+       ) do
     opts
     |> Keyword.put(:allowed_tools, AgentMachine.ToolHarness.builtin!(harness))
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
+    |> maybe_put_tool_root(harness, spec)
   end
 
+  defp maybe_put_tool_root(opts, :local_files, %RunSpec{tool_root: root}) do
+    Keyword.put(opts, :tool_root, root)
+  end
+
+  defp maybe_put_tool_root(opts, _harness, _spec), do: opts
+
   defp assistant_instructions do
-    "Answer the user's task directly. Keep the response concise and actionable."
+    """
+    Answer the user's task directly. Keep the response concise and actionable.
+    If a task requires external side effects such as writing files, use an available tool.
+    Do not claim that you created, changed, read, or deleted a file unless a tool result proves it.
+    If no relevant tool is available, say that you cannot perform that action in this run.
+    """
+    |> String.trim()
   end
 
   defp finalizer_instructions do
-    "Create the final user-facing answer from the completed run context."
+    """
+    Create the final user-facing answer from the completed run context.
+    Only report side effects that are present in prior results or tool_results.
+    Do not claim that files were created or changed unless a tool result confirms it.
+    """
+    |> String.trim()
   end
 end
