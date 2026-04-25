@@ -4,7 +4,6 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
-- [2026-04-19] Add JSONL event streaming so the TUI can show live agent progress during a run.
 - [2026-04-19] Add cancellation and retry commands to the TUI after event streaming exists.
 - [2026-04-19] Replace plaintext TUI API key config with OS keychain integration.
 - [2026-04-19] Add searchable model picker UI for large provider model lists.

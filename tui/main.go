@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -44,15 +47,62 @@ type usageSummary struct {
 }
 
 type eventSummary struct {
-	Type    string `json:"type"`
-	AgentID string `json:"agent_id"`
-	Status  string `json:"status"`
+	Type          string `json:"type"`
+	RunID         string `json:"run_id"`
+	AgentID       string `json:"agent_id"`
+	ParentAgentID string `json:"parent_agent_id"`
+	Status        string `json:"status"`
+	Attempt       int    `json:"attempt"`
+	NextAttempt   int    `json:"next_attempt"`
+	DurationMS    *int   `json:"duration_ms"`
+	Reason        string `json:"reason"`
+	At            string `json:"at"`
 }
 
 type runResultMsg struct {
 	Summary summary
 	Raw     string
 	Err     error
+}
+
+type streamStartedMsg struct {
+	Session *streamSession
+}
+
+type streamLineMsg struct {
+	Session *streamSession
+	Line    string
+}
+
+type streamDoneMsg struct {
+	Session *streamSession
+	Err     error
+}
+
+type streamSession struct {
+	cmd     *exec.Cmd
+	scanner *bufio.Scanner
+	stderr  *bytes.Buffer
+}
+
+type jsonlEnvelope struct {
+	Type    string          `json:"type"`
+	Event   eventSummary    `json:"event"`
+	Summary summary         `json:"summary"`
+	Raw     json.RawMessage `json:"-"`
+}
+
+type agentState struct {
+	ID            string
+	ParentAgentID string
+	Status        string
+	Attempt       int
+	Output        string
+	Error         string
+	StartedAt     string
+	FinishedAt    string
+	DurationMS    *int
+	Events        []eventSummary
 }
 
 type provider string
@@ -128,27 +178,34 @@ type viewMode int
 
 const (
 	viewChat viewMode = iota
+	viewSetup
 	viewSettings
 	viewAgents
 	viewAgentDetail
+	viewHelp
 )
 
 type model struct {
-	input         textinput.Model
-	provider      provider
-	savedConfig   savedConfig
-	configPath    string
-	modelOptions  []modelOption
-	modelIndex    int
-	selectedModel string
-	modelStatus   string
-	messages      []chatMessage
-	view          viewMode
-	selectedAgent string
-	running       bool
-	activeConfig  runConfig
-	lastSummary   summary
-	raw           string
+	input              textinput.Model
+	provider           provider
+	providerSet        bool
+	savedConfig        savedConfig
+	configPath         string
+	modelOptions       []modelOption
+	modelIndex         int
+	selectedModel      string
+	modelStatus        string
+	messages           []chatMessage
+	view               viewMode
+	selectedAgent      string
+	selectedAgentIndex int
+	running            bool
+	activeConfig       runConfig
+	lastSummary        summary
+	agents             map[string]agentState
+	agentOrder         []string
+	raw                string
+	stream             *streamSession
 }
 
 var (
@@ -177,13 +234,13 @@ func initialModel() (model, error) {
 
 	return model{
 		input:       input,
-		provider:    providerEcho,
 		savedConfig: savedConfig,
 		configPath:  configPath,
 		messages: []chatMessage{
-			{Role: "system", Text: "Type a message to run AgentMachine. Use /help for commands."},
+			{Role: "system", Text: "Open Setup and select a provider before running AgentMachine."},
 		},
-		view: viewChat,
+		view:   viewSetup,
+		agents: map[string]agentState{},
 	}, nil
 }
 
@@ -197,11 +254,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
-		case "enter":
-			if m.running {
+		case "tab":
+			m.nextView()
+			return m, nil
+		case "shift+tab":
+			m.previousView()
+			return m, nil
+		case "esc":
+			m.back()
+			return m, nil
+		case "up", "k":
+			if m.view == viewAgents {
+				m.moveAgentSelection(-1)
 				return m, nil
 			}
-			return m.submitInput()
+		case "down", "j":
+			if m.view == viewAgents {
+				m.moveAgentSelection(1)
+				return m, nil
+			}
+		case "enter":
+			if m.view == viewAgents {
+				return m.openSelectedAgent()
+			}
+			if m.view == viewAgentDetail {
+				m.back()
+				return m, nil
+			}
+			if !m.running {
+				return m.submitInput()
+			}
+			return m, nil
 		}
 
 	case runResultMsg:
@@ -214,6 +297,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: emptyAsNone(msg.Summary.FinalOutput)})
+		}
+		return m, nil
+
+	case streamStartedMsg:
+		m.stream = msg.Session
+		return m, readStreamCommand(msg.Session)
+
+	case streamLineMsg:
+		if msg.Session != m.stream {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m, cmd = m.handleStreamLine(msg.Line)
+		if cmd != nil {
+			return m, cmd
+		}
+		return m, readStreamCommand(msg.Session)
+
+	case streamDoneMsg:
+		if msg.Session != m.stream {
+			return m, nil
+		}
+		m.stream = nil
+		m.running = false
+		m.view = viewChat
+		if msg.Err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
+		} else if strings.TrimSpace(m.lastSummary.FinalOutput) != "" || m.lastSummary.Status != "" {
+			if m.lastSummary.Status == "failed" {
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + summaryError(m.lastSummary)})
+			} else {
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: emptyAsNone(m.lastSummary.FinalOutput)})
+			}
+		} else {
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
 		}
 		return m, nil
 
@@ -240,7 +358,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if !m.running {
+	if !m.running && m.view != viewAgents && m.view != viewAgentDetail {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -265,14 +383,22 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
+	if !m.providerSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider in Setup before running"})
+		m.view = viewSetup
+		return m, nil
+	}
+
 	config, err := resolveConfig(m.runConfig(task))
 	if err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		m.view = viewSetup
 		return m, nil
 	}
 
 	if err := validateConfig(config); err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		m.view = viewSetup
 		return m, nil
 	}
 
@@ -291,7 +417,13 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	m.running = true
 	m.view = viewChat
 	m.activeConfig = config
-	return m, runCommand(config)
+	m.lastSummary = summary{}
+	m.raw = ""
+	m.agents = map[string]agentState{}
+	m.agentOrder = nil
+	m.selectedAgent = ""
+	m.selectedAgentIndex = 0
+	return m, startStreamingCommand(config)
 }
 
 func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
@@ -301,7 +433,9 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 
 	switch name {
 	case "help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: helpText()})
+		m.view = viewHelp
+	case "setup":
+		m.view = viewSetup
 	case "provider":
 		return m.handleProviderCommand(args)
 	case "key":
@@ -311,14 +445,13 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	case "model":
 		return m.handleModelCommand(args)
 	case "settings":
-		m.view = viewSettings
+		m.view = viewSetup
 	case "agents":
 		m.view = viewAgents
 	case "agent":
 		return m.handleAgentCommand(args)
 	case "back":
-		m.view = viewChat
-		m.selectedAgent = ""
+		m.back()
 	case "clear":
 		m.messages = nil
 		m.view = viewChat
@@ -348,6 +481,7 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	m.provider = nextProvider
+	m.providerSet = true
 	m.modelOptions = nil
 	m.modelIndex = 0
 	m.selectedModel = ""
@@ -362,6 +496,11 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKeyCommand(args []string) (tea.Model, tea.Cmd) {
+	if !m.providerSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before saving an API key"})
+		m.view = viewSetup
+		return m, nil
+	}
 	if m.provider == providerEcho {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "Echo does not use an API key"})
 		return m, nil
@@ -382,6 +521,11 @@ func (m model) handleKeyCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleModelsCommand(args []string) (tea.Model, tea.Cmd) {
+	if !m.providerSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before loading models"})
+		m.view = viewSetup
+		return m, nil
+	}
 	if m.provider == providerEcho {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "Echo has one built-in model: echo"})
 		return m, nil
@@ -403,6 +547,11 @@ func (m model) handleModelsCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
+	if !m.providerSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before choosing a model"})
+		m.view = viewSetup
+		return m, nil
+	}
 	if m.provider == providerEcho {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "model: echo"})
 		return m, nil
@@ -440,11 +589,11 @@ func (m model) handleAgentCommand(args []string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /agent <id>"})
 		return m, nil
 	}
-	if m.lastSummary.Results == nil {
+	if len(m.agents) == 0 {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no run results yet"})
 		return m, nil
 	}
-	if _, ok := m.lastSummary.Results[args[0]]; !ok {
+	if _, ok := m.agents[args[0]]; !ok {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown agent: " + args[0]})
 		return m, nil
 	}
@@ -452,6 +601,83 @@ func (m model) handleAgentCommand(args []string) (tea.Model, tea.Cmd) {
 	m.selectedAgent = args[0]
 	m.view = viewAgentDetail
 	return m, nil
+}
+
+func (m model) handleStreamLine(line string) (model, tea.Cmd) {
+	envelope, ok, err := parseJSONLLine(line)
+	if err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if !ok {
+		return m, nil
+	}
+
+	switch envelope.Type {
+	case "event":
+		m.applyEvent(envelope.Event)
+	case "summary":
+		m.lastSummary = envelope.Summary
+		m.raw = line
+		m.applySummaryResults(envelope.Summary)
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown JSONL message type: " + envelope.Type})
+	}
+
+	return m, nil
+}
+
+func (m *model) applyEvent(event eventSummary) {
+	if event.AgentID == "" {
+		return
+	}
+
+	agent := m.agents[event.AgentID]
+	if agent.ID == "" {
+		agent.ID = event.AgentID
+		agent.ParentAgentID = event.ParentAgentID
+		m.agentOrder = append(m.agentOrder, event.AgentID)
+	}
+	if event.ParentAgentID != "" {
+		agent.ParentAgentID = event.ParentAgentID
+	}
+	if event.Attempt > 0 {
+		agent.Attempt = event.Attempt
+	}
+	if event.NextAttempt > 0 {
+		agent.Attempt = event.NextAttempt
+	}
+
+	switch event.Type {
+	case "agent_started":
+		agent.Status = "running"
+		agent.StartedAt = event.At
+	case "agent_finished":
+		agent.Status = emptyAs(event.Status, "done")
+		agent.FinishedAt = event.At
+		agent.DurationMS = event.DurationMS
+	case "agent_retry_scheduled":
+		agent.Status = "retrying"
+		agent.Error = event.Reason
+	}
+
+	agent.Events = append(agent.Events, event)
+	m.agents[event.AgentID] = agent
+}
+
+func (m *model) applySummaryResults(summary summary) {
+	for id, result := range summary.Results {
+		agent := m.agents[id]
+		if agent.ID == "" {
+			agent.ID = id
+			m.agentOrder = append(m.agentOrder, id)
+		}
+		agent.Status = result.Status
+		agent.Attempt = result.Attempt
+		agent.Output = result.Output
+		agent.Error = result.Error
+		m.agents[id] = agent
+	}
 }
 
 func (m model) runConfig(task string) runConfig {
@@ -472,6 +698,9 @@ func (m model) runConfig(task string) runConfig {
 }
 
 func (m model) modelID() string {
+	if !m.providerSet {
+		return ""
+	}
 	if m.provider == providerEcho {
 		return "echo"
 	}
@@ -479,6 +708,9 @@ func (m model) modelID() string {
 }
 
 func (m model) apiKey() string {
+	if !m.providerSet {
+		return ""
+	}
 	return m.savedConfig.apiKeyFor(m.provider)
 }
 
@@ -523,33 +755,45 @@ func (m model) View() string {
 	b.WriteString("\n\n")
 
 	switch m.view {
+	case viewSetup:
+		b.WriteString(m.setupView())
 	case viewSettings:
-		b.WriteString(m.settingsView())
+		b.WriteString(m.setupView())
 	case viewAgents:
 		b.WriteString(m.agentsView())
 	case viewAgentDetail:
 		b.WriteString(m.agentDetailView())
+	case viewHelp:
+		b.WriteString(m.helpView())
 	default:
 		b.WriteString(m.chatView())
 	}
 
 	b.WriteString("\n\n")
 	if m.running {
-		b.WriteString(hintStyle.Render("Running. Waiting for AgentMachine..."))
+		b.WriteString(hintStyle.Render("Running. Tab navigates; Agents shows live agent state."))
 	} else {
 		b.WriteString("> ")
 		b.WriteString(m.input.View())
 		b.WriteString("\n")
-		b.WriteString(hintStyle.Render("Type a message or /help"))
+		b.WriteString(hintStyle.Render("Type a message or /help. Tab changes view. Esc goes back."))
 	}
 	return b.String()
 }
 
 func (m model) statusLine() string {
-	parts := []string{"provider=" + string(m.provider)}
+	parts := []string{"view=" + m.viewName()}
+	if !m.providerSet {
+		parts = append(parts, "provider=missing")
+		return strings.Join(parts, " | ")
+	}
+	parts = append(parts, "provider="+string(m.provider))
 	if m.provider != providerEcho {
 		parts = append(parts, "model="+emptyAsNone(m.selectedModel))
 		parts = append(parts, apiKeyName(m.provider)+"="+keyStatus(m.apiKey()))
+	}
+	if m.running {
+		parts = append(parts, "run=running")
 	}
 	if m.modelStatus != "" {
 		parts = append(parts, "models="+m.modelStatus)
@@ -581,16 +825,22 @@ func (m model) chatView() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m model) settingsView() string {
+func (m model) setupView() string {
+	providerValue := "(missing)"
+	if m.providerSet {
+		providerValue = string(m.provider)
+	}
+
 	return strings.Join([]string{
-		labelStyle.Render("Settings"),
-		"provider: " + string(m.provider),
+		labelStyle.Render("Setup"),
+		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
 		"config: " + m.configPath,
 		"run timeout ms: " + defaultRunTimeoutMS,
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
+		"Commands",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/models reload",
@@ -600,39 +850,59 @@ func (m model) settingsView() string {
 }
 
 func (m model) agentsView() string {
-	if m.lastSummary.Results == nil {
-		return "No run results yet. Send a message first."
+	if len(m.agentOrder) == 0 {
+		return "No agents yet. Send a message after setup."
 	}
 
-	ids := sortedResultIDs(m.lastSummary.Results)
 	lines := []string{labelStyle.Render("Agents")}
-	for _, id := range ids {
-		result := m.lastSummary.Results[id]
-		lines = append(lines, fmt.Sprintf("%s  %s  attempt %d", id, result.Status, result.Attempt))
+	visible := m.visibleAgentIDs()
+	for index, id := range visible {
+		agent := m.agents[id]
+		prefix := "  "
+		if index == m.selectedAgentIndex {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+m.agentTreeLine(agent))
 	}
-	lines = append(lines, "", "Use /agent <id> or /back.")
+	lines = append(lines, "", "Enter opens selected agent. Use /agent <id>, Tab, Esc, or /back.")
 	return strings.Join(lines, "\n")
 }
 
 func (m model) agentDetailView() string {
-	result, ok := m.lastSummary.Results[m.selectedAgent]
+	agent, ok := m.agents[m.selectedAgent]
 	if !ok {
 		return "No selected agent. Use /agents."
 	}
 
+	duration := "(none)"
+	if agent.DurationMS != nil {
+		duration = fmt.Sprintf("%dms", *agent.DurationMS)
+	}
+
 	return strings.Join([]string{
 		labelStyle.Render("Agent " + m.selectedAgent),
-		"status: " + result.Status,
-		fmt.Sprintf("attempt: %d", result.Attempt),
+		"status: " + emptyAsNone(agent.Status),
+		fmt.Sprintf("attempt: %d", agent.Attempt),
+		"parent: " + emptyAsNone(agent.ParentAgentID),
+		"started: " + emptyAsNone(agent.StartedAt),
+		"finished: " + emptyAsNone(agent.FinishedAt),
+		"duration: " + duration,
 		"",
 		labelStyle.Render("Output"),
-		emptyAsNone(result.Output),
+		emptyAsNone(agent.Output),
 		"",
 		labelStyle.Render("Error"),
-		emptyAsNone(result.Error),
+		emptyAsNone(agent.Error),
 		"",
-		"/back",
+		labelStyle.Render("Events"),
+		agentEventLines(agent.Events),
+		"",
+		"Esc or /back",
 	}, "\n")
+}
+
+func (m model) helpView() string {
+	return helpText()
 }
 
 func runCommand(config runConfig) tea.Cmd {
@@ -640,6 +910,63 @@ func runCommand(config runConfig) tea.Cmd {
 		summary, raw, err := runAgentMachine(config)
 		return runResultMsg{Summary: summary, Raw: raw, Err: err}
 	}
+}
+
+func startStreamingCommand(config runConfig) tea.Cmd {
+	return func() tea.Msg {
+		session, err := startAgentMachineStream(config)
+		if err != nil {
+			return streamDoneMsg{Err: err}
+		}
+		return streamStartedMsg{Session: session}
+	}
+}
+
+func readStreamCommand(session *streamSession) tea.Cmd {
+	return func() tea.Msg {
+		if session.scanner.Scan() {
+			return streamLineMsg{Session: session, Line: session.scanner.Text()}
+		}
+		if err := session.scanner.Err(); err != nil {
+			return streamDoneMsg{Session: session, Err: err}
+		}
+		err := session.cmd.Wait()
+		if err != nil {
+			stderr := strings.TrimSpace(session.stderr.String())
+			if stderr != "" {
+				return streamDoneMsg{Session: session, Err: fmt.Errorf("mix command failed: %w\n%s", err, stderr)}
+			}
+			return streamDoneMsg{Session: session, Err: fmt.Errorf("mix command failed: %w", err)}
+		}
+		return streamDoneMsg{Session: session}
+	}
+}
+
+func startAgentMachineStream(config runConfig) (*streamSession, error) {
+	args := buildRunArgs(config)
+	cmd := exec.Command("mix", args...)
+	cmd.Dir = projectRoot()
+	cmd.Env = commandEnv(os.Environ(), config)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open AgentMachine stdout: %w", err)
+	}
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start AgentMachine: %w", err)
+	}
+
+	scanner := newLineScanner(stdout)
+	return &streamSession{cmd: cmd, scanner: scanner, stderr: stderr}, nil
+}
+
+func newLineScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	return scanner
 }
 
 func runAgentMachine(config runConfig) (summary, string, error) {
@@ -672,7 +999,7 @@ func buildRunArgs(config runConfig) []string {
 		"--timeout-ms", defaultRunTimeoutMS,
 		"--max-steps", "2",
 		"--max-attempts", "1",
-		"--json",
+		"--jsonl",
 	}
 
 	if config.Provider != providerEcho {
@@ -1111,7 +1438,32 @@ func parseSummary(raw string) (summary, error) {
 	if err := json.Unmarshal([]byte(jsonLine), &parsed); err != nil {
 		return summary{}, fmt.Errorf("failed to parse AgentMachine JSON output: %w", err)
 	}
+	if parsed.RunID == "" {
+		envelope, ok, err := parseJSONLLine(jsonLine)
+		if err != nil {
+			return summary{}, err
+		}
+		if ok && envelope.Type == "summary" {
+			return envelope.Summary, nil
+		}
+	}
 	return parsed, nil
+}
+
+func parseJSONLLine(line string) (jsonlEnvelope, bool, error) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return jsonlEnvelope{}, false, nil
+	}
+
+	var envelope jsonlEnvelope
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return jsonlEnvelope{}, false, fmt.Errorf("failed to parse AgentMachine JSONL line: %w", err)
+	}
+	if envelope.Type == "" {
+		return jsonlEnvelope{}, false, nil
+	}
+	return envelope, true, nil
 }
 
 func lastJSONLine(raw string) string {
@@ -1178,6 +1530,153 @@ func sortedResultIDs(results map[string]runResultSummary) []string {
 	return ids
 }
 
+func (m model) visibleAgentIDs() []string {
+	seen := map[string]bool{}
+	ordered := make([]string, 0, len(m.agentOrder))
+
+	var appendWithChildren func(string)
+	appendWithChildren = func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		ordered = append(ordered, id)
+		for _, childID := range m.agentOrder {
+			if m.agents[childID].ParentAgentID == id {
+				appendWithChildren(childID)
+			}
+		}
+	}
+
+	for _, id := range m.agentOrder {
+		if m.agents[id].ParentAgentID == "" {
+			appendWithChildren(id)
+		}
+	}
+	for _, id := range m.agentOrder {
+		appendWithChildren(id)
+	}
+	return ordered
+}
+
+func (m model) agentTreeLine(agent agentState) string {
+	depth := m.agentDepth(agent.ID)
+	indent := strings.Repeat("  ", depth)
+	status := emptyAs(agent.Status, "pending")
+	attempt := agent.Attempt
+	if attempt == 0 {
+		attempt = 1
+	}
+	return fmt.Sprintf("%s%s  %s  attempt %d", indent, agent.ID, status, attempt)
+}
+
+func (m model) agentDepth(id string) int {
+	depth := 0
+	parentID := m.agents[id].ParentAgentID
+	for parentID != "" {
+		depth++
+		parentID = m.agents[parentID].ParentAgentID
+	}
+	return depth
+}
+
+func (m *model) moveAgentSelection(delta int) {
+	visible := m.visibleAgentIDs()
+	if len(visible) == 0 {
+		m.selectedAgentIndex = 0
+		return
+	}
+	m.selectedAgentIndex = (m.selectedAgentIndex + delta + len(visible)) % len(visible)
+}
+
+func (m model) openSelectedAgent() (tea.Model, tea.Cmd) {
+	visible := m.visibleAgentIDs()
+	if len(visible) == 0 {
+		return m, nil
+	}
+	if m.selectedAgentIndex >= len(visible) {
+		m.selectedAgentIndex = len(visible) - 1
+	}
+	m.selectedAgent = visible[m.selectedAgentIndex]
+	m.view = viewAgentDetail
+	return m, nil
+}
+
+func (m *model) nextView() {
+	switch m.view {
+	case viewSetup:
+		m.view = viewChat
+	case viewChat:
+		m.view = viewAgents
+	case viewAgents:
+		m.view = viewHelp
+	default:
+		m.view = viewSetup
+	}
+}
+
+func (m *model) previousView() {
+	switch m.view {
+	case viewSetup:
+		m.view = viewHelp
+	case viewHelp:
+		m.view = viewAgents
+	case viewAgents:
+		m.view = viewChat
+	default:
+		m.view = viewSetup
+	}
+}
+
+func (m *model) back() {
+	switch m.view {
+	case viewAgentDetail:
+		m.view = viewAgents
+	case viewAgents, viewHelp, viewSetup, viewSettings:
+		m.view = viewChat
+	default:
+		m.view = viewChat
+	}
+	if m.view != viewAgentDetail {
+		m.selectedAgent = ""
+	}
+}
+
+func (m model) viewName() string {
+	switch m.view {
+	case viewSetup:
+		return "setup"
+	case viewSettings:
+		return "setup"
+	case viewAgents:
+		return "agents"
+	case viewAgentDetail:
+		return "agent"
+	case viewHelp:
+		return "help"
+	default:
+		return "chat"
+	}
+}
+
+func agentEventLines(events []eventSummary) string {
+	if len(events) == 0 {
+		return "(none)"
+	}
+	lines := make([]string, 0, len(events))
+	for _, event := range events {
+		label := event.Type
+		if event.Status != "" {
+			label += " " + event.Status
+		}
+		if event.Reason != "" {
+			label += " " + event.Reason
+		}
+		lines = append(lines, label)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func modelListText(models []modelOption, selected int) string {
 	lines := []string{"models:"}
 	limit := len(models)
@@ -1200,7 +1699,17 @@ func modelListText(models []modelOption, selected int) string {
 
 func helpText() string {
 	return strings.Join([]string{
+		labelStyle.Render("Help"),
+		"",
+		"Keys:",
+		"Tab / Shift+Tab: switch views",
+		"Esc: back",
+		"Enter: submit or open selected agent",
+		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
+		"Ctrl+C: quit",
+		"",
 		"Commands:",
+		"/setup",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/models reload",
@@ -1218,6 +1727,13 @@ func helpText() string {
 func emptyAsNone(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "(none)"
+	}
+	return value
+}
+
+func emptyAs(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
 	}
 	return value
 }

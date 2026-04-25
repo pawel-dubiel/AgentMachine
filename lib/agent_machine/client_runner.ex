@@ -6,11 +6,13 @@ defmodule AgentMachine.ClientRunner do
   alias AgentMachine.{JSON, Orchestrator, RunSpec}
   alias AgentMachine.Workflows.Basic
 
-  def run!(attrs) do
+  def run!(attrs, opts \\ []) when is_list(opts) do
+    validate_opts!(opts)
     spec = RunSpec.new!(attrs)
-    {agents, opts} = Basic.build!(spec)
+    {agents, run_opts} = Basic.build!(spec)
+    run_opts = put_event_sink(run_opts, opts)
 
-    case Orchestrator.run(agents, opts) do
+    case Orchestrator.run(agents, run_opts) do
       {:ok, run} -> summarize_run(run)
       {:error, {:failed, run}} -> summarize_run(run)
       {:error, {:timeout, run}} -> summarize_timeout(run)
@@ -22,6 +24,14 @@ defmodule AgentMachine.ClientRunner do
     JSON.encode!(summary)
   end
 
+  def jsonl_event!(event) when is_map(event) do
+    JSON.encode!(%{type: "event", event: summarize_event(event)})
+  end
+
+  def jsonl_summary!(summary) when is_map(summary) do
+    JSON.encode!(%{type: "summary", summary: summary})
+  end
+
   if Mix.env() == :test do
     def summarize_for_test!(run), do: summarize_run(run)
   end
@@ -30,6 +40,33 @@ defmodule AgentMachine.ClientRunner do
     run
     |> summarize_run()
     |> Map.put(:status, "timeout")
+  end
+
+  defp validate_opts!(opts) do
+    allowed_keys = [:event_sink]
+    unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
+
+    if unknown_keys != [] do
+      raise ArgumentError, "unknown client runner option(s): #{inspect(unknown_keys)}"
+    end
+
+    case Keyword.fetch(opts, :event_sink) do
+      :error ->
+        :ok
+
+      {:ok, sink} when is_function(sink, 1) ->
+        :ok
+
+      {:ok, sink} ->
+        raise ArgumentError, ":event_sink must be a function of arity 1, got: #{inspect(sink)}"
+    end
+  end
+
+  defp put_event_sink(run_opts, opts) do
+    case Keyword.fetch(opts, :event_sink) do
+      :error -> run_opts
+      {:ok, sink} -> Keyword.put(run_opts, :event_sink, sink)
+    end
   end
 
   defp summarize_run(run) do

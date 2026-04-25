@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
@@ -19,7 +21,7 @@ func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 		"--timeout-ms", defaultRunTimeoutMS,
 		"--max-steps", "2",
 		"--max-attempts", "1",
-		"--json",
+		"--jsonl",
 		"review this project",
 	}
 
@@ -50,7 +52,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 		"--timeout-ms", defaultRunTimeoutMS,
 		"--max-steps", "2",
 		"--max-attempts", "1",
-		"--json",
+		"--jsonl",
 		"--model", "openai/gpt-4o-mini",
 		"--http-timeout-ms", "25000",
 		"--input-price-per-million", "0.15",
@@ -221,6 +223,7 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 	m.provider = providerOpenRouter
+	m.providerSet = true
 	m.savedConfig.OpenRouterAPIKey = "test-key"
 	m.selectedModel = "openai/gpt-4o-mini"
 	m.modelOptions = []modelOption{
@@ -276,14 +279,41 @@ func TestProviderCommandSwitchesSessionProvider(t *testing.T) {
 		t.Fatalf("unexpected provider: %q", result.provider)
 	}
 
+	if !result.providerSet {
+		t.Fatal("expected provider to be explicit")
+	}
+
 	if result.selectedModel != "" {
 		t.Fatalf("expected selected model to reset, got %q", result.selectedModel)
 	}
 }
 
+func TestInitialModelRequiresSetupBeforeRun(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, cmd := m.startRun("review this project")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command without provider setup")
+	}
+	if result.view != viewSetup {
+		t.Fatalf("expected setup view, got %v", result.view)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "select a provider") {
+		t.Fatalf("unexpected message: %#v", result.messages[len(result.messages)-1])
+	}
+}
+
 func TestModelCommandSelectsLoadedModel(t *testing.T) {
 	m := model{
-		provider: providerOpenRouter,
+		provider:    providerOpenRouter,
+		providerSet: true,
 		modelOptions: []modelOption{
 			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
 			{ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
@@ -300,11 +330,10 @@ func TestModelCommandSelectsLoadedModel(t *testing.T) {
 
 func TestAgentCommandOpensAgentDetailView(t *testing.T) {
 	m := model{
-		lastSummary: summary{
-			Results: map[string]runResultSummary{
-				"assistant": {Status: "error", Error: "provider rejected request", Attempt: 1},
-			},
+		agents: map[string]agentState{
+			"assistant": {ID: "assistant", Status: "error", Error: "provider rejected request", Attempt: 1},
 		},
+		agentOrder: []string{"assistant"},
 	}
 
 	updated, _ := m.handleCommand("/agent assistant")
@@ -319,6 +348,77 @@ func TestAgentCommandOpensAgentDetailView(t *testing.T) {
 	}
 }
 
+func TestJSONLLineUpdatesLiveAgentTree(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"agent_started","run_id":"run-1","agent_id":"worker","parent_agent_id":"planner","attempt":1,"at":"2026-04-25T10:00:00Z"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"agent_started","run_id":"run-1","agent_id":"planner","attempt":1,"at":"2026-04-25T09:59:59Z"}}`)
+
+	if updated.agents["worker"].ParentAgentID != "planner" {
+		t.Fatalf("expected worker parent, got %#v", updated.agents["worker"])
+	}
+
+	visible := updated.visibleAgentIDs()
+	if strings.Join(visible, ",") != "planner,worker" {
+		t.Fatalf("unexpected visible order: %#v", visible)
+	}
+}
+
+func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-1","status":"completed","final_output":"done","results":{"assistant":{"status":"ok","output":"hello","attempt":1}},"usage":{"agents":1},"events":[]}}`)
+
+	if updated.lastSummary.FinalOutput != "done" {
+		t.Fatalf("unexpected final output: %q", updated.lastSummary.FinalOutput)
+	}
+	if updated.agents["assistant"].Output != "hello" {
+		t.Fatalf("expected assistant output, got %#v", updated.agents["assistant"])
+	}
+}
+
+func TestAgentNavigationOpensSelectedAgentAndEscReturns(t *testing.T) {
+	m := model{
+		view: viewAgents,
+		agents: map[string]agentState{
+			"planner": {ID: "planner", Status: "ok"},
+			"worker":  {ID: "worker", ParentAgentID: "planner", Status: "running"},
+		},
+		agentOrder:         []string{"planner", "worker"},
+		selectedAgentIndex: 1,
+	}
+
+	opened, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := opened.(model)
+	if result.view != viewAgentDetail || result.selectedAgent != "worker" {
+		t.Fatalf("expected worker detail, got view=%v selected=%q", result.view, result.selectedAgent)
+	}
+
+	back, _ := result.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	backResult := back.(model)
+	if backResult.view != viewAgents {
+		t.Fatalf("expected agents view after esc, got %v", backResult.view)
+	}
+}
+
+func TestInputKeepsCommonTerminalShortcutHandling(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+	m.view = viewChat
+	m.input.SetValue("delete me")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	result := updated.(model)
+
+	if result.input.Value() != "" {
+		t.Fatalf("expected ctrl+u to clear input, got %q", result.input.Value())
+	}
+}
+
 func TestModelsReloadCommandStartsModelLoadingForRemoteProvider(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
@@ -327,6 +427,7 @@ func TestModelsReloadCommandStartsModelLoadingForRemoteProvider(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 	m.provider = providerOpenRouter
+	m.providerSet = true
 
 	_, cmd := m.handleModelsCommand([]string{"reload"})
 	if cmd == nil {

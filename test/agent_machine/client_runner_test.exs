@@ -1,5 +1,6 @@
 defmodule AgentMachine.ClientRunnerTest do
   use ExUnit.Case, async: false
+  import ExUnit.CaptureIO
 
   alias AgentMachine.{AgentResult, ClientRunner, JSON, RunSpec, UsageLedger}
   alias AgentMachine.Workflows.Basic
@@ -77,6 +78,65 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Enum.map(summary.events, & &1.type) |> List.last() == "run_completed"
   end
 
+  test "streams live events without changing the final summary" do
+    parent = self()
+
+    summary =
+      ClientRunner.run!(
+        %{
+          task: "summarize the project",
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 2,
+          max_attempts: 1
+        },
+        event_sink: fn event -> send(parent, {:event, event.type, event}) end
+      )
+
+    assert summary.status == "completed"
+    assert summary.final_output =~ "finalizer"
+    assert_receive {:event, :run_started, %{run_id: _run_id}}
+    assert_receive {:event, :agent_started, %{agent_id: "assistant"}}
+    assert_receive {:event, :agent_finished, %{agent_id: "assistant", status: :ok}}
+    assert_receive {:event, :agent_started, %{agent_id: "finalizer"}}
+    assert_receive {:event, :run_completed, %{run_id: _run_id}}
+  end
+
+  test "requires event sink to be an arity one function" do
+    assert_raise ArgumentError, ~r/:event_sink must be a function of arity 1/, fn ->
+      ClientRunner.run!(
+        %{
+          task: "summarize the project",
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 2,
+          max_attempts: 1
+        },
+        event_sink: :not_a_function
+      )
+    end
+  end
+
+  test "encodes JSONL event and summary envelopes" do
+    event_json =
+      ClientRunner.jsonl_event!(%{
+        type: :agent_started,
+        run_id: "run-1",
+        agent_id: "assistant",
+        parent_agent_id: nil,
+        attempt: 1,
+        at: DateTime.utc_now()
+      })
+
+    summary_json = ClientRunner.jsonl_summary!(%{run_id: "run-1", status: "completed"})
+
+    assert %{"type" => "event", "event" => %{"type" => "agent_started"}} =
+             JSON.decode!(event_json)
+
+    assert %{"type" => "summary", "summary" => %{"status" => "completed"}} =
+             JSON.decode!(summary_json)
+  end
+
   test "marks client summary failed when completed run contains failed agent results" do
     summary =
       ClientRunner.summarize_for_test!(%{
@@ -131,5 +191,42 @@ defmodule AgentMachine.ClientRunnerTest do
     decoded = JSON.decode!(json)
     assert decoded["status"] == "completed"
     assert decoded["final_output"] =~ "finalizer"
+  end
+
+  test "mix agent_machine.run prints JSONL events before final summary" do
+    Mix.Task.reenable("agent_machine.run")
+
+    output =
+      capture_io(fn ->
+        Run.run([
+          "--provider",
+          "echo",
+          "--timeout-ms",
+          "1000",
+          "--max-steps",
+          "2",
+          "--max-attempts",
+          "1",
+          "--jsonl",
+          "summarize the project"
+        ])
+      end)
+
+    messages = output |> String.trim() |> String.split("\n", trim: true)
+    decoded = Enum.map(messages, &JSON.decode!/1)
+
+    assert %{"type" => "event", "event" => %{"type" => "run_started"}} = hd(decoded)
+    assert %{"type" => "summary", "summary" => %{"status" => "completed"}} = List.last(decoded)
+
+    assert Enum.any?(
+             decoded,
+             &match?(
+               %{
+                 "type" => "event",
+                 "event" => %{"type" => "agent_started", "agent_id" => "assistant"}
+               },
+               &1
+             )
+           )
   end
 end

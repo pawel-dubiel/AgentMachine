@@ -4,6 +4,12 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added `mix agent_machine.run --jsonl` for live event streaming plus a final summary envelope.
+- Added a validated client/orchestrator event sink for live run progress consumers.
+- Overhauled the Bubble Tea TUI with separate Setup, Chat, Agents, Agent Detail, and Help views.
+- Added live TUI agent tree updates from streamed run events, including parent/child delegated agents.
+- Added TUI navigation keys for view switching, back navigation, and agent selection while preserving common input editing shortcuts.
+- Required explicit TUI provider setup before starting normal message runs.
 - Converted the Bubble Tea TUI from a run form into a conversation client with slash commands.
 - Added TUI commands for provider, key, model loading, settings, and last-run agent inspection.
 - Marked client/TUI summaries as failed when any agent result failed and surfaced result errors.

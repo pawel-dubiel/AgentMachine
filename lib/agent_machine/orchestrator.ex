@@ -27,6 +27,7 @@ defmodule AgentMachine.Orchestrator do
     validate_unique_agent_ids!(agents, finalizer)
     validate_dependency_graph!(agents)
     validate_run_limits!(agents, opts)
+    validate_event_sink!(opts)
     run_id = opts |> run_id_from_opts() |> validate_run_id!()
 
     GenServer.call(
@@ -61,6 +62,8 @@ defmodule AgentMachine.Orchestrator do
       run_context = %{results: %{}, artifacts: %{}}
       {ready_agents, pending_agents} = split_ready_agents(agents, %{})
       {tasks, agent_events} = spawn_agents(ready_agents, opts, run_context, nil)
+      events = [run_started_event(run_id) | agent_events]
+      emit_events!(opts, events)
 
       run = %{
         id: run_id,
@@ -70,7 +73,7 @@ defmodule AgentMachine.Orchestrator do
         tasks: tasks,
         results: %{},
         artifacts: %{},
-        events: [run_started_event(run_id) | agent_events],
+        events: events,
         finalizer: finalizer,
         finalizer_started: false,
         usage: nil,
@@ -181,6 +184,19 @@ defmodule AgentMachine.Orchestrator do
           raise ArgumentError,
                 "initial agent count #{length(agents)} exceeds max_steps #{max_steps}"
         end
+    end
+  end
+
+  defp validate_event_sink!(opts) do
+    case Keyword.fetch(opts, :event_sink) do
+      :error ->
+        :ok
+
+      {:ok, sink} when is_function(sink, 1) ->
+        :ok
+
+      {:ok, sink} ->
+        raise ArgumentError, ":event_sink must be a function of arity 1, got: #{inspect(sink)}"
     end
   end
 
@@ -548,8 +564,24 @@ defmodule AgentMachine.Orchestrator do
     end)
   end
 
-  defp append_event(run, event), do: %{run | events: run.events ++ [event]}
-  defp append_events(run, events), do: %{run | events: run.events ++ events}
+  defp append_event(run, event) do
+    emit_event!(run.opts, event)
+    %{run | events: run.events ++ [event]}
+  end
+
+  defp append_events(run, events) do
+    emit_events!(run.opts, events)
+    %{run | events: run.events ++ events}
+  end
+
+  defp emit_events!(opts, events), do: Enum.each(events, &emit_event!(opts, &1))
+
+  defp emit_event!(opts, event) do
+    case Keyword.fetch(opts, :event_sink) do
+      :error -> :ok
+      {:ok, sink} -> sink.(event)
+    end
+  end
 
   defp run_started_event(run_id) do
     %{

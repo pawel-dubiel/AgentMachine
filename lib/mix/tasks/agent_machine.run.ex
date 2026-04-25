@@ -16,7 +16,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
     http_timeout_ms: :integer,
     input_price_per_million: :float,
     output_price_per_million: :float,
-    json: :boolean
+    json: :boolean,
+    jsonl: :boolean
   ]
 
   @impl true
@@ -29,15 +30,36 @@ defmodule Mix.Tasks.AgentMachine.Run do
       Mix.raise("invalid option(s): #{inspect(invalid)}")
     end
 
-    summary =
-      opts
-      |> attrs_from_opts(positional)
-      |> AgentMachine.ClientRunner.run!()
+    validate_output_mode!(opts)
 
-    if Keyword.get(opts, :json, false) do
-      Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
-    else
-      print_text_summary(summary)
+    attrs = attrs_from_opts(opts, positional)
+
+    cond do
+      Keyword.get(opts, :jsonl, false) ->
+        output = Process.group_leader()
+
+        summary =
+          AgentMachine.ClientRunner.run!(attrs,
+            event_sink: fn event ->
+              IO.puts(output, AgentMachine.ClientRunner.jsonl_event!(event))
+            end
+          )
+
+        IO.puts(output, AgentMachine.ClientRunner.jsonl_summary!(summary))
+
+      Keyword.get(opts, :json, false) ->
+        summary = AgentMachine.ClientRunner.run!(attrs)
+        Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
+
+      true ->
+        summary = AgentMachine.ClientRunner.run!(attrs)
+        print_text_summary(summary)
+    end
+  end
+
+  defp validate_output_mode!(opts) do
+    if Keyword.get(opts, :json, false) and Keyword.get(opts, :jsonl, false) do
+      Mix.raise("--json and --jsonl cannot be used together")
     end
   end
 

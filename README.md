@@ -146,6 +146,31 @@ mix agent_machine.run \
   "Review this project and summarize the next step"
 ```
 
+For live event streaming, add `--jsonl`. This prints one JSON object per line:
+event lines as agents start/finish, followed by one final summary line.
+
+```sh
+mix agent_machine.run \
+  --provider echo \
+  --timeout-ms 5000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --jsonl \
+  "Review this project and summarize the next step"
+```
+
+JSONL event lines use this shape:
+
+```json
+{"type":"event","event":{"type":"agent_started","run_id":"run-1","agent_id":"assistant","attempt":1}}
+```
+
+The final JSONL line uses this shape:
+
+```json
+{"type":"summary","summary":{"run_id":"run-1","status":"completed"}}
+```
+
 The command uses `AgentMachine.RunSpec` plus the basic workflow. The local Echo
 profile runs an assistant agent and then a finalizer.
 
@@ -177,9 +202,10 @@ cd tui
 go run .
 ```
 
-The TUI is a conversation client. Type a normal message to run the selected
-AgentMachine workflow through `mix agent_machine.run --json`. Use slash commands
-to change session settings, load models, and inspect the last run.
+The TUI is a conversation client with separate setup and usage views. Choose a
+provider in Setup before sending normal messages. Runs execute through
+`mix agent_machine.run --jsonl`, so agent start, retry, finish, and final summary
+events update the interface live without reimplementing orchestration in Go.
 
 Remote provider API keys can be entered directly in the TUI. They are saved in a
 local JSON config file with `0600` permissions and injected into the `mix`
@@ -213,6 +239,7 @@ Remote model lists are loaded by provider:
 
 Core commands:
 
+- `/setup`
 - `/provider echo|openai|openrouter`
 - `/key <api-key>`
 - `/models reload`
@@ -225,13 +252,25 @@ Core commands:
 - `/clear`
 - `/quit`
 
-`/agents` lists the agents from the last completed run. `/agent <id>` shows one
-agent's status, attempt, output, and error. This is completed-run inspection;
-live agent progress will require a later event-streaming CLI mode.
+The main views are:
+
+- `Setup`: provider, API key status, model loading, and selected model.
+- `Chat`: conversation and final run output.
+- `Agents`: live parent/child agent tree built from run events.
+- `AgentDetail`: selected agent status, attempts, output, error, and event history.
+- `Help`: commands and keybindings.
+
+`/agents` opens the live agent tree. Press `Enter` on a selected agent, or use
+`/agent <id>`, to inspect that agent. `Esc` returns from agent detail to the
+agent tree, then back to chat.
 
 Current TUI controls:
 
 - `Enter`: submit a message or slash command
+- `Tab` / `Shift+Tab`: switch between Setup, Chat, Agents, and Help
+- `Esc`: back
+- `Up` / `Down`: move the selected agent in the Agents view
+- `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+W`: common terminal input editing
 - `Ctrl+C`: quit anytime
 
 ## Quick Demo With Local Agents
@@ -535,6 +574,11 @@ Events include:
 
 This is intentionally local and lightweight. Durable traces and external
 telemetry can be added later without changing provider contracts.
+
+Clients that need live progress can pass an explicit `:event_sink` function
+through `AgentMachine.ClientRunner.run!/2`. The sink receives each event map as
+it is recorded. `mix agent_machine.run --jsonl` uses this to stream event
+envelopes before the final summary envelope.
 
 ## Async Orchestration
 
