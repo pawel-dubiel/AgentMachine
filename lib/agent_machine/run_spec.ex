@@ -13,7 +13,9 @@ defmodule AgentMachine.RunSpec do
     :max_steps,
     :max_attempts,
     :http_timeout_ms,
-    :pricing
+    :pricing,
+    :tool_harness,
+    :tool_timeout_ms
   ]
 
   @type t :: %__MODULE__{
@@ -25,7 +27,9 @@ defmodule AgentMachine.RunSpec do
           max_steps: pos_integer(),
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
-          pricing: map() | nil
+          pricing: map() | nil,
+          tool_harness: :demo | nil,
+          tool_timeout_ms: pos_integer() | nil
         }
 
   def new!(attrs) when is_map(attrs) do
@@ -53,6 +57,7 @@ defmodule AgentMachine.RunSpec do
     require_positive_integer!(spec.max_steps, :max_steps)
     require_positive_integer!(spec.max_attempts, :max_attempts)
     validate_provider_options!(spec)
+    validate_tool_options!(spec)
     spec
   end
 
@@ -87,6 +92,21 @@ defmodule AgentMachine.RunSpec do
   defp require_provider!(provider) do
     raise ArgumentError,
           "run spec :provider must be :echo, :openai, or :openrouter, got: #{inspect(provider)}"
+  end
+
+  defp validate_tool_options!(%__MODULE__{tool_harness: nil, tool_timeout_ms: nil}), do: :ok
+
+  defp validate_tool_options!(%__MODULE__{tool_harness: nil, tool_timeout_ms: timeout_ms}) do
+    raise ArgumentError,
+          "run spec :tool_timeout_ms requires :tool_harness, got: #{inspect(timeout_ms)}"
+  end
+
+  defp validate_tool_options!(%__MODULE__{tool_harness: :demo, tool_timeout_ms: timeout_ms}) do
+    require_positive_integer!(timeout_ms, :tool_timeout_ms)
+  end
+
+  defp validate_tool_options!(%__MODULE__{tool_harness: harness}) do
+    raise ArgumentError, "run spec :tool_harness must be :demo, got: #{inspect(harness)}"
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0 do

@@ -1,4 +1,9 @@
-.PHONY: help deps test quality format format-check compile credo tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
+.PHONY: help deps test quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
+
+.DEFAULT_GOAL := run
+
+TUI_DIR := tui
+TUI_BIN := $(TUI_DIR)/agent-machine-tui
 
 help:
 	@printf '%s\n' 'AgentMachine targets:'
@@ -7,7 +12,9 @@ help:
 	@printf '%s\n' '  make quality                      Run full Elixir quality gate'
 	@printf '%s\n' '  make format                       Format Elixir and Go code'
 	@printf '%s\n' '  make format-check                 Check Elixir formatting'
-	@printf '%s\n' '  make tui                          Start the Bubble Tea TUI'
+	@printf '%s\n' '  make run / make start             Compile backend/UI and start TUI'
+	@printf '%s\n' '  make build                        Compile backend and UI artifacts'
+	@printf '%s\n' '  make tui                          Start the Bubble Tea TUI (no precompile)'
 	@printf '%s\n' '  make tui-test                     Run Go TUI tests'
 	@printf '%s\n' '  make tui-build                    Build the Go TUI binary'
 	@printf '%s\n' '  make run-echo TASK="..."          Run local Echo provider'
@@ -21,7 +28,7 @@ help:
 
 deps:
 	mix deps.get
-	cd tui && go mod download
+	cd $(TUI_DIR) && go mod download
 
 test:
 	mix test
@@ -39,17 +46,24 @@ format-check:
 compile:
 	mix compile --warnings-as-errors
 
+build: compile tui-build
+
+run: start
+
+start: build
+	cd $(TUI_DIR) && ./$(notdir $(TUI_BIN))
+
 credo:
 	mix credo --strict
 
 tui:
-	cd tui && go run .
+	cd $(TUI_DIR) && go run .
 
 tui-test:
-	cd tui && go test ./...
+	cd $(TUI_DIR) && go test ./...
 
 tui-build:
-	cd tui && go build -o agent-machine-tui .
+	cd $(TUI_DIR) && go build -o $(notdir $(TUI_BIN)) .
 
 run-echo:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required. Example: make run-echo TASK="Review this project"' >&2; exit 2)
@@ -85,4 +99,4 @@ run-agentic-openrouter-jsonl:
 
 clean:
 	mix clean
-	rm -f tui/agent-machine-tui
+	rm -f $(TUI_BIN)

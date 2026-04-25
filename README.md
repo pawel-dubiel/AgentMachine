@@ -212,6 +212,22 @@ The final JSONL line uses this shape:
 {"type":"summary","summary":{"run_id":"run-1","status":"completed"}}
 ```
 
+To save the Elixir-side run trace to disk, add `--log-file <path>`. The file is
+written as JSONL with the same event envelopes and final summary envelope used by
+`--jsonl`. The path is explicit and the command fails if the file cannot be
+opened.
+
+```sh
+mix agent_machine.run \
+  --workflow basic \
+  --provider echo \
+  --timeout-ms 5000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --log-file ./agent-machine-run.jsonl \
+  "Review this project and summarize the next step"
+```
+
 The command uses `AgentMachine.RunSpec` plus an explicit workflow:
 
 - `basic` starts one assistant agent and then a finalizer.
@@ -236,6 +252,30 @@ mix agent_machine.run \
   --json \
   "Review this project and summarize the next step"
 ```
+
+To expose a small safe tool set to the model, enable a named harness and provide
+an explicit tool timeout:
+
+```sh
+mix agent_machine.run \
+  --workflow basic \
+  --provider openrouter \
+  --model "YOUR_OPENROUTER_MODEL" \
+  --timeout-ms 30000 \
+  --http-timeout-ms 25000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --tool-harness demo \
+  --tool-timeout-ms 1000 \
+  --json \
+  "What time is it now?"
+```
+
+The first built-in harness is `demo`, which exposes `AgentMachine.Tools.Now`.
+The CLI intentionally has no hidden default tool set. More capable tools should
+be added as explicit harnesses with tests and a permission model.
 
 The agentic workflow expects the planner model to return strict JSON with an
 `output` string and `next_agents` list. Delegated worker specs intentionally stay
@@ -295,7 +335,8 @@ Core commands:
 - `/key <api-key>`
 - `/models reload`
 - `/models`
-- `/model <id|next|prev>`
+- `/model` opens a searchable model picker
+- `/model <id|next|prev>` still supports direct selection or cycling
 - `/settings`
 - `/agents`
 - `/agent <id>`
@@ -321,6 +362,7 @@ Current TUI controls:
 - `Tab` / `Shift+Tab`: switch between Setup, Chat, Agents, and Help
 - `Esc`: back
 - `Up` / `Down`: command history, or selected agent movement in the Agents view
+- In the model picker, typed letters filter models, `Backspace` edits the filter, `Up` / `Down` moves selection, and `Enter` selects.
 - `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+W`: common terminal input editing
 - `Ctrl+C`: quit anytime
 
@@ -555,8 +597,21 @@ each tool module, then stores results in `AgentResult.tool_results`:
 defmodule UppercaseTool do
   @behaviour AgentMachine.Tool
 
+  def definition do
+    %{
+      name: "uppercase",
+      description: "Uppercase a value.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{"value" => %{"type" => "string"}},
+        "required" => ["value"],
+        "additionalProperties" => false
+      }
+    }
+  end
+
   def run(input, opts) do
-    value = Map.fetch!(input, :value)
+    value = Map.get(input, "value") || Map.fetch!(input, :value)
     attempt = Keyword.fetch!(opts, :attempt)
 
     {:ok, %{value: String.upcase(value), attempt: attempt}}
@@ -588,6 +643,13 @@ Tool calls must include:
 Tools must return `{:ok, map()}` or `{:error, reason}`. Tool failures turn the
 agent attempt into an error result. Later agents can read prior tool results
 from `:run_context.results[agent_id].tool_results`.
+
+Provider-native tool calling uses the same runtime contract. A tool that should
+be exposed to OpenAI Responses or OpenRouter Chat must also implement
+`definition/0` with a JSON-schema-compatible `:input_schema`. The provider sends
+those definitions using the provider's standard function/tool calling shape, then
+`AgentMachine.ToolHarness` converts returned provider tool calls into runtime
+`tool_calls`.
 
 Runs that execute tools must explicitly allow them:
 

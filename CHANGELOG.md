@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added `mix agent_machine.run --log-file <path>` to persist Elixir-side JSONL run events and final summaries.
+- Added an explicit CLI tool harness with provider-native OpenAI/OpenRouter tool-call adapters and a safe built-in `now` demo tool.
+- Added searchable TUI model picker behavior for `/model`, including lazy model loading before opening the picker.
 - Strengthened AGENTS.md around TUI thin-wrapper rules, TDD/testing priority, and TUI clean architecture.
 - Split TUI view rendering helpers out of the Bubble Tea update/command logic.
 - Split TUI provider model loading and pricing lookup out of the Bubble Tea model file.

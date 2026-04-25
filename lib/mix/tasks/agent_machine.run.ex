@@ -15,8 +15,11 @@ defmodule Mix.Tasks.AgentMachine.Run do
     max_steps: :integer,
     max_attempts: :integer,
     http_timeout_ms: :integer,
+    tool_harness: :string,
+    tool_timeout_ms: :integer,
     input_price_per_million: :float,
     output_price_per_million: :float,
+    log_file: :string,
     json: :boolean,
     jsonl: :boolean
   ]
@@ -35,33 +38,87 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
     attrs = attrs_from_opts(opts, positional)
 
-    cond do
-      Keyword.get(opts, :jsonl, false) ->
-        output = Process.group_leader()
+    with_log_file(opts, fn log_io ->
+      cond do
+        Keyword.get(opts, :jsonl, false) ->
+          output = Process.group_leader()
 
-        summary =
-          AgentMachine.ClientRunner.run!(attrs,
-            event_sink: fn event ->
-              IO.puts(output, AgentMachine.ClientRunner.jsonl_event!(event))
-            end
-          )
+          summary =
+            AgentMachine.ClientRunner.run!(attrs,
+              event_sink: fn event ->
+                line = AgentMachine.ClientRunner.jsonl_event!(event)
+                IO.puts(output, line)
+                write_log_line!(log_io, line)
+              end
+            )
 
-        IO.puts(output, AgentMachine.ClientRunner.jsonl_summary!(summary))
+          summary_line = AgentMachine.ClientRunner.jsonl_summary!(summary)
+          IO.puts(output, summary_line)
+          write_log_line!(log_io, summary_line)
 
-      Keyword.get(opts, :json, false) ->
-        summary = AgentMachine.ClientRunner.run!(attrs)
-        Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
+        Keyword.get(opts, :json, false) ->
+          summary =
+            AgentMachine.ClientRunner.run!(attrs,
+              event_sink: fn event ->
+                write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
+              end
+            )
 
-      true ->
-        summary = AgentMachine.ClientRunner.run!(attrs)
-        print_text_summary(summary)
-    end
+          write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
+          Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
+
+        true ->
+          summary =
+            AgentMachine.ClientRunner.run!(attrs,
+              event_sink: fn event ->
+                write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
+              end
+            )
+
+          write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
+          print_text_summary(summary)
+      end
+    end)
   end
 
   defp validate_output_mode!(opts) do
     if Keyword.get(opts, :json, false) and Keyword.get(opts, :jsonl, false) do
       Mix.raise("--json and --jsonl cannot be used together")
     end
+  end
+
+  defp with_log_file(opts, callback) when is_function(callback, 1) do
+    case Keyword.fetch(opts, :log_file) do
+      {:ok, path} ->
+        path = require_non_empty_log_path!(path)
+
+        case File.open(path, [:write, :utf8]) do
+          {:ok, io} ->
+            try do
+              callback.(io)
+            after
+              File.close(io)
+            end
+
+          {:error, reason} ->
+            Mix.raise("failed to open --log-file #{inspect(path)}: #{inspect(reason)}")
+        end
+
+      :error ->
+        callback.(nil)
+    end
+  end
+
+  defp require_non_empty_log_path!(path) when is_binary(path) and byte_size(path) > 0, do: path
+
+  defp require_non_empty_log_path!(path) do
+    Mix.raise("--log-file must be a non-empty path, got: #{inspect(path)}")
+  end
+
+  defp write_log_line!(nil, _line), do: :ok
+
+  defp write_log_line!(io, line) do
+    IO.write(io, [line, ?\n])
   end
 
   defp attrs_from_opts(opts, positional) do
@@ -74,7 +131,9 @@ defmodule Mix.Tasks.AgentMachine.Run do
       max_steps: fetch_required_option!(opts, :max_steps),
       max_attempts: fetch_required_option!(opts, :max_attempts),
       http_timeout_ms: Keyword.get(opts, :http_timeout_ms),
-      pricing: pricing_from_opts(opts)
+      pricing: pricing_from_opts(opts),
+      tool_harness: tool_harness_from_opts!(opts),
+      tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms)
     }
   end
 
@@ -116,6 +175,14 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
       :error ->
         Mix.raise("missing required --provider option")
+    end
+  end
+
+  defp tool_harness_from_opts!(opts) do
+    case Keyword.fetch(opts, :tool_harness) do
+      {:ok, "demo"} -> :demo
+      {:ok, harness} -> Mix.raise("--tool-harness must be demo, got: #{inspect(harness)}")
+      :error -> nil
     end
   end
 

@@ -74,6 +74,39 @@ defmodule AgentMachine.ClientRunnerTest do
            } = Keyword.fetch!(opts, :finalizer)
   end
 
+  test "builds workflow tool options from an explicit harness" do
+    spec =
+      RunSpec.new!(%{
+        task: "what time is it?",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :demo,
+        tool_timeout_ms: 100
+      })
+
+    {_agents, opts} = Basic.build!(spec)
+
+    assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.Now]
+    assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
+  end
+
+  test "requires tool timeout when a tool harness is enabled" do
+    assert_raise ArgumentError, ~r/:tool_timeout_ms/, fn ->
+      RunSpec.new!(%{
+        task: "what time is it?",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :demo
+      })
+    end
+  end
+
   test "builds the agentic workflow with an opt-in structured planner" do
     spec =
       RunSpec.new!(%{
@@ -271,5 +304,48 @@ defmodule AgentMachine.ClientRunnerTest do
                &1
              )
            )
+  end
+
+  test "mix agent_machine.run writes JSONL run log file" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+    log_path = Path.join(System.tmp_dir!(), "agent-machine-run-#{System.unique_integer()}.jsonl")
+    on_exit(fn -> File.rm(log_path) end)
+
+    Run.run([
+      "--workflow",
+      "basic",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "2",
+      "--max-attempts",
+      "1",
+      "--log-file",
+      log_path,
+      "--json",
+      "summarize the project"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+    assert %{"status" => "completed"} = JSON.decode!(json)
+
+    decoded =
+      log_path
+      |> File.read!()
+      |> String.trim()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&JSON.decode!/1)
+
+    assert %{"type" => "event", "event" => %{"type" => "run_started"}} = hd(decoded)
+    assert %{"type" => "summary", "summary" => %{"status" => "completed"}} = List.last(decoded)
   end
 end

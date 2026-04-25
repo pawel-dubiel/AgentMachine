@@ -358,6 +358,192 @@ func TestModelCommandSelectsLoadedModel(t *testing.T) {
 	}
 }
 
+func TestModelCommandOpensModelPicker(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		modelOptions: []modelOption{
+			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
+			{ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
+		},
+		modelIndex:    1,
+		selectedModel: "openai/gpt-4o-mini",
+	}
+
+	updated, _ := m.handleCommand("/model")
+	result := updated.(model)
+
+	if !result.modelPickerOpen {
+		t.Fatal("expected model picker to open")
+	}
+	if result.modelPickerIndex != 1 {
+		t.Fatalf("expected picker index to follow current model, got %d", result.modelPickerIndex)
+	}
+	if result.view != viewChat {
+		t.Fatalf("expected chat view for picker overlay, got %v", result.view)
+	}
+}
+
+func TestModelCommandLoadsModelsBeforeOpeningPicker(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+	}
+
+	updated, cmd := m.handleCommand("/model")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected model loading command")
+	}
+	if !result.modelPickerPending {
+		t.Fatal("expected picker to open after model loading")
+	}
+	if result.modelStatus != "loading models..." {
+		t.Fatalf("unexpected model status: %q", result.modelStatus)
+	}
+}
+
+func TestLoadedModelsOpenPendingModelPicker(t *testing.T) {
+	m := model{
+		provider:           providerOpenRouter,
+		providerSet:        true,
+		modelPickerPending: true,
+	}
+
+	updated, _ := m.Update(modelListMsg{
+		Provider: providerOpenRouter,
+		Models: []modelOption{
+			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
+		},
+	})
+	result := updated.(model)
+
+	if !result.modelPickerOpen {
+		t.Fatal("expected loaded models to open picker")
+	}
+	if result.modelPickerPending {
+		t.Fatal("expected pending state to clear")
+	}
+}
+
+func TestModelPickerSelectsModelWithArrowAndEnter(t *testing.T) {
+	m := model{
+		provider:         providerOpenRouter,
+		providerSet:      true,
+		modelOptions:     []modelOption{{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}}, {ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}}},
+		modelIndex:       0,
+		modelPickerIndex: 0,
+		selectedModel:    "anthropic/claude",
+		modelPickerOpen:  true,
+		view:             viewChat,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = updated.(model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if result.modelPickerOpen {
+		t.Fatal("expected model picker to close after selection")
+	}
+	if result.selectedModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected selected model to be openai/gpt-4o-mini, got %q", result.selectedModel)
+	}
+	if result.modelIndex != 1 {
+		t.Fatalf("expected model index to update, got %d", result.modelIndex)
+	}
+}
+
+func TestModelPickerFiltersModelsWhileTyping(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		modelOptions: []modelOption{
+			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
+			{ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
+		},
+		modelPickerOpen:  true,
+		modelPickerIndex: 0,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	updated, _ = updated.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	updated, _ = updated.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	result := updated.(model)
+
+	if result.modelPickerQuery != "gpt" {
+		t.Fatalf("expected query to be gpt, got %q", result.modelPickerQuery)
+	}
+	if result.modelPickerIndex != 1 {
+		t.Fatalf("expected picker to select matching model, got %d", result.modelPickerIndex)
+	}
+
+	updated, _ = result.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result = updated.(model)
+	if result.selectedModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected filtered model selection, got %q", result.selectedModel)
+	}
+}
+
+func TestModelPickerBackspaceUpdatesFilter(t *testing.T) {
+	m := model{
+		provider:         providerOpenRouter,
+		providerSet:      true,
+		modelOptions:     []modelOption{{ID: "openai/gpt-4o-mini", Pricing: modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}}},
+		modelPickerOpen:  true,
+		modelPickerIndex: 0,
+		modelPickerQuery: "gp",
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	result := updated.(model)
+
+	if result.modelPickerQuery != "g" {
+		t.Fatalf("expected query to remove last rune, got %q", result.modelPickerQuery)
+	}
+}
+
+func TestModelPickerLetterJFiltersInsteadOfMoving(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		modelOptions: []modelOption{
+			{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}},
+			{ID: "jamba-large", Pricing: modelPricing{InputPerMillion: 2, OutputPerMillion: 8}},
+		},
+		modelPickerOpen:  true,
+		modelPickerIndex: 0,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	result := updated.(model)
+
+	if result.modelPickerQuery != "j" {
+		t.Fatalf("expected j to update search query, got %q", result.modelPickerQuery)
+	}
+	if result.modelPickerIndex != 1 {
+		t.Fatalf("expected j search to select jamba-large, got %d", result.modelPickerIndex)
+	}
+}
+
+func TestModelPickerEscapeCancels(t *testing.T) {
+	m := model{
+		provider:         providerOpenRouter,
+		providerSet:      true,
+		modelOptions:     []modelOption{{ID: "anthropic/claude", Pricing: modelPricing{InputPerMillion: 3, OutputPerMillion: 15}}},
+		modelPickerOpen:  true,
+		modelPickerIndex: 0,
+		view:             viewChat,
+		selectedModel:    "anthropic/claude",
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	result := updated.(model)
+	if result.modelPickerOpen {
+		t.Fatal("expected picker to close on escape")
+	}
+}
+
 func TestAgentCommandOpensAgentDetailView(t *testing.T) {
 	m := model{
 		agents: map[string]agentState{

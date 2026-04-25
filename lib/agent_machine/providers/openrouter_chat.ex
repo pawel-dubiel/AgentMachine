@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON, RunContextPrompt}
+  alias AgentMachine.{Agent, JSON, RunContextPrompt, ToolHarness}
 
   @url ~c"https://openrouter.ai/api/v1/chat/completions"
 
@@ -25,6 +25,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
         "model" => agent.model,
         "messages" => messages(agent, opts)
       }
+      |> ToolHarness.put_openrouter_tools!(opts)
       |> JSON.encode!()
 
     headers = [
@@ -44,10 +45,13 @@ defmodule AgentMachine.Providers.OpenRouterChat do
          ) do
       {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
         decoded = JSON.decode!(response_body)
+        message = message!(decoded)
+        tool_calls = ToolHarness.openrouter_tool_calls!(message, opts)
 
         {:ok,
          %{
-           output: output_text!(decoded),
+           output: output_text!(message, tool_calls),
+           tool_calls: tool_calls,
            usage: usage!(decoded)
          }}
 
@@ -86,21 +90,33 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     end
   end
 
-  defp output_text!(%{"choices" => choices}) when is_list(choices) do
-    choices
-    |> List.first()
-    |> choice_text!()
+  defp message!(%{"choices" => choices}) when is_list(choices) do
+    choices |> List.first() |> choice_message!()
   end
 
-  defp output_text!(response) do
+  defp message!(response) do
     raise ArgumentError, "OpenRouter response did not contain choices: #{inspect(response)}"
   end
 
-  defp choice_text!(%{"message" => %{"content" => content}}) when is_binary(content), do: content
+  defp choice_message!(%{"message" => message}) when is_map(message), do: message
 
-  defp choice_text!(choice) do
+  defp choice_message!(choice) do
     raise ArgumentError,
-          "OpenRouter response choice did not contain message content: #{inspect(choice)}"
+          "OpenRouter response choice did not contain a message: #{inspect(choice)}"
+  end
+
+  defp output_text!(%{"content" => content}, _tool_calls)
+       when is_binary(content) and content != "" do
+    content
+  end
+
+  defp output_text!(_message, tool_calls) when tool_calls != [] do
+    "requested #{length(tool_calls)} OpenRouter tool call(s)"
+  end
+
+  defp output_text!(message, _tool_calls) do
+    raise ArgumentError,
+          "OpenRouter response message did not contain content: #{inspect(message)}"
   end
 
   defp usage!(%{"usage" => usage}) when is_map(usage) do

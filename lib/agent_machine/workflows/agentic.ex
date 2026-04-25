@@ -40,6 +40,7 @@ defmodule AgentMachine.Workflows.Agentic do
         finalizer: finalizer
       ]
       |> put_http_opts(spec)
+      |> put_tool_opts(spec)
 
     {[planner], opts}
   end
@@ -69,6 +70,14 @@ defmodule AgentMachine.Workflows.Agentic do
   defp put_http_opts(opts, %RunSpec{provider: provider, http_timeout_ms: http_timeout_ms})
        when provider in [:openai, :openrouter] do
     Keyword.put(opts, :http_timeout_ms, http_timeout_ms)
+  end
+
+  defp put_tool_opts(opts, %RunSpec{tool_harness: nil}), do: opts
+
+  defp put_tool_opts(opts, %RunSpec{tool_harness: harness, tool_timeout_ms: tool_timeout_ms}) do
+    opts
+    |> Keyword.put(:allowed_tools, AgentMachine.ToolHarness.builtin!(harness))
+    |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
   end
 
   defp planner_instructions do

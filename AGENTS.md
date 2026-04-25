@@ -42,11 +42,14 @@ boundaries, pause and simplify the design before adding code.
   Providers must not spawn agents, manage run state, or know about TUI behavior.
 - Structured model-output adapters belong in small runtime modules such as
   `AgentMachine.DelegationResponse`, not inside providers or the TUI.
+- Tool schema and provider tool-call adapters belong in `AgentMachine.ToolHarness`.
+  Providers may use that adapter at the model/API boundary, but tool execution
+  remains in `AgentMachine.AgentRunner`.
 - Prompt/context formatting belongs in small helpers such as
   `AgentMachine.RunContextPrompt` when shared by providers.
 - CLI code in `mix agent_machine.run` is the stable client boundary: parse flags,
-  fail fast on missing required options, call `AgentMachine.ClientRunner`, and
-  print text/JSON/JSONL output.
+  fail fast on missing required options, call `AgentMachine.ClientRunner`, print
+  text/JSON/JSONL output, and write explicit run log files when requested.
 - `tui/` is only a thin Go client over the CLI boundary. All agent runtime logic
   belongs in Elixir. The TUI may manage terminal state, local key storage, model
   lists, pricing lookup, command history, and display live events, but it must
@@ -104,9 +107,13 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - `AgentMachine.DelegationResponse` parses opt-in structured planner output into delegated worker specs.
 - `AgentMachine.RunContextPrompt` formats prior results and artifacts for remote provider prompts.
+- `AgentMachine.ToolHarness` maps explicit tool harnesses to allowed tools and
+  adapts tool definitions/calls for provider-native tool calling.
 - Providers implement `AgentMachine.Provider.complete/2`.
 - Built-in providers are Echo, OpenAI Responses, and OpenRouter Chat.
 - Tools implement `AgentMachine.Tool.run/2`.
+- Tools may implement `AgentMachine.Tool.definition/0` when they should be
+  exposed to provider-native tool calling.
 - Agents may return `next_agents` for dynamic delegation.
 - Agents may return `artifacts` for run-scoped memory.
 - Agents may return `tool_calls` for explicit tool execution.
@@ -117,7 +124,11 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
 - Tool calls require `allowed_tools` and `tool_timeout_ms`.
+- `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>` exposes the
+  safe built-in demo harness through the high-level client boundary.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
+- `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
+  plus the final summary to an explicit file path.
 - `tui/` contains the Go Bubble Tea conversation client with slash commands and should call the CLI boundary instead of reimplementing orchestration.
 - The TUI may persist remote provider API keys in its local config file and inject them into the `mix` child process environment.
 - The TUI resolves remote-provider pricing itself before calling the CLI; do not expose token price fields as normal user inputs.

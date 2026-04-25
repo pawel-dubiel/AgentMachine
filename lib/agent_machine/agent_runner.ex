@@ -115,6 +115,9 @@ defmodule AgentMachine.AgentRunner do
       :error ->
         %{}
 
+      {:ok, []} ->
+        %{}
+
       {:ok, tool_calls} when is_list(tool_calls) ->
         allowed_tools = allowed_tools_from_opts!(opts)
         tool_timeout_ms = tool_timeout_ms_from_opts!(opts)

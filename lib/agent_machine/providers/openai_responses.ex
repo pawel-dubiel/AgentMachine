@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON, RunContextPrompt}
+  alias AgentMachine.{Agent, JSON, RunContextPrompt, ToolHarness}
 
   @url ~c"https://api.openai.com/v1/responses"
 
@@ -24,6 +24,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
       %{"model" => agent.model, "input" => input(agent, opts)}
       |> put_optional("instructions", agent.instructions)
       |> put_optional("metadata", agent.metadata)
+      |> ToolHarness.put_openai_tools!(opts)
       |> JSON.encode!()
 
     headers = [
@@ -42,10 +43,12 @@ defmodule AgentMachine.Providers.OpenAIResponses do
          ) do
       {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
         decoded = JSON.decode!(response_body)
+        tool_calls = ToolHarness.openai_tool_calls!(decoded, opts)
 
         {:ok,
          %{
-           output: output_text!(decoded),
+           output: output_text!(decoded, tool_calls),
+           tool_calls: tool_calls,
            usage: usage!(decoded)
          }}
 
@@ -74,24 +77,28 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     end
   end
 
-  defp output_text!(%{"output_text" => text}) when is_binary(text), do: text
+  defp output_text!(%{"output_text" => text}, _tool_calls) when is_binary(text), do: text
 
-  defp output_text!(%{"output" => output}) when is_list(output) do
+  defp output_text!(%{"output" => output}, tool_calls) when is_list(output) do
     text =
       output
       |> collect_output_text([])
       |> Enum.reverse()
       |> Enum.join("\n")
 
-    if text == "" do
-      raise ArgumentError, "OpenAI response did not contain output text"
-    else
-      text
-    end
+    output_or_tool_call_placeholder!(text, tool_calls, "OpenAI")
   end
 
-  defp output_text!(response) do
+  defp output_text!(response, _tool_calls) do
     raise ArgumentError, "OpenAI response did not contain output text: #{inspect(response)}"
+  end
+
+  defp output_or_tool_call_placeholder!(text, tool_calls, provider) do
+    cond do
+      text != "" -> text
+      tool_calls != [] -> "requested #{length(tool_calls)} #{provider} tool call(s)"
+      true -> raise ArgumentError, "#{provider} response did not contain output text"
+    end
   end
 
   defp usage!(%{"usage" => usage}) when is_map(usage), do: usage

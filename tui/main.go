@@ -159,6 +159,10 @@ type model struct {
 	modelIndex         int
 	selectedModel      string
 	modelStatus        string
+	modelPickerOpen    bool
+	modelPickerIndex   int
+	modelPickerPending bool
+	modelPickerQuery   string
 	messages           []chatMessage
 	inputHistory       []string
 	historyIndex       int
@@ -218,9 +222,39 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c":
+		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		if m.modelPickerOpen {
+			switch msg.String() {
+			case "esc":
+				m.modelPickerOpen = false
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "model picker canceled"})
+				return m, nil
+			case "up":
+				m.moveModelPicker(-1)
+				return m, nil
+			case "down":
+				m.moveModelPicker(1)
+				return m, nil
+			case "enter":
+				return m.selectModelFromPicker()
+			case "backspace", "ctrl+h":
+				m.removeLastModelPickerQueryRune()
+				return m, nil
+			case "delete", "ctrl+u":
+				m.setModelPickerQuery("")
+				return m, nil
+			}
+			if len(msg.Runes) > 0 {
+				m.setModelPickerQuery(m.modelPickerQuery + string(msg.Runes))
+				return m, nil
+			}
+			return m, nil
+		}
+
+		switch msg.String() {
 		case "tab":
 			m.nextView()
 			return m, nil
@@ -318,6 +352,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.modelOptions = nil
 			m.modelIndex = 0
+			m.modelPickerIndex = 0
+			m.modelPickerOpen = false
+			m.modelPickerPending = false
+			m.modelPickerQuery = ""
 			m.modelStatus = "model load failed: " + msg.Err.Error()
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: m.modelStatus})
 			return m, nil
@@ -327,13 +365,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelIndex = selectedModelIndex(msg.Models, m.selectedModel)
 		if len(msg.Models) > 0 {
 			m.selectedModel = msg.Models[m.modelIndex].ID
+			m.modelPickerIndex = m.modelIndex
 		}
 		m.modelStatus = fmt.Sprintf("loaded %d models", len(msg.Models))
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.modelStatus + " for " + m.provider.Label()})
+		if m.modelPickerPending {
+			m.modelPickerOpen = len(m.modelOptions) > 0
+			m.modelPickerPending = false
+		}
 		return m, nil
 	}
 
-	if !m.running && m.view != viewAgents && m.view != viewAgentDetail {
+	if !m.running && m.view != viewAgents && m.view != viewAgentDetail && !m.modelPickerOpen {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -499,6 +542,9 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 	m.modelIndex = 0
 	m.selectedModel = ""
 	m.modelStatus = ""
+	m.modelPickerOpen = false
+	m.modelPickerPending = false
+	m.modelPickerQuery = ""
 	m.view = viewChat
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider set to " + m.provider.Label()})
 
@@ -570,7 +616,18 @@ func (m model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if len(args) == 0 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "model: " + emptyAsNone(m.selectedModel)})
+		if len(m.modelOptions) == 0 {
+			m.modelPickerPending = true
+			m.modelPickerQuery = ""
+			m.modelStatus = "loading models..."
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "loading models for " + m.provider.Label() + "..."})
+			return m, m.loadModelsCommand()
+		}
+		m.view = viewChat
+		m.modelPickerOpen = true
+		m.modelPickerIndex = m.modelIndex
+		m.modelPickerQuery = ""
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "open model picker, use Up/Down and Enter to select"})
 		return m, nil
 	}
 	if len(m.modelOptions) == 0 {
@@ -593,6 +650,26 @@ func (m model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 		m.selectedModel = m.modelOptions[index].ID
 	}
 
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "model set to " + m.selectedModel})
+	return m, nil
+}
+
+func (m model) selectModelFromPicker() (tea.Model, tea.Cmd) {
+	if len(m.modelOptions) == 0 {
+		m.modelPickerOpen = false
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no models available"})
+		return m, nil
+	}
+	if len(m.filteredModelIndexes()) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no model matches " + m.modelPickerQuery})
+		return m, nil
+	}
+	if m.modelPickerIndex < 0 || m.modelPickerIndex >= len(m.modelOptions) {
+		m.modelPickerIndex = 0
+	}
+	m.modelIndex = m.modelPickerIndex
+	m.selectedModel = m.modelOptions[m.modelIndex].ID
+	m.modelPickerOpen = false
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "model set to " + m.selectedModel})
 	return m, nil
 }
@@ -752,6 +829,61 @@ func (m *model) changeModel(delta int) {
 	}
 	m.modelIndex = (m.modelIndex + delta + len(m.modelOptions)) % len(m.modelOptions)
 	m.selectedModel = m.modelOptions[m.modelIndex].ID
+}
+
+func (m *model) moveModelPicker(delta int) {
+	indexes := m.filteredModelIndexes()
+	if len(indexes) == 0 {
+		m.modelPickerIndex = 0
+		return
+	}
+	position := 0
+	for index, modelIndex := range indexes {
+		if modelIndex == m.modelPickerIndex {
+			position = index
+			break
+		}
+	}
+	position = (position + delta + len(indexes)) % len(indexes)
+	m.modelPickerIndex = indexes[position]
+}
+
+func (m *model) setModelPickerQuery(query string) {
+	m.modelPickerQuery = query
+	m.ensureModelPickerSelectionVisible()
+}
+
+func (m *model) removeLastModelPickerQueryRune() {
+	runes := []rune(m.modelPickerQuery)
+	if len(runes) == 0 {
+		return
+	}
+	m.setModelPickerQuery(string(runes[:len(runes)-1]))
+}
+
+func (m *model) ensureModelPickerSelectionVisible() {
+	indexes := m.filteredModelIndexes()
+	if len(indexes) == 0 {
+		m.modelPickerIndex = 0
+		return
+	}
+	for _, index := range indexes {
+		if index == m.modelPickerIndex {
+			return
+		}
+	}
+	m.modelPickerIndex = indexes[0]
+}
+
+func (m model) filteredModelIndexes() []int {
+	query := strings.ToLower(strings.TrimSpace(m.modelPickerQuery))
+	indexes := make([]int, 0, len(m.modelOptions))
+	for index, option := range m.modelOptions {
+		if query == "" || strings.Contains(strings.ToLower(option.ID), query) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func (m model) loadModelsCommand() tea.Cmd {

@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m model) View() string {
@@ -11,6 +13,13 @@ func (m model) View() string {
 	b.WriteString("\n")
 	b.WriteString(hintStyle.Render(m.statusLine()))
 	b.WriteString("\n\n")
+
+	if m.modelPickerOpen {
+		b.WriteString(m.modelPickerView())
+		b.WriteString("\n\n")
+		b.WriteString(hintStyle.Render("Model picker is active. Enter selects; Esc closes."))
+		return b.String()
+	}
 
 	switch m.view {
 	case viewSetup:
@@ -113,9 +122,89 @@ func (m model) setupView() string {
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/models reload",
-		"/model <id|next|prev>",
+		"/model",
 		"/back",
 	}, "\n")
+}
+
+func (m model) modelPickerView() string {
+	if len(m.modelOptions) == 0 {
+		return ""
+	}
+
+	indexes := m.filteredModelIndexes()
+	selectedPosition := selectedModelPickerPosition(indexes, m.modelPickerIndex)
+	start, end := modelPickerWindow(len(indexes), selectedPosition, 12)
+	lines := []string{
+		labelStyle.Render("Select model for " + m.provider.Label()),
+		"",
+		"Search: " + emptyAs(m.modelPickerQuery, "(type to filter)"),
+		"Use Up / Down, Enter to select, Esc to cancel, Backspace to edit",
+		"",
+	}
+
+	if len(indexes) == 0 {
+		lines = append(lines, "No models match "+m.modelPickerQuery)
+		return lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(1, 2).
+			Render(strings.Join(lines, "\n"))
+	}
+
+	for position := start; position < end; position++ {
+		index := indexes[position]
+		prefix := "  "
+		if index == m.modelPickerIndex {
+			prefix = "> "
+		}
+		option := m.modelOptions[index]
+		lines = append(lines, fmt.Sprintf("%s%s (%s/$M in, %s/$M out)", prefix, option.ID, formatPrice(option.Pricing.InputPerMillion), formatPrice(option.Pricing.OutputPerMillion)))
+	}
+	if len(indexes) > end-start {
+		lines = append(lines, "", fmt.Sprintf("showing %d-%d of %d", start+1, end, len(indexes)))
+	}
+	if m.modelPickerQuery != "" {
+		lines = append(lines, fmt.Sprintf("filtered from %d total models", len(m.modelOptions)))
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+}
+
+func modelPickerWindow(total int, selected int, size int) (int, int) {
+	if total <= size {
+		return 0, total
+	}
+	if selected < 0 {
+		selected = 0
+	}
+	if selected >= total {
+		selected = total - 1
+	}
+
+	start := selected - size/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + size
+	if end > total {
+		end = total
+		start = total - size
+	}
+	return start, end
+}
+
+func selectedModelPickerPosition(indexes []int, selected int) int {
+	for position, index := range indexes {
+		if index == selected {
+			return position
+		}
+	}
+	return 0
 }
 
 func (m model) agentsView() string {
@@ -220,7 +309,7 @@ func helpText() string {
 		"Tab / Shift+Tab: switch views",
 		"Esc: back",
 		"Enter: submit or open selected agent",
-		"Up / Down: command history, or agent selection in Agents",
+		"Up / Down: command history / model picker / agent selection in Agents",
 		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
 		"Ctrl+C: quit",
 		"",
@@ -231,7 +320,7 @@ func helpText() string {
 		"/key <api-key>",
 		"/models reload",
 		"/models",
-		"/model <id|next|prev>",
+		"/model [<id>|next|prev] (use /model to open picker)",
 		"/settings",
 		"/agents",
 		"/agent <id>",
