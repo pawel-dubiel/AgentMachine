@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added a root `Makefile` for common local test, quality, TUI, and explicit CLI run commands.
 - Added `mix agent_machine.run --jsonl` for live event streaming plus a final summary envelope.
 - Added a validated client/orchestrator event sink for live run progress consumers.
 - Overhauled the Bubble Tea TUI with separate Setup, Chat, Agents, Agent Detail, and Help views.
