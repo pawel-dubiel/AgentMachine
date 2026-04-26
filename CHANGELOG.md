@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added canonical mutation tool summaries with relative changed files, hashes, byte counts, and compact diff stats.
 - Added code-edit checkpoints, rollback tool support, and `mix agent_machine.rollback`.
 - Added explicit tool approval modes and approval risk metadata for tool execution.
 - Added a separate `code-edit` harness with structured edit and unified patch tools.

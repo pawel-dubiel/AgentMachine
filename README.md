@@ -321,6 +321,39 @@ Local file tool rules:
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` are required when a harness is enabled.
 - Approval modes are `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
 
+Mutation tools return compact summaries for agents, logs, and clients. File
+paths in summaries are relative to `--tool-root`; full file contents and full
+diffs are not returned.
+
+```json
+{
+  "summary": {
+    "tool": "apply_patch",
+    "status": "changed",
+    "changed_count": 1,
+    "created_count": 0,
+    "updated_count": 1,
+    "deleted_count": 0,
+    "renamed_count": 0
+  },
+  "changed_files": [
+    {
+      "path": "lib/example.ex",
+      "action": "updated",
+      "before_sha256": "...",
+      "after_sha256": "...",
+      "before_bytes": 120,
+      "after_bytes": 150,
+      "diff_summary": {"added_lines": 3, "removed_lines": 1}
+    }
+  ],
+  "checkpoint": {
+    "id": "20260426T120000Z-1",
+    "path": "/Users/pawel/project/.agent_machine/checkpoints/20260426T120000Z-1"
+  }
+}
+```
+
 Rollback a checkpoint directly from the CLI without running a provider:
 
 ```sh

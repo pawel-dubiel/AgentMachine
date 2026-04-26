@@ -4,7 +4,6 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
-- [2026-04-26] Add richer tool result summaries with changed files, operation stats, hashes, and compact diff summaries.
 - [2026-04-26] Add secrets protection and redaction for tool reads, logs, JSONL events, and summaries.
 - [2026-04-26] Add a controlled test-command harness with an explicit allowlist, timeout, cwd/root policy, and no arbitrary shell.
 - [2026-04-26] Add OS-level sandbox and execution policy for future process-capable or network-capable tools.
