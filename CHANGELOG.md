@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added a TUI filesystem-write permission preflight with `/allow-tools`, `/yolo-tools`, and `/deny-tools`.
+- Added explicit tool-root runtime context and TUI run banners that show whether tools are active.
 - Added canonical mutation tool summaries with relative changed files, hashes, byte counts, and compact diff stats.
 - Added code-edit checkpoints, rollback tool support, and `mix agent_machine.rollback`.
 - Added explicit tool approval modes and approval risk metadata for tool execution.

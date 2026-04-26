@@ -232,6 +232,8 @@ make run-openrouter-jsonl \
 ## Tools
 
 Tools are off unless you enable a harness and provide the required limits.
+The TUI shows the active tool state in the run banner so it is visible whether
+a model can actually perform local file actions.
 
 The `demo` harness exposes a clock tool:
 
@@ -308,6 +310,8 @@ Local file tool rules:
 
 - `--tool-root` must already exist.
 - Paths outside `--tool-root` fail.
+- Models receive the explicit `tool_root` in runtime context and should use
+  relative paths under that root for local file tools.
 - Search requires `rg` in `PATH`.
 - Writes require the parent directory to exist.
 - Append and replace require existing regular files.
@@ -395,6 +399,9 @@ Useful commands:
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools off
+/allow-tools [auto-approved-safe|full-access]
+/yolo-tools
+/deny-tools
 /settings
 /agents
 /agent <id>
@@ -413,6 +420,11 @@ Useful keys:
 
 Saved UI settings are kept in a local config file with `0600` permissions.
 Override the config path with `AGENT_MACHINE_TUI_CONFIG`.
+
+When a message asks for a local filesystem write and tools are off or pointed at
+the wrong root, the TUI stops before calling the model and asks for permission.
+Use `/allow-tools` to enable `local-files` for the requested root and retry the
+pending message, `/yolo-tools` to use `full-access`, or `/deny-tools` to decline.
 
 Default config paths:
 
