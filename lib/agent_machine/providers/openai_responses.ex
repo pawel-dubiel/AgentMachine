@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON, RunContextPrompt, ToolHarness}
+  alias AgentMachine.{Agent, HTTPSSE, JSON, RunContextPrompt, ToolHarness}
 
   @url ~c"https://api.openai.com/v1/responses"
 
@@ -53,6 +53,59 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @impl true
+  def stream_complete(%Agent{} = agent, opts) do
+    api_key = System.fetch_env!("OPENAI_API_KEY")
+    timeout_ms = Keyword.fetch!(opts, :http_timeout_ms)
+
+    body =
+      agent
+      |> request_body(opts)
+      |> Map.put("stream", true)
+      |> JSON.encode!()
+
+    headers = [
+      {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)},
+      {~c"content-type", ~c"application/json"}
+    ]
+
+    ensure_started!(:inets)
+    ensure_started!(:ssl)
+
+    {:ok, state} = Elixir.Agent.start_link(fn -> %{response: nil, error: nil} end)
+
+    result =
+      HTTPSSE.post(@url, headers, body, timeout_ms, fn data ->
+        handle_stream_data(state, opts, data)
+      end)
+
+    stream_state = Elixir.Agent.get(state, & &1)
+    Elixir.Agent.stop(state)
+
+    cond do
+      match?({:error, _reason}, result) ->
+        result
+
+      stream_state.error != nil ->
+        {:error, stream_state.error}
+
+      is_map(stream_state.response) ->
+        decoded = stream_state.response
+        tool_calls = ToolHarness.openai_tool_calls!(decoded, opts)
+
+        {:ok,
+         %{
+           output: output_text!(decoded, tool_calls),
+           tool_calls: tool_calls,
+           tool_state: tool_state(decoded, tool_calls),
+           usage: usage!(decoded)
+         }}
+
+      true ->
+        {:error, "OpenAI stream ended without response.completed"}
     end
   end
 
@@ -121,6 +174,57 @@ defmodule AgentMachine.Providers.OpenAIResponses do
       {:ok, _apps} -> :ok
       {:error, reason} -> raise "failed to start #{inspect(app)}: #{inspect(reason)}"
     end
+  end
+
+  defp handle_stream_data(_state, _opts, "[DONE]"), do: :ok
+
+  defp handle_stream_data(state, opts, data) do
+    decoded = JSON.decode!(data)
+
+    case decoded do
+      %{"type" => "response.output_text.delta", "delta" => delta} when is_binary(delta) ->
+        emit_delta(opts, delta)
+
+      %{"type" => "response.completed", "response" => response} when is_map(response) ->
+        emit_done(opts)
+        Elixir.Agent.update(state, &Map.put(&1, :response, response))
+
+      %{"type" => "response.failed", "response" => %{"error" => error}} ->
+        Elixir.Agent.update(state, &Map.put(&1, :error, error))
+
+      %{"type" => "error", "message" => message} ->
+        Elixir.Agent.update(state, &Map.put(&1, :error, message))
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp emit_delta(opts, delta) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_delta,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      delta: delta,
+      at: DateTime.utc_now()
+    })
+  end
+
+  defp emit_done(opts) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_done,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      at: DateTime.utc_now()
+    })
   end
 
   defp output_text!(%{"output_text" => text}, _tool_calls) when is_binary(text), do: text

@@ -27,6 +27,53 @@ defmodule AgentMachine.Providers.Echo do
      }}
   end
 
+  @impl true
+  def stream_complete(%Agent{} = agent, opts) do
+    output = output(agent)
+    emit_delta(opts, output)
+    emit_done(opts)
+
+    input_tokens = token_count(agent.input) + token_count(agent.instructions)
+    output_tokens = token_count(output)
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: input_tokens,
+         output_tokens: output_tokens,
+         total_tokens: input_tokens + output_tokens
+       }
+     }}
+  end
+
+  defp emit_delta(opts, delta) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_delta,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      delta: delta,
+      at: DateTime.utc_now()
+    })
+  end
+
+  defp emit_done(opts) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_done,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      at: DateTime.utc_now()
+    })
+  end
+
   defp output(%Agent{} = agent) do
     if structured_delegation_response?(agent) do
       JSON.encode!(%{

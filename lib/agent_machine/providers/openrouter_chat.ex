@@ -11,7 +11,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON, RunContextPrompt, ToolHarness}
+  alias AgentMachine.{Agent, HTTPSSE, JSON, RunContextPrompt, ToolHarness}
 
   @url ~c"https://openrouter.ai/api/v1/chat/completions"
 
@@ -55,6 +55,64 @@ defmodule AgentMachine.Providers.OpenRouterChat do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @impl true
+  def stream_complete(%Agent{} = agent, opts) do
+    api_key = System.fetch_env!("OPENROUTER_API_KEY")
+    timeout_ms = Keyword.fetch!(opts, :http_timeout_ms)
+    messages = messages(agent, opts)
+
+    body =
+      agent
+      |> request_body(opts)
+      |> Map.put("stream", true)
+      |> Map.put("stream_options", %{"include_usage" => true})
+      |> JSON.encode!()
+
+    headers = [
+      {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)},
+      {~c"content-type", ~c"application/json"},
+      {~c"x-openrouter-title", ~c"AgentMachine"}
+    ]
+
+    ensure_started!(:inets)
+    ensure_started!(:ssl)
+
+    {:ok, state} =
+      Elixir.Agent.start_link(fn -> %{content: "", usage: nil, tool_calls: %{}, error: nil} end)
+
+    result =
+      HTTPSSE.post(@url, headers, body, timeout_ms, fn data ->
+        handle_stream_data(state, opts, data)
+      end)
+
+    stream_state = Elixir.Agent.get(state, & &1)
+    Elixir.Agent.stop(state)
+
+    cond do
+      match?({:error, _reason}, result) ->
+        result
+
+      stream_state.error != nil ->
+        {:error, stream_state.error}
+
+      is_nil(stream_state.usage) ->
+        {:error, "OpenRouter stream ended without usage"}
+
+      true ->
+        message = streamed_message(stream_state)
+        tool_calls = ToolHarness.openrouter_tool_calls!(message, opts)
+        emit_done(opts)
+
+        {:ok,
+         %{
+           output: output_text!(message, tool_calls),
+           tool_calls: tool_calls,
+           tool_state: tool_state(tool_calls, messages, message),
+           usage: usage!(%{"usage" => stream_state.usage})
+         }}
     end
   end
 
@@ -123,6 +181,112 @@ defmodule AgentMachine.Providers.OpenRouterChat do
       {:ok, _apps} -> :ok
       {:error, reason} -> raise "failed to start #{inspect(app)}: #{inspect(reason)}"
     end
+  end
+
+  defp handle_stream_data(_state, _opts, "[DONE]"), do: :ok
+
+  defp handle_stream_data(state, opts, data) do
+    decoded = JSON.decode!(data)
+
+    cond do
+      is_map(decoded["error"]) ->
+        Elixir.Agent.update(state, &Map.put(&1, :error, decoded["error"]))
+
+      is_map(decoded["usage"]) ->
+        Elixir.Agent.update(state, &Map.put(&1, :usage, decoded["usage"]))
+
+      true ->
+        decoded
+        |> Map.get("choices", [])
+        |> Enum.each(&handle_stream_choice(state, opts, &1))
+    end
+  end
+
+  defp handle_stream_choice(state, opts, %{"delta" => delta}) when is_map(delta) do
+    case Map.get(delta, "content") do
+      content when is_binary(content) and content != "" ->
+        emit_delta(opts, content)
+        Elixir.Agent.update(state, &Map.update!(&1, :content, fn text -> text <> content end))
+
+      _other ->
+        :ok
+    end
+
+    delta
+    |> Map.get("tool_calls", [])
+    |> Enum.each(fn call -> Elixir.Agent.update(state, &put_tool_call_delta(&1, call)) end)
+  end
+
+  defp handle_stream_choice(_state, _opts, _choice), do: :ok
+
+  defp put_tool_call_delta(state, %{"index" => index} = call) when is_integer(index) do
+    state_call = Map.get(state.tool_calls, index, %{id: nil, name: nil, arguments: ""})
+    function = Map.get(call, "function", %{})
+
+    state_call =
+      state_call
+      |> put_if_present(:id, Map.get(call, "id"))
+      |> put_if_present(:name, Map.get(function, "name"))
+      |> append_if_present(:arguments, Map.get(function, "arguments"))
+
+    %{state | tool_calls: Map.put(state.tool_calls, index, state_call)}
+  end
+
+  defp put_tool_call_delta(state, _call), do: state
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, _key, ""), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
+
+  defp append_if_present(map, _key, nil), do: map
+  defp append_if_present(map, _key, ""), do: map
+  defp append_if_present(map, key, value), do: Map.update!(map, key, &(&1 <> value))
+
+  defp streamed_message(%{content: content, tool_calls: tool_calls}) do
+    message = %{"role" => "assistant", "content" => content}
+
+    calls =
+      tool_calls
+      |> Enum.sort_by(fn {index, _call} -> index end)
+      |> Enum.map(fn {_index, call} ->
+        %{
+          "id" => Map.fetch!(call, :id),
+          "type" => "function",
+          "function" => %{
+            "name" => Map.fetch!(call, :name),
+            "arguments" => Map.fetch!(call, :arguments)
+          }
+        }
+      end)
+
+    if calls == [], do: message, else: Map.put(message, "tool_calls", calls)
+  end
+
+  defp emit_delta(opts, delta) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_delta,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      delta: delta,
+      at: DateTime.utc_now()
+    })
+  end
+
+  defp emit_done(opts) do
+    context = Keyword.fetch!(opts, :stream_context)
+    sink = Keyword.fetch!(opts, :stream_event_sink)
+
+    sink.(%{
+      type: :assistant_done,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      at: DateTime.utc_now()
+    })
   end
 
   defp message!(%{"choices" => choices}) when is_list(choices) do
