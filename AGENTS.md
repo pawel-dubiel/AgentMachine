@@ -136,26 +136,26 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
-- Tool calls require `allowed_tools`, `tool_policy`, `tool_timeout_ms`, and
-  `tool_max_rounds`.
+- Tool calls require `allowed_tools`, `tool_policy`, `tool_timeout_ms`,
+  `tool_max_rounds`, and `tool_approval_mode`.
 - Provider-native tool calls continue within the same agent attempt: the runtime
   executes allowed tools, sends JSON-encoded results back to the provider, and
   stops only when the provider returns a final response or `tool_max_rounds` is
   exceeded.
-- Every executable tool must expose a narrow `permission/0`; execution must
-  check that permission through `AgentMachine.ToolPolicy`.
+- Every executable tool must expose a narrow `permission/0` and
+  `approval_risk/0`; execution must check both permission and approval mode.
 - `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>
-  --tool-max-rounds <n>` exposes the safe built-in demo harness through the
-  high-level client boundary.
+  --tool-max-rounds <n> --tool-approval-mode <mode>` exposes the safe built-in
+  demo harness through the high-level client boundary.
 - `mix agent_machine.run --tool-harness local-files --tool-root <path>
-  --tool-timeout-ms <ms> --tool-max-rounds <n>` exposes constrained local
-  directory creation, file metadata, listing, reading, search, writing,
-  appending, and exact text replacement under the explicit root. File search
-  uses `rg`.
+  --tool-timeout-ms <ms> --tool-max-rounds <n> --tool-approval-mode <mode>`
+  exposes constrained local directory creation, file metadata, listing,
+  reading, search, writing, appending, and exact text replacement under the
+  explicit root. File search uses `rg`.
 - `mix agent_machine.run --tool-harness code-edit --tool-root <path>
-  --tool-timeout-ms <ms> --tool-max-rounds <n>` exposes constrained code edit
-  tools for structured edits and unified patches. Patch application must stay
-  in Elixir and must not shell out.
+  --tool-timeout-ms <ms> --tool-max-rounds <n> --tool-approval-mode <mode>`
+  exposes constrained code edit tools for structured edits and unified patches.
+  Patch application must stay in Elixir and must not shell out.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
   plus the final summary to an explicit file path.

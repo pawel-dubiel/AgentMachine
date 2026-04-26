@@ -4,7 +4,6 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
-- [2026-04-26] Add tool approval modes: `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
 - [2026-04-26] Add code-edit checkpoints and rollback for changed, deleted, and renamed files.
 - [2026-04-26] Add richer tool result summaries with changed files, operation stats, hashes, and compact diff summaries.
 - [2026-04-26] Add secrets protection and redaction for tool reads, logs, JSONL events, and summaries.

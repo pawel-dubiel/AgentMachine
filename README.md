@@ -249,6 +249,7 @@ mix agent_machine.run \
   --tool-harness demo \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
+  --tool-approval-mode read-only \
   --json \
   "What time is it now?"
 ```
@@ -272,6 +273,7 @@ mix agent_machine.run \
   --tool-root /Users/pawel/mywiki \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
+  --tool-approval-mode auto-approved-safe \
   --json \
   "Create hello_world.md with Hello World"
 ```
@@ -296,6 +298,7 @@ mix agent_machine.run \
   --tool-root /Users/pawel/project \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
+  --tool-approval-mode full-access \
   --json \
   "Update the README using a minimal patch"
 ```
@@ -309,7 +312,8 @@ Local file tool rules:
 - Append and replace require existing regular files.
 - Symlink write targets are rejected.
 - Code edit tools validate all requested changes before writing.
-- `--tool-timeout-ms` and `--tool-max-rounds` are required when a harness is enabled.
+- `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` are required when a harness is enabled.
+- Approval modes are `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
 
 ## Terminal UI
 
@@ -339,8 +343,8 @@ Useful commands:
 /models
 /model
 /model <id|next|prev>
-/tools local-files <root> <timeout-ms> <max-rounds>
-/tools code-edit <root> <timeout-ms> <max-rounds>
+/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
+/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools off
 /settings
 /agents
@@ -380,7 +384,7 @@ values are:
 - `--max-steps`.
 - `--max-attempts`.
 - `--model`, `--http-timeout-ms`, pricing, and API key for remote providers.
-- `--tool-timeout-ms` and `--tool-max-rounds` when tools are enabled.
+- `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` when tools are enabled.
 - `--tool-root` for `local-files` and `code-edit`.
 
 ## Development

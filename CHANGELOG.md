@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added explicit tool approval modes and approval risk metadata for tool execution.
 - Added a separate `code-edit` harness with structured edit and unified patch tools.
 - Reworked `README.md` into a usage-first quick start without implementation details.
 - Added `file_info`, `append_file`, and `replace_in_file` to the constrained `local-files` harness with explicit permissions.
