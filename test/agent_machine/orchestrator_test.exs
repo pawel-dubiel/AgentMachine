@@ -900,6 +900,64 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].tool_results["uppercase"].value == "HELLO"
   end
 
+  test "command approval mode requires full access" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.TestCommandUsing,
+        model: "test",
+        input: "verify",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    root = tmp_root("agent-machine-command-approval")
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.RunTestCommand],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_command_run]),
+               tool_root: root,
+               test_commands: ["elixir -e IO.puts(1)"],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "approval risk :command"
+  end
+
+  test "command tool fails without matching policy permission" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.TestCommandUsing,
+        model: "test",
+        input: "verify",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    root = tmp_root("agent-machine-command-policy")
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.RunTestCommand],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:local_files_read]),
+               tool_root: root,
+               test_commands: ["elixir -e IO.puts(1)"],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :full_access
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "requires permission :test_command_run"
+  end
+
   test "returns an agent error when a tool call times out" do
     agents = [
       %{
@@ -923,6 +981,13 @@ defmodule AgentMachine.OrchestratorTest do
 
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "timed out after 1ms"
+  end
+
+  defp tmp_root(prefix) do
+    root = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer()}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf(root) end)
+    root
   end
 end
 
@@ -1567,6 +1632,65 @@ defmodule AgentMachine.TestProviders.MultiRoundToolUsing do
            id: "uppercase-1",
            tool: AgentMachine.TestTools.Uppercase,
            input: %{value: agent.input}
+         }
+       ],
+       tool_state: %{round: 1},
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.TestCommandUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{exit_status: status}}]} -> final_response(status)
+      nil -> tool_request(agent)
+    end
+  end
+
+  defp final_response(status) do
+    output = "test command finished with #{inspect(status)}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
+  end
+
+  defp tool_request(agent) do
+    output = "called test command"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "run-tests",
+           tool: AgentMachine.Tools.RunTestCommand,
+           input: %{command: "elixir -e IO.puts(1)", cwd: "."}
          }
        ],
        tool_state: %{round: 1},

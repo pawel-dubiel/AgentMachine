@@ -44,6 +44,24 @@ defmodule AgentMachine.ToolHarnessTest do
            ]
   end
 
+  test "built-in code edit harness exposes test command tool only when configured" do
+    refute AgentMachine.Tools.RunTestCommand in ToolHarness.builtin!(:code_edit)
+
+    assert AgentMachine.Tools.RunTestCommand in ToolHarness.builtin!(:code_edit,
+             test_commands: ["mix test"]
+           )
+
+    refute MapSet.member?(
+             ToolHarness.builtin_policy!(:code_edit).permissions,
+             :test_command_run
+           )
+
+    assert MapSet.member?(
+             ToolHarness.builtin_policy!(:code_edit, test_commands: ["mix test"]).permissions,
+             :test_command_run
+           )
+  end
+
   test "built-in harnesses expose explicit tool policies" do
     assert %AgentMachine.ToolPolicy{harness: :demo, permissions: demo_permissions} =
              ToolHarness.builtin_policy!(:demo)

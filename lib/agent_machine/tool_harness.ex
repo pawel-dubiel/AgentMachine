@@ -51,21 +51,29 @@ defmodule AgentMachine.ToolHarness do
     ]
   }
 
-  def builtin!(nil), do: []
+  def builtin!(name, opts \\ [])
 
-  def builtin!(name) when is_atom(name) do
+  def builtin!(nil, _opts), do: []
+
+  def builtin!(name, opts) when is_atom(name) do
     case Map.fetch(@builtin_harnesses, name) do
-      {:ok, tools} -> tools
+      {:ok, tools} -> maybe_put_test_command_tool(name, tools, opts)
       :error -> raise ArgumentError, "unknown tool harness: #{inspect(name)}"
     end
   end
 
-  def builtin_policy!(nil), do: nil
+  def builtin_policy!(name, opts \\ [])
 
-  def builtin_policy!(name) when is_atom(name) do
+  def builtin_policy!(nil, _opts), do: nil
+
+  def builtin_policy!(name, opts) when is_atom(name) do
     case Map.fetch(@builtin_policies, name) do
-      {:ok, permissions} -> ToolPolicy.new!(harness: name, permissions: permissions)
-      :error -> raise ArgumentError, "unknown tool harness policy: #{inspect(name)}"
+      {:ok, permissions} ->
+        permissions = maybe_put_test_command_permission(name, permissions, opts)
+        ToolPolicy.new!(harness: name, permissions: permissions)
+
+      :error ->
+        raise ArgumentError, "unknown tool harness policy: #{inspect(name)}"
     end
   end
 
@@ -226,5 +234,32 @@ defmodule AgentMachine.ToolHarness do
 
   defp require_non_empty_binary!(value, label) do
     raise ArgumentError, "#{label} must be a non-empty binary, got: #{inspect(value)}"
+  end
+
+  defp maybe_put_test_command_tool(:code_edit, tools, opts) do
+    if test_commands_configured?(opts) do
+      tools ++ [AgentMachine.Tools.RunTestCommand]
+    else
+      tools
+    end
+  end
+
+  defp maybe_put_test_command_tool(_name, tools, _opts), do: tools
+
+  defp maybe_put_test_command_permission(:code_edit, permissions, opts) do
+    if test_commands_configured?(opts) do
+      permissions ++ [:test_command_run]
+    else
+      permissions
+    end
+  end
+
+  defp maybe_put_test_command_permission(_name, permissions, _opts), do: permissions
+
+  defp test_commands_configured?(opts) do
+    case Keyword.get(opts, :test_commands) do
+      commands when is_list(commands) and commands != [] -> true
+      _other -> false
+    end
   end
 end

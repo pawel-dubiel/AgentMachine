@@ -247,6 +247,85 @@ defmodule AgentMachine.ClientRunnerTest do
     assert MapSet.member?(permissions, :code_edit_rollback_checkpoint)
   end
 
+  test "builds code edit tool options with explicit test commands" do
+    spec =
+      RunSpec.new!(%{
+        task: "edit code",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :code_edit,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_root: "/tmp/agent-machine",
+        tool_approval_mode: :full_access,
+        test_commands: ["mix test"]
+      })
+
+    {_agents, opts} = Basic.build!(spec)
+
+    assert AgentMachine.Tools.RunTestCommand in Keyword.fetch!(opts, :allowed_tools)
+    assert Keyword.fetch!(opts, :test_commands) == ["mix test"]
+
+    assert %AgentMachine.ToolPolicy{harness: :code_edit, permissions: permissions} =
+             Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.member?(permissions, :test_command_run)
+  end
+
+  test "requires code-edit and full-access for test commands" do
+    base = %{
+      task: "edit code",
+      workflow: :basic,
+      provider: :echo,
+      timeout_ms: 1_000,
+      max_steps: 2,
+      max_attempts: 1,
+      tool_timeout_ms: 100,
+      tool_max_rounds: 2,
+      tool_root: "/tmp/agent-machine",
+      test_commands: ["mix test"]
+    }
+
+    assert_raise ArgumentError, ~r/test_commands require :tool_harness :code_edit/, fn ->
+      RunSpec.new!(
+        Map.merge(base, %{tool_harness: :local_files, tool_approval_mode: :full_access})
+      )
+    end
+
+    assert_raise ArgumentError, ~r/test_commands require :tool_approval_mode :full_access/, fn ->
+      RunSpec.new!(
+        Map.merge(base, %{tool_harness: :code_edit, tool_approval_mode: :auto_approved_safe})
+      )
+    end
+  end
+
+  test "rejects duplicate or malformed test commands" do
+    base = %{
+      task: "edit code",
+      workflow: :basic,
+      provider: :echo,
+      timeout_ms: 1_000,
+      max_steps: 2,
+      max_attempts: 1,
+      tool_harness: :code_edit,
+      tool_timeout_ms: 100,
+      tool_max_rounds: 2,
+      tool_root: "/tmp/agent-machine",
+      tool_approval_mode: :full_access
+    }
+
+    assert_raise ArgumentError, ~r/test_commands must not contain duplicates/, fn ->
+      RunSpec.new!(Map.put(base, :test_commands, ["mix test", "mix test"]))
+    end
+
+    assert_raise ArgumentError, ~r/unsupported shell syntax/, fn ->
+      RunSpec.new!(Map.put(base, :test_commands, ["mix test && rm -rf tmp"]))
+    end
+  end
+
   test "requires tool root for code edit harness" do
     assert_raise ArgumentError, ~r/:tool_root/, fn ->
       RunSpec.new!(%{
