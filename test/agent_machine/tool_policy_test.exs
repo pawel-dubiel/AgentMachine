@@ -1,0 +1,19 @@
+defmodule AgentMachine.ToolPolicyTest do
+  use ExUnit.Case, async: true
+
+  alias AgentMachine.ToolPolicy
+
+  test "permits tools with granted permissions" do
+    policy = ToolPolicy.new!(permissions: [:demo_time])
+
+    assert :ok = ToolPolicy.permit!(policy, AgentMachine.Tools.Now)
+  end
+
+  test "rejects tools without granted permissions" do
+    policy = ToolPolicy.new!(permissions: [:local_files_read])
+
+    assert_raise ArgumentError, ~r/requires permission :demo_time/, fn ->
+      ToolPolicy.permit!(policy, AgentMachine.Tools.Now)
+    end
+  end
+end

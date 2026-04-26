@@ -1322,6 +1322,9 @@ defmodule AgentMachine.TestTools.Uppercase do
   @behaviour AgentMachine.Tool
 
   @impl true
+  def permission, do: :test_uppercase
+
+  @impl true
   def run(input, opts) do
     value = Map.fetch!(input, :value)
     attempt = Keyword.fetch!(opts, :attempt)
@@ -1334,11 +1337,17 @@ defmodule AgentMachine.TestTools.Failing do
   @behaviour AgentMachine.Tool
 
   @impl true
+  def permission, do: :test_failing
+
+  @impl true
   def run(_input, _opts), do: {:error, :planned_tool_failure}
 end
 
 defmodule AgentMachine.TestTools.Sleeping do
   @behaviour AgentMachine.Tool
+
+  @impl true
+  def permission, do: :test_sleeping
 
   @impl true
   def run(input, _opts) do
