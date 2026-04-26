@@ -24,7 +24,7 @@ defmodule AgentMachine.Tools.WriteFile do
             "description" =>
               "Relative path under the configured root, or an absolute path inside that root."
           },
-          "content" => %{"type" => "string"}
+          "content" => %{"type" => "string", "maxLength" => @max_bytes_limit}
         },
         "required" => ["path", "content"],
         "additionalProperties" => false
@@ -36,7 +36,7 @@ defmodule AgentMachine.Tools.WriteFile do
   def run(input, opts) when is_map(input) do
     root = PathGuard.root!(opts)
     path = input |> fetch_input!("path") |> require_non_empty_binary!("path")
-    content = input |> fetch_input!("content") |> require_binary!("content")
+    content = input |> fetch_input!("content") |> require_content!()
     target = PathGuard.writable_target!(root, path)
 
     File.write!(target, content)
@@ -67,9 +67,15 @@ defmodule AgentMachine.Tools.WriteFile do
     raise ArgumentError, "#{field} must be a non-empty binary, got: #{inspect(value)}"
   end
 
-  defp require_binary!(value, _field) when is_binary(value), do: value
+  defp require_content!(value) when is_binary(value) and byte_size(value) <= @max_bytes_limit,
+    do: value
 
-  defp require_binary!(value, field) do
-    raise ArgumentError, "#{field} must be a binary, got: #{inspect(value)}"
+  defp require_content!(value) when is_binary(value) do
+    raise ArgumentError,
+          "content must be at most #{@max_bytes_limit} bytes, got: #{byte_size(value)}"
+  end
+
+  defp require_content!(value) do
+    raise ArgumentError, "content must be a binary, got: #{inspect(value)}"
   end
 end

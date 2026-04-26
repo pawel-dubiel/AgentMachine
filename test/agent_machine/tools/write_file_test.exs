@@ -53,4 +53,20 @@ defmodule AgentMachine.Tools.WriteFileTest do
     assert message =~ "symlink"
     assert File.read!(outside) == "outside"
   end
+
+  test "rejects oversized writes" do
+    root =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-tools-#{System.unique_integer()}"))
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+
+    content = String.duplicate("a", 200_001)
+
+    assert {:error, message} =
+             WriteFile.run(%{"path" => "large.md", "content" => content}, tool_root: root)
+
+    assert message =~ "at most 200000 bytes"
+    refute File.exists?(Path.join(root, "large.md"))
+  end
 end

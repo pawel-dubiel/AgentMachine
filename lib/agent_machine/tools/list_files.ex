@@ -100,7 +100,7 @@ defmodule AgentMachine.Tools.ListFiles do
 
   defp entry!(root, name) do
     path = Path.join(root, name)
-    stat = File.stat!(path)
+    stat = File.lstat!(path)
 
     %{
       name: name,

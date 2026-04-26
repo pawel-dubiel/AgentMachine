@@ -33,6 +33,27 @@ defmodule AgentMachine.Tools.ListFilesTest do
              ListFiles.run(%{"path" => ".", "max_entries" => 1}, tool_root: root)
   end
 
+  test "lists symlink entries without following them" do
+    root =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-list-#{System.unique_integer()}"))
+
+    outside = Path.expand(Path.join(System.tmp_dir!(), "outside-#{System.unique_integer()}.md"))
+
+    on_exit(fn ->
+      File.rm_rf(root)
+      File.rm_rf(outside)
+    end)
+
+    File.mkdir_p!(root)
+    File.write!(outside, "outside")
+    File.ln_s!(outside, Path.join(root, "link.md"))
+
+    assert {:ok, %{entries: entries}} =
+             ListFiles.run(%{"path" => ".", "max_entries" => 10}, tool_root: root)
+
+    assert Enum.find(entries, &(&1.name == "link.md")).type == "symlink"
+  end
+
   test "rejects list paths outside the configured root" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-list-#{System.unique_integer()}"))
