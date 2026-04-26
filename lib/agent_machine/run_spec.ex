@@ -16,6 +16,7 @@ defmodule AgentMachine.RunSpec do
     :pricing,
     :tool_harness,
     :tool_timeout_ms,
+    :tool_max_rounds,
     :tool_root
   ]
 
@@ -31,6 +32,7 @@ defmodule AgentMachine.RunSpec do
           pricing: map() | nil,
           tool_harness: :demo | :local_files | nil,
           tool_timeout_ms: pos_integer() | nil,
+          tool_max_rounds: pos_integer() | nil,
           tool_root: binary() | nil
         }
 
@@ -96,23 +98,36 @@ defmodule AgentMachine.RunSpec do
           "run spec :provider must be :echo, :openai, or :openrouter, got: #{inspect(provider)}"
   end
 
-  defp validate_tool_options!(%__MODULE__{tool_harness: nil, tool_timeout_ms: nil}), do: :ok
+  defp validate_tool_options!(%__MODULE__{
+         tool_harness: nil,
+         tool_timeout_ms: nil,
+         tool_max_rounds: nil,
+         tool_root: nil
+       }),
+       do: :ok
 
-  defp validate_tool_options!(%__MODULE__{tool_harness: nil, tool_timeout_ms: timeout_ms}) do
+  defp validate_tool_options!(%__MODULE__{tool_harness: nil} = spec) do
     raise ArgumentError,
-          "run spec :tool_timeout_ms requires :tool_harness, got: #{inspect(timeout_ms)}"
+          "run spec tool options require :tool_harness, got :tool_timeout_ms #{inspect(spec.tool_timeout_ms)}, :tool_max_rounds #{inspect(spec.tool_max_rounds)}, and :tool_root #{inspect(spec.tool_root)}"
   end
 
-  defp validate_tool_options!(%__MODULE__{tool_harness: :demo, tool_timeout_ms: timeout_ms}) do
+  defp validate_tool_options!(%__MODULE__{
+         tool_harness: :demo,
+         tool_timeout_ms: timeout_ms,
+         tool_max_rounds: max_rounds
+       }) do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
+    require_positive_integer!(max_rounds, :tool_max_rounds)
   end
 
   defp validate_tool_options!(%__MODULE__{
          tool_harness: :local_files,
          tool_timeout_ms: timeout_ms,
+         tool_max_rounds: max_rounds,
          tool_root: root
        }) do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
+    require_positive_integer!(max_rounds, :tool_max_rounds)
     require_non_empty_binary!(root, :tool_root)
   end
 

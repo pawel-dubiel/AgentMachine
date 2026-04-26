@@ -123,12 +123,19 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
-- Tool calls require `allowed_tools` and `tool_timeout_ms`.
-- `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>` exposes the
-  safe built-in demo harness through the high-level client boundary.
+- Tool calls require `allowed_tools`, `tool_timeout_ms`, and
+  `tool_max_rounds`.
+- Provider-native tool calls continue within the same agent attempt: the runtime
+  executes allowed tools, sends JSON-encoded results back to the provider, and
+  stops only when the provider returns a final response or `tool_max_rounds` is
+  exceeded.
+- `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>
+  --tool-max-rounds <n>` exposes the safe built-in demo harness through the
+  high-level client boundary.
 - `mix agent_machine.run --tool-harness local-files --tool-root <path>
-  --tool-timeout-ms <ms>` exposes constrained local file writing under the
-  explicit root.
+  --tool-timeout-ms <ms> --tool-max-rounds <n>` exposes constrained local
+  directory creation, file listing, reading, search, and writing under the
+  explicit root. File search uses `rg`.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
   plus the final summary to an explicit file path.

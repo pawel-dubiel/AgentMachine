@@ -254,7 +254,7 @@ mix agent_machine.run \
 ```
 
 To expose a small safe tool set to the model, enable a named harness and provide
-an explicit tool timeout:
+an explicit tool timeout and tool-round budget:
 
 ```sh
 mix agent_machine.run \
@@ -269,13 +269,21 @@ mix agent_machine.run \
   --output-price-per-million 0.60 \
   --tool-harness demo \
   --tool-timeout-ms 1000 \
+  --tool-max-rounds 2 \
   --json \
   "What time is it now?"
 ```
 
 The first built-in harness is `demo`, which exposes `AgentMachine.Tools.Now`.
-The `local-files` harness exposes `AgentMachine.Tools.WriteFile` and requires an
-explicit `--tool-root`; write requests outside that root fail.
+The `local-files` harness exposes `AgentMachine.Tools.CreateDir`,
+`AgentMachine.Tools.ListFiles`, `AgentMachine.Tools.ReadFile`,
+`AgentMachine.Tools.SearchFiles`, and `AgentMachine.Tools.WriteFile`. It requires
+an explicit existing `--tool-root`; create, list, read, search, and write
+requests outside that root fail. Search uses `rg` (`ripgrep`) and fails
+explicitly when `rg` is not available in `PATH`. Writes require the parent
+directory to exist; use `create_dir` when a new directory is needed.
+`--tool-max-rounds` is required with every tool harness and caps same-agent
+model/tool continuation loops.
 
 ```sh
 mix agent_machine.run \
@@ -291,6 +299,7 @@ mix agent_machine.run \
   --tool-harness local-files \
   --tool-root /Users/pawel/mywiki \
   --tool-timeout-ms 1000 \
+  --tool-max-rounds 2 \
   --json \
   "Create hello_world.md with Hello World"
 ```
@@ -358,7 +367,7 @@ Core commands:
 - `/workflow basic|agentic`
 - `/provider echo|openai|openrouter`
 - `/key <api-key>`
-- `/tools local-files <root> <timeout-ms>`
+- `/tools local-files <root> <timeout-ms> <max-rounds>`
 - `/tools off`
 - `/models reload`
 - `/models`
@@ -676,12 +685,15 @@ be exposed to OpenAI Responses or OpenRouter Chat must also implement
 `definition/0` with a JSON-schema-compatible `:input_schema`. The provider sends
 those definitions using the provider's standard function/tool calling shape, then
 `AgentMachine.ToolHarness` converts returned provider tool calls into runtime
-`tool_calls`.
+`tool_calls`. When a provider requests a tool, `AgentMachine.AgentRunner`
+executes the tool, sends the JSON-encoded result back to the same provider
+conversation, and repeats until the provider returns a final response or
+`:tool_max_rounds` is exceeded.
 
 Built-in harnesses:
 
 - `demo`: exposes `AgentMachine.Tools.Now`.
-- `local-files`: exposes `AgentMachine.Tools.WriteFile` and requires `:tool_root`.
+- `local-files`: exposes `AgentMachine.Tools.CreateDir`, `AgentMachine.Tools.ListFiles`, `AgentMachine.Tools.ReadFile`, `AgentMachine.Tools.SearchFiles`, and `AgentMachine.Tools.WriteFile`, and requires `:tool_root`.
 
 Runs that execute tools must explicitly allow them:
 
@@ -690,13 +702,16 @@ Runs that execute tools must explicitly allow them:
   AgentMachine.Orchestrator.run(agents,
     timeout: 5_000,
     allowed_tools: [UppercaseTool],
-    tool_timeout_ms: 1_000
+    tool_timeout_ms: 1_000,
+    tool_max_rounds: 2
   )
 ```
 
 If a provider requests a tool that is not in `:allowed_tools`, that agent attempt
 fails with an explicit error. If a tool does not finish within
-`:tool_timeout_ms`, that agent attempt also fails with an explicit error.
+`:tool_timeout_ms`, that agent attempt also fails with an explicit error. If a
+provider continues requesting tools after `:tool_max_rounds`, the agent attempt
+fails explicitly.
 
 ## Run Events
 

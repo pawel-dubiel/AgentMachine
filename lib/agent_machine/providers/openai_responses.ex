@@ -20,12 +20,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     api_key = System.fetch_env!("OPENAI_API_KEY")
     timeout_ms = Keyword.fetch!(opts, :http_timeout_ms)
 
-    body =
-      %{"model" => agent.model, "input" => input(agent, opts)}
-      |> put_optional("instructions", agent.instructions)
-      |> put_optional("metadata", agent.metadata)
-      |> ToolHarness.put_openai_tools!(opts)
-      |> JSON.encode!()
+    body = agent |> request_body(opts) |> JSON.encode!()
 
     headers = [
       {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)},
@@ -49,6 +44,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
          %{
            output: output_text!(decoded, tool_calls),
            tool_calls: tool_calls,
+           tool_state: tool_state(decoded, tool_calls),
            usage: usage!(decoded)
          }}
 
@@ -58,6 +54,56 @@ defmodule AgentMachine.Providers.OpenAIResponses do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  if Mix.env() == :test do
+    def request_body_for_test!(%Agent{} = agent, opts), do: request_body(agent, opts)
+  end
+
+  defp request_body(%Agent{} = agent, opts) do
+    agent
+    |> base_request_body(opts)
+    |> put_optional("instructions", agent.instructions)
+    |> put_optional("metadata", agent.metadata)
+    |> ToolHarness.put_openai_tools!(opts)
+  end
+
+  defp base_request_body(%Agent{} = agent, opts) do
+    case Keyword.fetch(opts, :tool_continuation) do
+      {:ok, continuation} ->
+        continuation_request_body!(agent, continuation)
+
+      :error ->
+        %{"model" => agent.model, "input" => input(agent, opts)}
+    end
+  end
+
+  defp continuation_request_body!(%Agent{} = agent, %{
+         state: %{response_id: response_id},
+         results: results
+       })
+       when is_binary(response_id) and is_list(results) do
+    %{
+      "model" => agent.model,
+      "previous_response_id" => response_id,
+      "input" => Enum.map(results, &function_call_output!/1)
+    }
+  end
+
+  defp continuation_request_body!(_agent, continuation) do
+    raise ArgumentError, "invalid OpenAI tool continuation: #{inspect(continuation)}"
+  end
+
+  defp function_call_output!(%{id: id, result: result}) when is_binary(id) and is_map(result) do
+    %{
+      "type" => "function_call_output",
+      "call_id" => id,
+      "output" => JSON.encode!(result)
+    }
+  end
+
+  defp function_call_output!(result) do
+    raise ArgumentError, "invalid OpenAI tool result: #{inspect(result)}"
   end
 
   defp put_optional(map, _key, nil), do: map
@@ -99,6 +145,16 @@ defmodule AgentMachine.Providers.OpenAIResponses do
       tool_calls != [] -> "requested #{length(tool_calls)} #{provider} tool call(s)"
       true -> raise ArgumentError, "#{provider} response did not contain output text"
     end
+  end
+
+  defp tool_state(_response, []), do: nil
+
+  defp tool_state(%{"id" => response_id}, _tool_calls) when is_binary(response_id) do
+    %{response_id: response_id}
+  end
+
+  defp tool_state(response, _tool_calls) do
+    raise ArgumentError, "OpenAI tool response did not contain id: #{inspect(response)}"
   end
 
   defp usage!(%{"usage" => usage}) when is_map(usage), do: usage

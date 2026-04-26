@@ -7,7 +7,13 @@ defmodule AgentMachine.ToolHarness do
 
   @builtin_harnesses %{
     demo: [AgentMachine.Tools.Now],
-    local_files: [AgentMachine.Tools.WriteFile]
+    local_files: [
+      AgentMachine.Tools.CreateDir,
+      AgentMachine.Tools.ListFiles,
+      AgentMachine.Tools.ReadFile,
+      AgentMachine.Tools.SearchFiles,
+      AgentMachine.Tools.WriteFile
+    ]
   }
 
   def builtin!(nil), do: []

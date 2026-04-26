@@ -122,7 +122,7 @@ func (m model) setupView() string {
 		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
-		"/tools local-files <root> <timeout-ms>",
+		"/tools local-files <root> <timeout-ms> <max-rounds>",
 		"/tools off",
 		"/models reload",
 		"/model",
@@ -273,6 +273,15 @@ func agentEventLines(events []eventSummary) string {
 	lines := make([]string, 0, len(events))
 	for _, event := range events {
 		label := event.Type
+		if event.ToolCallID != "" {
+			label += " " + event.ToolCallID
+		}
+		if event.Tool != "" {
+			label += " " + event.Tool
+		}
+		if event.Round > 0 {
+			label += fmt.Sprintf(" round=%d", event.Round)
+		}
 		if event.Status != "" {
 			label += " " + event.Status
 		}
@@ -321,7 +330,7 @@ func helpText() string {
 		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
-		"/tools local-files <root> <timeout-ms>",
+		"/tools local-files <root> <timeout-ms> <max-rounds>",
 		"/tools off",
 		"/models reload",
 		"/models",

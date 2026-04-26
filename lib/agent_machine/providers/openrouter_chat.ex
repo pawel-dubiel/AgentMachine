@@ -20,13 +20,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     api_key = System.fetch_env!("OPENROUTER_API_KEY")
     timeout_ms = Keyword.fetch!(opts, :http_timeout_ms)
 
-    body =
-      %{
-        "model" => agent.model,
-        "messages" => messages(agent, opts)
-      }
-      |> ToolHarness.put_openrouter_tools!(opts)
-      |> JSON.encode!()
+    body = agent |> request_body(opts) |> JSON.encode!()
 
     headers = [
       {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)},
@@ -52,6 +46,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
          %{
            output: output_text!(message, tool_calls),
            tool_calls: tool_calls,
+           tool_state: tool_state(tool_calls, messages(agent, opts), message),
            usage: usage!(decoded)
          }}
 
@@ -63,17 +58,57 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     end
   end
 
-  defp messages(%Agent{instructions: nil} = agent, opts) do
+  if Mix.env() == :test do
+    def request_body_for_test!(%Agent{} = agent, opts), do: request_body(agent, opts)
+  end
+
+  defp request_body(%Agent{} = agent, opts) do
+    %{
+      "model" => agent.model,
+      "messages" => messages(agent, opts)
+    }
+    |> ToolHarness.put_openrouter_tools!(opts)
+  end
+
+  defp messages(%Agent{} = agent, opts) do
+    case Keyword.fetch(opts, :tool_continuation) do
+      {:ok, continuation} -> continuation_messages!(continuation)
+      :error -> initial_messages(agent, opts)
+    end
+  end
+
+  defp initial_messages(%Agent{instructions: nil} = agent, opts) do
     [
       %{"role" => "user", "content" => input(agent, opts)}
     ]
   end
 
-  defp messages(%Agent{instructions: instructions} = agent, opts) do
+  defp initial_messages(%Agent{instructions: instructions} = agent, opts) do
     [
       %{"role" => "system", "content" => instructions},
       %{"role" => "user", "content" => input(agent, opts)}
     ]
+  end
+
+  defp continuation_messages!(%{state: %{messages: messages}, results: results})
+       when is_list(messages) and is_list(results) do
+    messages ++ Enum.map(results, &tool_result_message!/1)
+  end
+
+  defp continuation_messages!(continuation) do
+    raise ArgumentError, "invalid OpenRouter tool continuation: #{inspect(continuation)}"
+  end
+
+  defp tool_result_message!(%{id: id, result: result}) when is_binary(id) and is_map(result) do
+    %{
+      "role" => "tool",
+      "tool_call_id" => id,
+      "content" => JSON.encode!(result)
+    }
+  end
+
+  defp tool_result_message!(result) do
+    raise ArgumentError, "invalid OpenRouter tool result: #{inspect(result)}"
   end
 
   defp input(agent, opts) do
@@ -103,6 +138,12 @@ defmodule AgentMachine.Providers.OpenRouterChat do
   defp choice_message!(choice) do
     raise ArgumentError,
           "OpenRouter response choice did not contain a message: #{inspect(choice)}"
+  end
+
+  defp tool_state([], _messages, _message), do: nil
+
+  defp tool_state(_tool_calls, messages, message) do
+    %{messages: messages ++ [message]}
   end
 
   defp output_text!(%{"content" => content}, _tool_calls)

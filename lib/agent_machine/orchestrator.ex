@@ -339,6 +339,7 @@ defmodule AgentMachine.Orchestrator do
 
     run =
       %{run | tasks: tasks}
+      |> append_stored_events(result.events || [])
       |> append_event(agent_finished_event(run.id, result))
 
     if should_retry?(run, task, result) do
@@ -571,6 +572,10 @@ defmodule AgentMachine.Orchestrator do
 
   defp append_events(run, events) do
     emit_events!(run.opts, events)
+    %{run | events: run.events ++ events}
+  end
+
+  defp append_stored_events(run, events) do
     %{run | events: run.events ++ events}
   end
 

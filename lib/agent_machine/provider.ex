@@ -12,7 +12,8 @@ defmodule AgentMachine.Provider do
                  required(:usage) => map(),
                  optional(:next_agents) => [map() | keyword() | Agent.t()],
                  optional(:artifacts) => map(),
-                 optional(:tool_calls) => [map()]
+                 optional(:tool_calls) => [map()],
+                 optional(:tool_state) => term()
                }}
               | {:error, term()}
 end

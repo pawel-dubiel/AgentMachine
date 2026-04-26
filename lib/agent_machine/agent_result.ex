@@ -13,6 +13,7 @@ defmodule AgentMachine.AgentResult do
     :next_agents,
     :artifacts,
     :tool_results,
+    :events,
     :usage,
     :error,
     :started_at,

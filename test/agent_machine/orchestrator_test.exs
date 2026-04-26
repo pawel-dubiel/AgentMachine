@@ -465,14 +465,120 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
-               tool_timeout_ms: 100
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2
              )
 
     assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].output == "final answer: HELLO"
 
     assert run.results["tool-user"].tool_results == %{
              "uppercase" => %{value: "HELLO", attempt: 1}
            }
+
+    assert run.usage.input_tokens == 2
+    assert run.usage.output_tokens == 6
+
+    assert run.events
+           |> Enum.filter(&(&1.type in [:tool_call_started, :tool_call_finished]))
+           |> Enum.map(& &1.tool_call_id) == ["uppercase", "uppercase"]
+  end
+
+  test "runs multiple provider tool rounds up to the explicit limit" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.MultiRoundToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].output == "final answer: HELLO AGAIN"
+
+    assert Map.keys(run.results["tool-user"].tool_results) |> Enum.sort() == [
+             "uppercase-1",
+             "uppercase-2"
+           ]
+  end
+
+  test "fails when provider exceeds tool max rounds" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.MultiRoundToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "exceeded :tool_max_rounds 1"
+  end
+
+  test "fails when provider tool calls omit tool_state" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolMissingState,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "tool_state"
+  end
+
+  test "fails when provider repeats a tool call id across rounds" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.RepeatedToolID,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "globally unique"
   end
 
   test "returns an agent error when a tool call fails" do
@@ -490,11 +596,13 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Failing],
-               tool_timeout_ms: 100
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
              )
 
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "tool AgentMachine.TestTools.Failing failed"
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
   end
 
   test "rejects a tool call outside allowed_tools" do
@@ -512,7 +620,8 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Failing],
-               tool_timeout_ms: 100
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
              )
 
     assert run.results["tool-user"].status == :error
@@ -534,7 +643,8 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Sleeping],
-               tool_timeout_ms: 1
+               tool_timeout_ms: 1,
+               tool_max_rounds: 1
              )
 
     assert run.results["tool-user"].status == :error
@@ -892,7 +1002,28 @@ defmodule AgentMachine.TestProviders.ToolUsing do
   alias AgentMachine.Agent
 
   @impl true
-  def complete(%Agent{} = agent, _opts) do
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{value: value}}]} -> final_response(value)
+      nil -> tool_request(agent)
+    end
+  end
+
+  defp final_response(value) do
+    output = "final answer: #{value}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp tool_request(agent) do
     output = "called uppercase tool"
 
     {:ok,
@@ -905,6 +1036,7 @@ defmodule AgentMachine.TestProviders.ToolUsing do
            input: %{value: agent.input}
          }
        ],
+       tool_state: %{round: 1},
        usage: usage(agent, output)
      }}
   end
@@ -918,6 +1050,181 @@ defmodule AgentMachine.TestProviders.ToolUsing do
       output_tokens: output_tokens,
       total_tokens: input_tokens + output_tokens
     }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.MultiRoundToolUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{state: %{round: 1}} -> second_tool_request()
+      %{state: %{round: 2}, results: results} -> final_response(results)
+      nil -> first_tool_request(agent)
+    end
+  end
+
+  defp second_tool_request do
+    output = "called second uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "uppercase-2",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: "hello again"}
+         }
+       ],
+       tool_state: %{round: 2},
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp final_response(results) do
+    value = results |> List.first() |> Map.fetch!(:result) |> Map.fetch!(:value)
+    output = "final answer: #{value}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp first_tool_request(agent) do
+    output = "called first uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "uppercase-1",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: agent.input}
+         }
+       ],
+       tool_state: %{round: 1},
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.ToolMissingState do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, _opts) do
+    output = "called uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "uppercase",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: agent.input}
+         }
+       ],
+       usage: %{input_tokens: 1, output_tokens: 3, total_tokens: 4}
+     }}
+  end
+end
+
+defmodule AgentMachine.TestProviders.RepeatedToolID do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{state: %{round: 1}} -> repeated_tool_request()
+      nil -> first_tool_request(agent)
+    end
+  end
+
+  defp repeated_tool_request do
+    output = "called duplicate uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "duplicate",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: "again"}
+         }
+       ],
+       tool_state: %{round: 2},
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp first_tool_request(agent) do
+    output = "called uppercase tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "duplicate",
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: agent.input}
+         }
+       ],
+       tool_state: %{round: 1},
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
   end
 
   defp token_count(text) do
@@ -946,6 +1253,7 @@ defmodule AgentMachine.TestProviders.ToolFailing do
            input: %{value: agent.input}
          }
        ],
+       tool_state: %{round: 1},
        usage: usage(agent, output)
      }}
   end
@@ -987,6 +1295,7 @@ defmodule AgentMachine.TestProviders.ToolSleeping do
            input: %{sleep_ms: 20}
          }
        ],
+       tool_state: %{round: 1},
        usage: usage(agent, output)
      }}
   end

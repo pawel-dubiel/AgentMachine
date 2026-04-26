@@ -4,6 +4,11 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added provider-native tool continuation loops with explicit `tool_max_rounds`, provider continuation payloads, and TUI pass-through.
+- Added an explicit `create_dir` tool to the constrained `local-files` harness.
+- Hardened the `local-files` path guard to require an existing root and reject symlink escapes.
+- Added `read_file` and `list_files` to the constrained `local-files` tool harness.
+- Added `search_files` to the `local-files` tool harness using `rg` for fast constrained file search.
 - Added a constrained `local-files` tool harness, `write_file` tool, and TUI `/tools local-files <root> <timeout-ms>` setup.
 - Persisted TUI workflow, provider, and provider-specific selected model settings across restarts.
 - Added `mix agent_machine.run --log-file <path>` to persist Elixir-side JSONL run events and final summaries.

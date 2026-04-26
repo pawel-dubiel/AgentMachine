@@ -132,6 +132,7 @@ func buildRunArgs(config runConfig) []string {
 		args = append(args,
 			"--tool-harness", config.ToolHarness,
 			"--tool-timeout-ms", config.ToolTimeout,
+			"--tool-max-rounds", config.ToolMaxRounds,
 		)
 		if config.ToolRoot != "" {
 			args = append(args, "--tool-root", config.ToolRoot)

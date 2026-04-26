@@ -17,6 +17,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     http_timeout_ms: :integer,
     tool_harness: :string,
     tool_timeout_ms: :integer,
+    tool_max_rounds: :integer,
     tool_root: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
@@ -135,6 +136,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
       pricing: pricing_from_opts(opts),
       tool_harness: tool_harness_from_opts!(opts),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
+      tool_max_rounds: Keyword.get(opts, :tool_max_rounds),
       tool_root: Keyword.get(opts, :tool_root)
     }
   end

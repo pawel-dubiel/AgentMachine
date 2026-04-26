@@ -4,6 +4,7 @@ defmodule AgentMachine.Tools.WriteFile do
   """
 
   @behaviour AgentMachine.Tool
+  alias AgentMachine.Tools.PathGuard
 
   @impl true
   def definition do
@@ -28,20 +29,15 @@ defmodule AgentMachine.Tools.WriteFile do
 
   @impl true
   def run(input, opts) when is_map(input) do
-    root = opts |> Keyword.fetch!(:tool_root) |> require_non_empty_binary!(:tool_root)
+    root = PathGuard.root!(opts)
     path = input |> fetch_input!("path") |> require_non_empty_binary!("path")
     content = input |> fetch_input!("content") |> require_binary!("content")
+    target = PathGuard.writable_target!(root, path)
 
-    root = Path.expand(root)
-    target = target_path(root, path)
-
-    if inside_root?(target, root) do
-      target |> Path.dirname() |> File.mkdir_p!()
-      File.write!(target, content)
-      {:ok, %{path: target, bytes: byte_size(content)}}
-    else
-      {:error, {:outside_tool_root, target, root}}
-    end
+    File.write!(target, content)
+    {:ok, %{path: target, bytes: byte_size(content)}}
+  rescue
+    exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end
 
   def run(input, _opts), do: {:error, {:invalid_input, input}}
@@ -71,14 +67,4 @@ defmodule AgentMachine.Tools.WriteFile do
   defp require_binary!(value, field) do
     raise ArgumentError, "#{field} must be a binary, got: #{inspect(value)}"
   end
-
-  defp target_path(root, path) do
-    if Path.type(path) == :absolute do
-      Path.expand(path)
-    else
-      Path.expand(path, root)
-    end
-  end
-
-  defp inside_root?(target, root), do: target == root or String.starts_with?(target, root <> "/")
 end

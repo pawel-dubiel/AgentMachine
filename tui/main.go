@@ -46,6 +46,9 @@ type eventSummary struct {
 	Status        string `json:"status"`
 	Attempt       int    `json:"attempt"`
 	NextAttempt   int    `json:"next_attempt"`
+	Round         int    `json:"round"`
+	ToolCallID    string `json:"tool_call_id"`
+	Tool          string `json:"tool"`
 	DurationMS    *int   `json:"duration_ms"`
 	Reason        string `json:"reason"`
 	At            string `json:"at"`
@@ -116,17 +119,18 @@ const (
 )
 
 type runConfig struct {
-	Task        string
-	Workflow    runWorkflow
-	Provider    provider
-	APIKey      string
-	Model       string
-	InputPrice  string
-	OutputPrice string
-	HTTPTimeout string
-	ToolHarness string
-	ToolRoot    string
-	ToolTimeout string
+	Task          string
+	Workflow      runWorkflow
+	Provider      provider
+	APIKey        string
+	Model         string
+	InputPrice    string
+	OutputPrice   string
+	HTTPTimeout   string
+	ToolHarness   string
+	ToolRoot      string
+	ToolTimeout   string
+	ToolMaxRounds string
 }
 
 type savedConfig struct {
@@ -139,6 +143,7 @@ type savedConfig struct {
 	ToolHarness      string `json:"tool_harness,omitempty"`
 	ToolRoot         string `json:"tool_root,omitempty"`
 	ToolTimeout      string `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds    string `json:"tool_max_rounds,omitempty"`
 }
 
 type chatMessage struct {
@@ -623,9 +628,10 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolHarness = ""
 		m.savedConfig.ToolRoot = ""
 		m.savedConfig.ToolTimeout = ""
+		m.savedConfig.ToolMaxRounds = ""
 	case "local-files":
-		if len(args) != 3 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools local-files <root> <timeout-ms>"})
+		if len(args) != 4 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools local-files <root> <timeout-ms> <max-rounds>"})
 			return m, nil
 		}
 		if strings.TrimSpace(args[1]) == "" {
@@ -636,11 +642,16 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 			return m, nil
 		}
+		if err := validatePositiveInt(args[3], "tool max rounds"); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
 		m.savedConfig.ToolHarness = "local-files"
 		m.savedConfig.ToolRoot = args[1]
 		m.savedConfig.ToolTimeout = args[2]
+		m.savedConfig.ToolMaxRounds = args[3]
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files <root> <timeout-ms>"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files <root> <timeout-ms> <max-rounds>"})
 		return m, nil
 	}
 
@@ -855,14 +866,15 @@ func (m *model) applySummaryResults(summary summary) {
 
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
-		Task:        task,
-		Workflow:    m.workflow,
-		Provider:    m.provider,
-		APIKey:      m.apiKey(),
-		Model:       m.modelID(),
-		ToolHarness: m.savedConfig.ToolHarness,
-		ToolRoot:    m.savedConfig.ToolRoot,
-		ToolTimeout: m.savedConfig.ToolTimeout,
+		Task:          task,
+		Workflow:      m.workflow,
+		Provider:      m.provider,
+		APIKey:        m.apiKey(),
+		Model:         m.modelID(),
+		ToolHarness:   m.savedConfig.ToolHarness,
+		ToolRoot:      m.savedConfig.ToolRoot,
+		ToolTimeout:   m.savedConfig.ToolTimeout,
+		ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -1030,8 +1042,8 @@ func validateConfig(config runConfig) error {
 func validateToolConfig(config runConfig) error {
 	switch config.ToolHarness {
 	case "":
-		if config.ToolRoot != "" || config.ToolTimeout != "" {
-			return errors.New("tool root and timeout require a selected tool harness")
+		if config.ToolRoot != "" || config.ToolTimeout != "" || config.ToolMaxRounds != "" {
+			return errors.New("tool root, timeout, and max rounds require a selected tool harness")
 		}
 		return nil
 	case "local-files":
@@ -1039,6 +1051,9 @@ func validateToolConfig(config runConfig) error {
 			return errors.New("tool root must not be empty for local-files")
 		}
 		if err := validatePositiveInt(config.ToolTimeout, "tool timeout ms"); err != nil {
+			return err
+		}
+		if err := validatePositiveInt(config.ToolMaxRounds, "tool max rounds"); err != nil {
 			return err
 		}
 		return nil
@@ -1165,7 +1180,7 @@ func (m model) toolsStatus() string {
 	case "":
 		return "tools: off"
 	case "local-files":
-		return "tools: local-files root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout)
+		return "tools: local-files root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds)
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
 	}
@@ -1193,11 +1208,12 @@ func (m *model) applySavedSettings() error {
 
 	if strings.TrimSpace(m.savedConfig.ToolHarness) != "" {
 		if err := validateToolConfig(runConfig{
-			Workflow:    workflowBasic,
-			Provider:    providerEcho,
-			ToolHarness: m.savedConfig.ToolHarness,
-			ToolRoot:    m.savedConfig.ToolRoot,
-			ToolTimeout: m.savedConfig.ToolTimeout,
+			Workflow:      workflowBasic,
+			Provider:      providerEcho,
+			ToolHarness:   m.savedConfig.ToolHarness,
+			ToolRoot:      m.savedConfig.ToolRoot,
+			ToolTimeout:   m.savedConfig.ToolTimeout,
+			ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 		}); err != nil {
 			return fmt.Errorf("invalid saved tools in TUI config: %w", err)
 		}

@@ -84,13 +84,15 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 2,
         max_attempts: 1,
         tool_harness: :demo,
-        tool_timeout_ms: 100
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2
       })
 
     {_agents, opts} = Basic.build!(spec)
 
     assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.Now]
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
+    assert Keyword.fetch!(opts, :tool_max_rounds) == 2
   end
 
   test "requires tool timeout when a tool harness is enabled" do
@@ -102,7 +104,23 @@ defmodule AgentMachine.ClientRunnerTest do
         timeout_ms: 1_000,
         max_steps: 2,
         max_attempts: 1,
-        tool_harness: :demo
+        tool_harness: :demo,
+        tool_max_rounds: 2
+      })
+    end
+  end
+
+  test "requires tool max rounds when a tool harness is enabled" do
+    assert_raise ArgumentError, ~r/:tool_max_rounds/, fn ->
+      RunSpec.new!(%{
+        task: "what time is it?",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :demo,
+        tool_timeout_ms: 100
       })
     end
   end
@@ -118,13 +136,22 @@ defmodule AgentMachine.ClientRunnerTest do
         max_attempts: 1,
         tool_harness: :local_files,
         tool_timeout_ms: 100,
+        tool_max_rounds: 2,
         tool_root: "/tmp/agent-machine"
       })
 
     {_agents, opts} = Basic.build!(spec)
 
-    assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.WriteFile]
+    assert Keyword.fetch!(opts, :allowed_tools) == [
+             AgentMachine.Tools.CreateDir,
+             AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.SearchFiles,
+             AgentMachine.Tools.WriteFile
+           ]
+
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
+    assert Keyword.fetch!(opts, :tool_max_rounds) == 2
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
   end
 
@@ -138,7 +165,8 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 2,
         max_attempts: 1,
         tool_harness: :local_files,
-        tool_timeout_ms: 100
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2
       })
     end
   end
@@ -340,6 +368,31 @@ defmodule AgentMachine.ClientRunnerTest do
                &1
              )
            )
+  end
+
+  test "mix agent_machine.run requires tool max rounds with a tool harness" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:tool_max_rounds/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "demo",
+        "--tool-timeout-ms",
+        "100",
+        "--json",
+        "what time is it?"
+      ])
+    end
   end
 
   test "mix agent_machine.run writes JSONL run log file" do

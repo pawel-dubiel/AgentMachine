@@ -78,16 +78,17 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 
 func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
-		Task:        "create hello",
-		Workflow:    workflowBasic,
-		Provider:    providerOpenRouter,
-		Model:       "qwen/qwen3.5-flash-02-23",
-		InputPrice:  "0.01",
-		OutputPrice: "0.01",
-		HTTPTimeout: "25000",
-		ToolHarness: "local-files",
-		ToolRoot:    "/Users/pawel/mywiki",
-		ToolTimeout: "1000",
+		Task:          "create hello",
+		Workflow:      workflowBasic,
+		Provider:      providerOpenRouter,
+		Model:         "qwen/qwen3.5-flash-02-23",
+		InputPrice:    "0.01",
+		OutputPrice:   "0.01",
+		HTTPTimeout:   "25000",
+		ToolHarness:   "local-files",
+		ToolRoot:      "/Users/pawel/mywiki",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
 	})
 
 	expected := []string{
@@ -104,6 +105,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		"--output-price-per-million", "0.01",
 		"--tool-harness", "local-files",
 		"--tool-timeout-ms", "1000",
+		"--tool-max-rounds", "2",
 		"--tool-root", "/Users/pawel/mywiki",
 		"create hello",
 	}
@@ -154,15 +156,47 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 
 func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
 	err := validateConfig(runConfig{
-		Task:        "write a file",
-		Workflow:    workflowBasic,
-		Provider:    providerEcho,
-		ToolHarness: "local-files",
-		ToolTimeout: "1000",
+		Task:          "write a file",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "local-files",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "tool root") {
 		t.Fatalf("expected tool root error, got %v", err)
+	}
+}
+
+func TestValidateConfigRequiresToolMaxRoundsForLocalFiles(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:        "write a file",
+		Workflow:    workflowBasic,
+		Provider:    providerEcho,
+		ToolHarness: "local-files",
+		ToolRoot:    "/Users/pawel/mywiki",
+		ToolTimeout: "1000",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "tool max rounds") {
+		t.Fatalf("expected tool max rounds error, got %v", err)
+	}
+}
+
+func TestAgentDetailRendersToolEvents(t *testing.T) {
+	lines := agentEventLines([]eventSummary{
+		{
+			Type:       "tool_call_finished",
+			ToolCallID: "call-1",
+			Tool:       "write_file",
+			Round:      1,
+			Status:     "ok",
+		},
+	})
+
+	if !strings.Contains(lines, "call-1 write_file round=1 ok") {
+		t.Fatalf("expected rendered tool event, got %q", lines)
 	}
 }
 
@@ -445,7 +479,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000")
+	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000 2")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "local-files" {
@@ -456,7 +490,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" {
+	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
 	}
 }
@@ -466,9 +500,10 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
 
 	if err := saveSavedConfig(configPath, savedConfig{
-		ToolHarness: "local-files",
-		ToolRoot:    "/Users/pawel/mywiki",
-		ToolTimeout: "1000",
+		ToolHarness:   "local-files",
+		ToolRoot:      "/Users/pawel/mywiki",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
 	}); err != nil {
 		t.Fatalf("expected saved config write to succeed, got %v", err)
 	}
@@ -481,7 +516,7 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 	updated, _ := m.handleCommand("/tools off")
 	result := updated.(model)
 
-	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" || result.savedConfig.ToolTimeout != "" {
+	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" || result.savedConfig.ToolTimeout != "" || result.savedConfig.ToolMaxRounds != "" {
 		t.Fatalf("expected cleared tool config, got %#v", result.savedConfig)
 	}
 }
@@ -525,6 +560,7 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 		ToolHarness:     "local-files",
 		ToolRoot:        "/Users/pawel/mywiki",
 		ToolTimeout:     "1000",
+		ToolMaxRounds:   "2",
 	}); err != nil {
 		t.Fatalf("expected saved config write to succeed, got %v", err)
 	}
@@ -934,6 +970,7 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 		ToolHarness:      "local-files",
 		ToolRoot:         "/Users/pawel/mywiki",
 		ToolTimeout:      "1000",
+		ToolMaxRounds:    "2",
 	})
 	if err != nil {
 		t.Fatalf("expected save to succeed, got %v", err)
@@ -971,6 +1008,9 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 	}
 	if loaded.ToolTimeout != "1000" {
 		t.Fatalf("unexpected tool timeout: %q", loaded.ToolTimeout)
+	}
+	if loaded.ToolMaxRounds != "2" {
+		t.Fatalf("unexpected tool max rounds: %q", loaded.ToolMaxRounds)
 	}
 
 	info, err := os.Stat(path)

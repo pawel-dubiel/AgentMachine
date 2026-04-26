@@ -13,14 +13,14 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp execute(agent, opts, run_id, attempt, started_at) do
-    case agent.provider.complete(agent, opts) do
-      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
+    case complete_agent(agent, opts, run_id, attempt) do
+      {:ok, %{payload: %{output: output} = payload, usage: provider_usage} = completion}
+      when is_binary(output) ->
         payload = DelegationResponse.normalize_payload!(agent, payload)
         output = payload.output
         usage = Usage.from_provider!(agent, run_id, provider_usage)
         next_agents = next_agents_from_payload!(payload)
         artifacts = artifacts_from_payload!(payload)
-        tool_results = tool_results_from_payload!(payload, opts)
         :ok = UsageLedger.record!(usage)
 
         %AgentResult{
@@ -31,13 +31,26 @@ defmodule AgentMachine.AgentRunner do
           output: output,
           next_agents: next_agents,
           artifacts: artifacts,
-          tool_results: tool_results,
+          tool_results: completion.tool_results,
+          events: completion.events,
           usage: usage,
           started_at: started_at,
           finished_at: DateTime.utc_now()
         }
 
-      {:ok, other} ->
+      {:error, reason, events} ->
+        %AgentResult{
+          run_id: run_id,
+          agent_id: agent.id,
+          status: :error,
+          attempt: attempt,
+          error: reason,
+          events: events,
+          started_at: started_at,
+          finished_at: DateTime.utc_now()
+        }
+
+      {:invalid, other} ->
         error(
           agent,
           run_id,
@@ -46,17 +59,8 @@ defmodule AgentMachine.AgentRunner do
           "provider returned invalid success payload: #{inspect(other)}"
         )
 
-      {:error, reason} ->
+      {:provider_error, reason} ->
         error(agent, run_id, attempt, started_at, inspect(reason))
-
-      other ->
-        error(
-          agent,
-          run_id,
-          attempt,
-          started_at,
-          "provider returned invalid payload: #{inspect(other)}"
-        )
     end
   rescue
     exception ->
@@ -66,6 +70,7 @@ defmodule AgentMachine.AgentRunner do
         status: :error,
         attempt: attempt,
         error: Exception.format(:error, exception, __STACKTRACE__),
+        events: [],
         started_at: started_at,
         finished_at: DateTime.utc_now()
       }
@@ -78,9 +83,89 @@ defmodule AgentMachine.AgentRunner do
       status: :error,
       attempt: attempt,
       error: reason,
+      events: [],
       started_at: started_at,
       finished_at: DateTime.utc_now()
     }
+  end
+
+  defp complete_agent(agent, opts, run_id, attempt) do
+    context = %{run_id: run_id, attempt: attempt}
+
+    state = %{
+      round: 0,
+      usage: empty_usage(),
+      tool_results: %{},
+      tool_call_ids: MapSet.new(),
+      events: []
+    }
+
+    do_complete_agent(agent, opts, context, state)
+  end
+
+  defp do_complete_agent(agent, opts, context, state) do
+    case agent.provider.complete(agent, opts) do
+      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
+        state = %{state | usage: sum_usage!(state.usage, provider_usage)}
+        tool_calls = tool_calls_from_payload!(payload)
+
+        if tool_calls == [] do
+          {:ok,
+           %{
+             payload: payload,
+             usage: state.usage,
+             tool_results: state.tool_results,
+             events: state.events
+           }}
+        else
+          continue_after_tool_calls(agent, opts, context, state, payload, tool_calls)
+        end
+
+      {:ok, other} ->
+        {:invalid, other}
+
+      {:error, reason} ->
+        {:provider_error, reason}
+
+      other ->
+        {:invalid, other}
+    end
+  end
+
+  defp continue_after_tool_calls(agent, opts, context, state, payload, tool_calls) do
+    max_rounds = tool_max_rounds_from_opts!(opts)
+
+    if state.round >= max_rounds do
+      {:error, "provider exceeded :tool_max_rounds #{max_rounds}", state.events}
+    else
+      with {:ok, tool_state} <- tool_state_from_payload(payload),
+           {:ok, tool_call_ids} <- validate_new_tool_call_ids(tool_calls, state.tool_call_ids),
+           {:ok, round_results, round_events} <-
+             run_tool_calls(
+               tool_calls,
+               opts,
+               context.run_id,
+               agent.id,
+               context.attempt,
+               state.round + 1
+             ) do
+        continuation = %{state: tool_state, results: round_results}
+        opts = Keyword.put(opts, :tool_continuation, continuation)
+
+        state = %{
+          state
+          | round: state.round + 1,
+            tool_results: merge_tool_results!(state.tool_results, round_results),
+            tool_call_ids: tool_call_ids,
+            events: state.events ++ round_events
+        }
+
+        do_complete_agent(agent, opts, context, state)
+      else
+        {:error, reason} -> {:error, reason, state.events}
+        {:error, reason, round_events} -> {:error, reason, state.events ++ round_events}
+      end
+    end
   end
 
   defp next_agents_from_payload!(payload) when is_map(payload) do
@@ -110,26 +195,26 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp tool_results_from_payload!(payload, opts) when is_map(payload) do
+  defp tool_calls_from_payload!(payload) when is_map(payload) do
     case fetch_optional_payload_field(payload, :tool_calls) do
       :error ->
-        %{}
+        []
 
       {:ok, []} ->
-        %{}
+        []
 
       {:ok, tool_calls} when is_list(tool_calls) ->
-        allowed_tools = allowed_tools_from_opts!(opts)
-        tool_timeout_ms = tool_timeout_ms_from_opts!(opts)
-
-        validate_unique_tool_call_ids!(tool_calls)
-
         tool_calls
-        |> Enum.map(&run_tool_call!(&1, opts, allowed_tools, tool_timeout_ms))
-        |> Map.new()
 
       {:ok, tool_calls} ->
         raise ArgumentError, "provider tool_calls must be a list, got: #{inspect(tool_calls)}"
+    end
+  end
+
+  defp tool_state_from_payload(payload) do
+    case fetch_optional_payload_field(payload, :tool_state) do
+      {:ok, state} -> {:ok, state}
+      :error -> {:error, "provider tool_calls require provider tool_state"}
     end
   end
 
@@ -162,7 +247,42 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp run_tool_call!(tool_call, opts, allowed_tools, tool_timeout_ms) when is_map(tool_call) do
+  defp tool_max_rounds_from_opts!(opts) do
+    case Keyword.fetch(opts, :tool_max_rounds) do
+      {:ok, max_rounds} when is_integer(max_rounds) and max_rounds > 0 ->
+        max_rounds
+
+      {:ok, max_rounds} ->
+        raise ArgumentError,
+              ":tool_max_rounds must be a positive integer, got: #{inspect(max_rounds)}"
+
+      :error ->
+        raise ArgumentError, "provider tool_calls require explicit :tool_max_rounds option"
+    end
+  end
+
+  defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round) do
+    allowed_tools = allowed_tools_from_opts!(opts)
+    tool_timeout_ms = tool_timeout_ms_from_opts!(opts)
+
+    Enum.reduce_while(tool_calls, {:ok, [], []}, fn tool_call, {:ok, results, events} ->
+      case run_tool_call(tool_call, opts, allowed_tools, tool_timeout_ms, %{
+             run_id: run_id,
+             agent_id: agent_id,
+             attempt: attempt,
+             round: round
+           }) do
+        {:ok, result, call_events} ->
+          {:cont, {:ok, results ++ [result], events ++ call_events}}
+
+        {:error, reason, call_events} ->
+          {:halt, {:error, reason, events ++ call_events}}
+      end
+    end)
+  end
+
+  defp run_tool_call(tool_call, opts, allowed_tools, tool_timeout_ms, event_context)
+       when is_map(tool_call) do
     id = fetch_tool_call_field!(tool_call, :id)
     tool = fetch_tool_call_field!(tool_call, :tool)
     input = fetch_tool_call_field!(tool_call, :input)
@@ -172,23 +292,35 @@ defmodule AgentMachine.AgentRunner do
     require_allowed_tool!(tool, allowed_tools)
     require_tool_input!(input)
 
+    started_at = DateTime.utc_now()
+    started_event = tool_call_started_event(event_context, id, tool, started_at)
+    emit_event!(opts, started_event)
+
     case run_tool_with_timeout(tool, input, opts, tool_timeout_ms) do
       {:ok, result} when is_map(result) ->
-        {id, result}
+        finished_at = DateTime.utc_now()
+
+        finished_event =
+          tool_call_finished_event(event_context, id, tool, started_at, finished_at)
+
+        emit_event!(opts, finished_event)
+        {:ok, %{id: id, result: result}, [started_event, finished_event]}
 
       {:ok, result} ->
-        raise ArgumentError, "tool #{inspect(tool)} returned invalid result: #{inspect(result)}"
+        reason = "tool #{inspect(tool)} returned invalid result: #{inspect(result)}"
+        failed_tool_call(opts, event_context, id, tool, started_at, reason)
 
       {:error, reason} ->
-        raise RuntimeError,
-              "tool #{inspect(tool)} failed for call #{inspect(id)}: #{inspect(reason)}"
+        reason = "tool #{inspect(tool)} failed for call #{inspect(id)}: #{inspect(reason)}"
+        failed_tool_call(opts, event_context, id, tool, started_at, reason)
 
       other ->
-        raise ArgumentError, "tool #{inspect(tool)} returned invalid payload: #{inspect(other)}"
+        reason = "tool #{inspect(tool)} returned invalid payload: #{inspect(other)}"
+        failed_tool_call(opts, event_context, id, tool, started_at, reason)
     end
   end
 
-  defp run_tool_call!(tool_call, _opts, _allowed_tools, _tool_timeout_ms) do
+  defp run_tool_call(tool_call, _opts, _allowed_tools, _tool_timeout_ms, _event_context) do
     raise ArgumentError, "tool call must be a map, got: #{inspect(tool_call)}"
   end
 
@@ -200,11 +332,21 @@ defmodule AgentMachine.AgentRunner do
         result
 
       nil ->
-        raise RuntimeError, "tool #{inspect(tool)} timed out after #{tool_timeout_ms}ms"
+        {:error, "timed out after #{tool_timeout_ms}ms"}
     end
   end
 
-  defp validate_unique_tool_call_ids!(tool_calls) do
+  defp failed_tool_call(opts, event_context, id, tool, started_at, reason) do
+    finished_at = DateTime.utc_now()
+
+    failed_event =
+      tool_call_failed_event(event_context, id, tool, started_at, finished_at, reason)
+
+    emit_event!(opts, failed_event)
+    {:error, reason, [tool_call_started_event(event_context, id, tool, started_at), failed_event]}
+  end
+
+  defp validate_new_tool_call_ids(tool_calls, seen_ids) do
     ids =
       Enum.map(tool_calls, fn
         tool_call when is_map(tool_call) -> fetch_tool_call_field!(tool_call, :id)
@@ -217,8 +359,20 @@ defmodule AgentMachine.AgentRunner do
       |> Enum.filter(fn {_id, count} -> count > 1 end)
       |> Enum.map(fn {id, _count} -> id end)
 
-    if duplicates != [] do
-      raise ArgumentError, "tool call ids must be unique, duplicates: #{inspect(duplicates)}"
+    repeated =
+      ids
+      |> Enum.filter(&MapSet.member?(seen_ids, &1))
+      |> Enum.uniq()
+
+    cond do
+      duplicates != [] ->
+        {:error, "tool call ids must be unique, duplicates: #{inspect(duplicates)}"}
+
+      repeated != [] ->
+        {:error, "tool call ids must be globally unique, repeated: #{inspect(repeated)}"}
+
+      true ->
+        {:ok, Enum.reduce(ids, seen_ids, &MapSet.put(&2, &1))}
     end
   end
 
@@ -262,6 +416,104 @@ defmodule AgentMachine.AgentRunner do
 
   defp require_tool_input!(input) do
     raise ArgumentError, "tool input must be a map, got: #{inspect(input)}"
+  end
+
+  defp merge_tool_results!(tool_results, round_results) do
+    Enum.reduce(round_results, tool_results, fn %{id: id, result: result}, acc ->
+      Map.put(acc, id, result)
+    end)
+  end
+
+  defp empty_usage do
+    %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
+  end
+
+  defp sum_usage!(left, right) do
+    %{
+      input_tokens: usage_integer!(left, :input_tokens) + usage_integer!(right, :input_tokens),
+      output_tokens: usage_integer!(left, :output_tokens) + usage_integer!(right, :output_tokens),
+      total_tokens: usage_integer!(left, :total_tokens) + usage_integer!(right, :total_tokens)
+    }
+  end
+
+  defp usage_integer!(usage, field) when is_map(usage) do
+    value =
+      cond do
+        Map.has_key?(usage, field) -> Map.fetch!(usage, field)
+        Map.has_key?(usage, Atom.to_string(field)) -> Map.fetch!(usage, Atom.to_string(field))
+        true -> raise ArgumentError, "provider usage is missing required field: #{inspect(field)}"
+      end
+
+    if is_integer(value) and value >= 0 do
+      value
+    else
+      raise ArgumentError,
+            "provider usage #{inspect(field)} must be a non-negative integer, got: #{inspect(value)}"
+    end
+  end
+
+  defp tool_call_started_event(context, id, tool, at) do
+    %{
+      type: :tool_call_started,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      round: context.round,
+      tool_call_id: id,
+      tool: tool_name(tool),
+      status: :running,
+      at: at
+    }
+  end
+
+  defp tool_call_finished_event(context, id, tool, started_at, finished_at) do
+    %{
+      type: :tool_call_finished,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      round: context.round,
+      tool_call_id: id,
+      tool: tool_name(tool),
+      status: :ok,
+      duration_ms: duration_ms(started_at, finished_at),
+      at: finished_at
+    }
+  end
+
+  defp tool_call_failed_event(context, id, tool, started_at, finished_at, reason) do
+    %{
+      type: :tool_call_failed,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      round: context.round,
+      tool_call_id: id,
+      tool: tool_name(tool),
+      status: :error,
+      duration_ms: duration_ms(started_at, finished_at),
+      reason: reason,
+      at: finished_at
+    }
+  end
+
+  defp emit_event!(opts, event) do
+    case Keyword.fetch(opts, :event_sink) do
+      :error -> :ok
+      {:ok, sink} -> sink.(event)
+    end
+  end
+
+  defp duration_ms(started_at, finished_at) do
+    DateTime.diff(finished_at, started_at, :millisecond)
+  end
+
+  defp tool_name(tool) do
+    if function_exported?(tool, :definition, 0) do
+      tool.definition().name
+    else
+      inspect(tool)
+    end
   end
 
   defp fetch_optional_payload_field(payload, field) do
