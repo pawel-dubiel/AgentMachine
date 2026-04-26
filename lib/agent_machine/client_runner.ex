@@ -3,7 +3,7 @@ defmodule AgentMachine.ClientRunner do
   High-level client runner used by CLI and TUI frontends.
   """
 
-  alias AgentMachine.{JSON, Orchestrator, RunSpec}
+  alias AgentMachine.{EventSummary, JSON, Orchestrator, RunSpec}
   alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Skills.{Manifest, Prompt, Selector}
   alias AgentMachine.Workflows.{Agentic, Basic}
@@ -174,13 +174,29 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp summarize_event(event) do
-    Map.new(event, fn
+    event
+    |> EventSummary.enrich()
+    |> Map.new(fn
       {:type, type} -> {:type, Atom.to_string(type)}
-      {key, value} when is_atom(value) and not is_nil(value) -> {key, Atom.to_string(value)}
       {:at, %DateTime{} = at} -> {:at, DateTime.to_iso8601(at)}
-      {key, value} -> {key, value}
+      {key, value} -> {key, summarize_event_value(value)}
     end)
   end
+
+  defp summarize_event_value(%DateTime{} = at), do: DateTime.to_iso8601(at)
+
+  defp summarize_event_value(value) when is_atom(value) and not is_nil(value) do
+    Atom.to_string(value)
+  end
+
+  defp summarize_event_value(value) when is_map(value) do
+    Map.new(value, fn {key, nested} -> {key, summarize_event_value(nested)} end)
+  end
+
+  defp summarize_event_value(value) when is_list(value),
+    do: Enum.map(value, &summarize_event_value/1)
+
+  defp summarize_event_value(value), do: value
 
   defp stringify_map(map) when is_map(map), do: map
 

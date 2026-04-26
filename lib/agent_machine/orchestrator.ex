@@ -433,10 +433,12 @@ defmodule AgentMachine.Orchestrator do
       tasks = Map.merge(run.tasks, new_tasks)
 
       agent_order = run.agent_order ++ Enum.map(next_agents, & &1.id)
+      delegation_event = agent_delegation_scheduled_event(run.id, result.agent_id, next_agents)
 
       {:ok,
        run
        |> Map.merge(%{tasks: tasks, agent_order: agent_order, step_count: step_count})
+       |> append_event(delegation_event)
        |> append_events(events)}
     end
   end
@@ -666,6 +668,17 @@ defmodule AgentMachine.Orchestrator do
       agent_id: agent_id,
       next_attempt: next_attempt,
       reason: reason,
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp agent_delegation_scheduled_event(run_id, agent_id, next_agents) do
+    %{
+      type: :agent_delegation_scheduled,
+      run_id: run_id,
+      agent_id: agent_id,
+      count: length(next_agents),
+      delegated_agent_ids: Enum.map(next_agents, & &1.id),
       at: DateTime.utc_now()
     }
   end

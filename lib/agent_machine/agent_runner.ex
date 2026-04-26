@@ -69,6 +69,18 @@ defmodule AgentMachine.AgentRunner do
           "provider returned invalid success payload: #{inspect(other)}"
         )
 
+      {:provider_error, %{reason: reason, events: events}} ->
+        %AgentResult{
+          run_id: run_id,
+          agent_id: agent.id,
+          status: :error,
+          attempt: attempt,
+          error: inspect(reason),
+          events: events,
+          started_at: started_at,
+          finished_at: DateTime.utc_now()
+        }
+
       {:provider_error, reason} ->
         error(agent, run_id, attempt, started_at, inspect(reason))
     end
@@ -116,9 +128,12 @@ defmodule AgentMachine.AgentRunner do
   defp do_complete_agent(agent, opts, context, state) do
     opts = maybe_disable_tools(agent, opts)
 
-    case agent.provider.complete(agent, opts) do
-      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
+    case complete_provider(agent, opts, context) do
+      {:ok,
+       %{payload: %{output: output, usage: provider_usage} = payload, events: provider_events}}
+      when is_binary(output) ->
         state = %{state | usage: sum_usage!(state.usage, provider_usage)}
+        state = %{state | events: state.events ++ provider_events}
         tool_calls = tool_calls_from_payload!(payload)
 
         if tool_calls == [] do
@@ -133,14 +148,90 @@ defmodule AgentMachine.AgentRunner do
           continue_after_tool_calls(agent, opts, context, state, payload, tool_calls)
         end
 
-      {:ok, other} ->
-        {:invalid, other}
+      {:ok, %{payload: other, events: provider_events}} ->
+        {:invalid, %{payload: other, events: provider_events}}
 
-      {:error, reason} ->
-        {:provider_error, reason}
+      {:error, reason, provider_events} ->
+        {:provider_error, %{reason: reason, events: provider_events}}
 
       other ->
         {:invalid, other}
+    end
+  end
+
+  defp complete_provider(agent, opts, context) do
+    started_at = DateTime.utc_now()
+    started_event = provider_request_started_event(context, agent, started_at)
+    emit_event!(opts, started_event)
+
+    ref = make_ref()
+    owner = self()
+
+    stream_sink = fn event ->
+      emit_event!(opts, event)
+      send(owner, {ref, event})
+    end
+
+    provider_opts =
+      opts
+      |> Keyword.put(:stream_event_sink, stream_sink)
+      |> Keyword.put(:stream_context, Map.merge(context, %{agent_id: agent.id}))
+
+    result =
+      if Keyword.get(opts, :stream_response, false) do
+        stream_complete_provider(agent, provider_opts)
+      else
+        agent.provider.complete(agent, opts)
+      end
+
+    stream_events = drain_stream_events(ref, [])
+
+    case result do
+      {:ok, %{output: output, usage: _provider_usage} = payload} when is_binary(output) ->
+        finished_at = DateTime.utc_now()
+        finished_event = provider_request_finished_event(context, agent, started_at, finished_at)
+        emit_event!(opts, finished_event)
+        {:ok, %{payload: payload, events: [started_event] ++ stream_events ++ [finished_event]}}
+
+      {:ok, other} ->
+        finished_at = DateTime.utc_now()
+
+        failed_event =
+          provider_request_failed_event(
+            context,
+            agent,
+            started_at,
+            finished_at,
+            "invalid provider payload"
+          )
+
+        emit_event!(opts, failed_event)
+        {:ok, %{payload: other, events: [started_event] ++ stream_events ++ [failed_event]}}
+
+      {:error, reason} ->
+        finished_at = DateTime.utc_now()
+
+        failed_event =
+          provider_request_failed_event(context, agent, started_at, finished_at, inspect(reason))
+
+        emit_event!(opts, failed_event)
+        {:error, reason, [started_event] ++ stream_events ++ [failed_event]}
+    end
+  end
+
+  defp stream_complete_provider(%Agent{provider: provider} = agent, opts) do
+    if function_exported?(provider, :stream_complete, 2) do
+      provider.stream_complete(agent, opts)
+    else
+      {:error, "provider #{inspect(provider)} does not support streaming responses"}
+    end
+  end
+
+  defp drain_stream_events(ref, acc) do
+    receive do
+      {^ref, event} -> drain_stream_events(ref, [event | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 
@@ -416,7 +507,7 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at) do
-    started_event = tool_call_started_event(event_context, id, tool, started_at)
+    started_event = tool_call_started_event(event_context, id, tool, started_at, opts, input)
     emit_event!(opts, started_event)
 
     case run_tool_with_timeout(tool, input, opts, tool_timeout_ms) do
@@ -424,7 +515,7 @@ defmodule AgentMachine.AgentRunner do
         finished_at = DateTime.utc_now()
 
         finished_event =
-          tool_call_finished_event(event_context, id, tool, started_at, finished_at)
+          tool_call_finished_event(event_context, id, tool, started_at, finished_at, opts, result)
 
         emit_event!(opts, finished_event)
         {:ok, %{id: id, result: result}, [started_event, finished_event]}
@@ -457,10 +548,10 @@ defmodule AgentMachine.AgentRunner do
 
   defp failed_tool_call(opts, event_context, id, tool, started_at, reason, emit_started? \\ true) do
     finished_at = DateTime.utc_now()
-    started_event = tool_call_started_event(event_context, id, tool, started_at)
+    started_event = tool_call_started_event(event_context, id, tool, started_at, opts, nil)
 
     failed_event =
-      tool_call_failed_event(event_context, id, tool, started_at, finished_at, reason)
+      tool_call_failed_event(event_context, id, tool, started_at, finished_at, opts, reason)
 
     if emit_started? do
       emit_event!(opts, started_event)
@@ -699,7 +790,43 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp tool_call_started_event(context, id, tool, at) do
+  defp provider_request_started_event(context, agent, at) do
+    %{
+      type: :provider_request_started,
+      run_id: context.run_id,
+      agent_id: agent.id,
+      attempt: context.attempt,
+      provider: provider_name(agent.provider),
+      at: at
+    }
+  end
+
+  defp provider_request_finished_event(context, agent, started_at, finished_at) do
+    %{
+      type: :provider_request_finished,
+      run_id: context.run_id,
+      agent_id: agent.id,
+      attempt: context.attempt,
+      provider: provider_name(agent.provider),
+      duration_ms: duration_ms(started_at, finished_at),
+      at: finished_at
+    }
+  end
+
+  defp provider_request_failed_event(context, agent, started_at, finished_at, reason) do
+    %{
+      type: :provider_request_failed,
+      run_id: context.run_id,
+      agent_id: agent.id,
+      attempt: context.attempt,
+      provider: provider_name(agent.provider),
+      duration_ms: duration_ms(started_at, finished_at),
+      reason: reason,
+      at: finished_at
+    }
+  end
+
+  defp tool_call_started_event(context, id, tool, at, opts, input) do
     %{
       type: :tool_call_started,
       run_id: context.run_id,
@@ -709,11 +836,15 @@ defmodule AgentMachine.AgentRunner do
       tool_call_id: id,
       tool: tool_name(tool),
       status: :running,
+      permission: safe_tool_permission(tool),
+      approval_risk: safe_tool_approval_risk(tool),
+      approval_mode: Keyword.get(opts, :tool_approval_mode),
+      input_summary: summarize_tool_input(input),
       at: at
     }
   end
 
-  defp tool_call_finished_event(context, id, tool, started_at, finished_at) do
+  defp tool_call_finished_event(context, id, tool, started_at, finished_at, opts, result) do
     %{
       type: :tool_call_finished,
       run_id: context.run_id,
@@ -723,12 +854,16 @@ defmodule AgentMachine.AgentRunner do
       tool_call_id: id,
       tool: tool_name(tool),
       status: :ok,
+      permission: safe_tool_permission(tool),
+      approval_risk: safe_tool_approval_risk(tool),
+      approval_mode: Keyword.get(opts, :tool_approval_mode),
+      result_summary: summarize_tool_result(result),
       duration_ms: duration_ms(started_at, finished_at),
       at: finished_at
     }
   end
 
-  defp tool_call_failed_event(context, id, tool, started_at, finished_at, reason) do
+  defp tool_call_failed_event(context, id, tool, started_at, finished_at, opts, reason) do
     %{
       type: :tool_call_failed,
       run_id: context.run_id,
@@ -738,6 +873,9 @@ defmodule AgentMachine.AgentRunner do
       tool_call_id: id,
       tool: tool_name(tool),
       status: :error,
+      permission: safe_tool_permission(tool),
+      approval_risk: safe_tool_approval_risk(tool),
+      approval_mode: Keyword.get(opts, :tool_approval_mode),
       duration_ms: duration_ms(started_at, finished_at),
       reason: reason,
       at: finished_at
@@ -764,6 +902,47 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp tool_name(tool), do: inspect(tool)
+
+  defp provider_name(provider), do: provider |> Module.split() |> List.last()
+
+  defp safe_tool_permission(tool) when is_atom(tool) do
+    ToolPolicy.tool_permission!(tool)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_tool_permission(_tool), do: nil
+
+  defp safe_tool_approval_risk(tool) when is_atom(tool) do
+    ToolPolicy.approval_risk!(tool)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_tool_approval_risk(_tool), do: nil
+
+  defp summarize_tool_input(input) when is_map(input) do
+    %{
+      keys: input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort(),
+      bytes: input |> AgentMachine.JSON.encode!() |> byte_size()
+    }
+  end
+
+  defp summarize_tool_input(_input), do: nil
+
+  defp summarize_tool_result(result) when is_map(result) do
+    Map.get(result, :summary) || Map.get(result, "summary") || changed_summary(result)
+  end
+
+  defp summarize_tool_result(_result), do: nil
+
+  defp changed_summary(result) do
+    changed = Map.get(result, :changed_files) || Map.get(result, "changed_files") || []
+
+    if is_list(changed) do
+      %{changed_count: length(changed)}
+    end
+  end
 
   defp fetch_optional_payload_field(payload, field) do
     string_field = Atom.to_string(field)
