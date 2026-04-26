@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added explicit tool execution policies, per-tool permissions, safer failed-tool events, bounded writes, and symlink-aware file listing.
 - Added provider-native tool continuation loops with explicit `tool_max_rounds`, provider continuation payloads, and TUI pass-through.
 - Added an explicit `create_dir` tool to the constrained `local-files` harness.
 - Hardened the `local-files` path guard to require an existing root and reject symlink escapes.
