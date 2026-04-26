@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.CreateDir do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.PathGuard
+  alias AgentMachine.Tools.{PathGuard, ToolResultSummary}
 
   @impl true
   def permission, do: :local_files_create_dir
@@ -44,7 +44,13 @@ defmodule AgentMachine.Tools.CreateDir do
         {:error, "create_dir path must not be a symlink: #{inspect(target)}"}
 
       {:ok, %{type: :directory}} ->
-        {:ok, %{path: PathGuard.existing_target!(root, target), created: false}}
+        path = PathGuard.existing_target!(root, target)
+
+        {:ok,
+         Map.merge(ToolResultSummary.directory_result("create_dir", root, path, false), %{
+           path: ToolResultSummary.relative_path!(root, path),
+           created: false
+         })}
 
       {:ok, %{type: type}} ->
         {:error, "create_dir path must be a directory or missing, got: #{inspect(type)}"}
@@ -79,7 +85,13 @@ defmodule AgentMachine.Tools.CreateDir do
     require_directory!(real_parent, "parent")
 
     File.mkdir!(target)
-    {:ok, %{path: PathGuard.existing_target!(root, target), created: true}}
+    path = PathGuard.existing_target!(root, target)
+
+    {:ok,
+     Map.merge(ToolResultSummary.directory_result("create_dir", root, path, true), %{
+       path: ToolResultSummary.relative_path!(root, path),
+       created: true
+     })}
   end
 
   defp existing_parent!(root, parent) do

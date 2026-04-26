@@ -10,11 +10,13 @@ defmodule AgentMachine.Tools.CreateDirTest do
     on_exit(fn -> File.rm_rf(root) end)
     File.mkdir_p!(root)
 
-    assert {:ok, %{path: path, created: true}} =
+    assert {:ok, %{path: path, created: true, summary: summary, changed_paths: [changed]}} =
              CreateDir.run(%{"path" => "notes"}, tool_root: root)
 
-    assert Path.basename(path) == "notes"
-    assert File.dir?(path)
+    assert path == "notes"
+    assert summary.created_count == 1
+    assert changed == %{path: "notes", type: "directory", action: "created"}
+    assert File.dir?(Path.join(root, path))
   end
 
   test "reports an existing directory explicitly" do
@@ -24,10 +26,11 @@ defmodule AgentMachine.Tools.CreateDirTest do
     on_exit(fn -> File.rm_rf(root) end)
     File.mkdir_p!(Path.join(root, "notes"))
 
-    assert {:ok, %{path: path, created: false}} =
+    assert {:ok, %{path: path, created: false, summary: summary}} =
              CreateDir.run(%{"path" => "notes"}, tool_root: root)
 
-    assert Path.basename(path) == "notes"
+    assert path == "notes"
+    assert summary.status == "unchanged"
   end
 
   test "requires the parent directory to already exist" do
