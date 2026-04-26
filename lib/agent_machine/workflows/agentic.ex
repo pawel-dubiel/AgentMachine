@@ -38,7 +38,8 @@ defmodule AgentMachine.Workflows.Agentic do
         timeout: spec.timeout_ms,
         max_steps: spec.max_steps,
         max_attempts: spec.max_attempts,
-        finalizer: finalizer
+        finalizer: finalizer,
+        stream_response: spec.stream_response
       ]
       |> put_http_opts(spec)
       |> put_tool_opts(spec)

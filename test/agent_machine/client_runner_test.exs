@@ -443,6 +443,29 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_receive {:event, :run_completed, %{run_id: _run_id}}
   end
 
+  test "streams assistant deltas when stream_response is enabled" do
+    parent = self()
+
+    summary =
+      ClientRunner.run!(
+        %{
+          task: "summarize the project",
+          workflow: :basic,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 2,
+          max_attempts: 1,
+          stream_response: true
+        },
+        event_sink: fn event -> send(parent, {:event, event.type, event}) end
+      )
+
+    assert summary.status == "completed"
+    assert_receive {:event, :assistant_delta, %{agent_id: "assistant", delta: delta}}
+    assert delta =~ "agent assistant:"
+    assert_receive {:event, :assistant_done, %{agent_id: "assistant"}}
+  end
+
   test "requires event sink to be an arity one function" do
     assert_raise ArgumentError, ~r/:event_sink must be a function of arity 1/, fn ->
       ClientRunner.run!(
@@ -574,6 +597,27 @@ defmodule AgentMachine.ClientRunnerTest do
                &1
              )
            )
+  end
+
+  test "mix agent_machine.run requires JSONL for response streaming" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--stream-response requires --jsonl/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--stream-response",
+        "summarize"
+      ])
+    end
   end
 
   test "mix agent_machine.run requires tool max rounds with a tool harness" do

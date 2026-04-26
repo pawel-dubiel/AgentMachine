@@ -30,7 +30,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
     output_price_per_million: :float,
     log_file: :string,
     json: :boolean,
-    jsonl: :boolean
+    jsonl: :boolean,
+    stream_response: :boolean
   ]
 
   @impl true
@@ -94,6 +95,10 @@ defmodule Mix.Tasks.AgentMachine.Run do
     if Keyword.get(opts, :json, false) and Keyword.get(opts, :jsonl, false) do
       Mix.raise("--json and --jsonl cannot be used together")
     end
+
+    if Keyword.get(opts, :stream_response, false) and not Keyword.get(opts, :jsonl, false) do
+      Mix.raise("--stream-response requires --jsonl")
+    end
   end
 
   defp with_log_file(opts, callback) when is_function(callback, 1) do
@@ -151,7 +156,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
       skills_mode: skills_mode_from_opts!(opts),
       skills_dir: skills_dir_from_opts(opts),
       skill_names: Keyword.get_values(opts, :skill),
-      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false)
+      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false),
+      stream_response: Keyword.get(opts, :stream_response, false)
     }
   end
 

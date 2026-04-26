@@ -30,7 +30,8 @@ defmodule AgentMachine.RunSpec do
     :skills_mode,
     :skills_dir,
     :skill_names,
-    :allow_skill_scripts
+    :allow_skill_scripts,
+    :stream_response
   ]
 
   @type t :: %__MODULE__{
@@ -56,7 +57,8 @@ defmodule AgentMachine.RunSpec do
           skills_mode: :off | :auto,
           skills_dir: binary() | nil,
           skill_names: [binary()],
-          allow_skill_scripts: boolean()
+          allow_skill_scripts: boolean(),
+          stream_response: boolean()
         }
 
   def new!(attrs) when is_map(attrs) do
@@ -86,6 +88,7 @@ defmodule AgentMachine.RunSpec do
     require_positive_integer!(spec.max_steps, :max_steps)
     require_positive_integer!(spec.max_attempts, :max_attempts)
     validate_provider_options!(spec)
+    require_boolean!(spec.stream_response, :stream_response)
     validate_skill_options!(spec)
     validate_tool_options!(spec)
     spec
@@ -184,6 +187,7 @@ defmodule AgentMachine.RunSpec do
     |> Map.put_new(:skills_mode, :off)
     |> Map.put_new(:skill_names, [])
     |> Map.put_new(:allow_skill_scripts, false)
+    |> Map.put_new(:stream_response, false)
     |> normalize_skill_names!()
   end
 
