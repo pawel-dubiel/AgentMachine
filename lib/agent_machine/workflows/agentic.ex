@@ -79,7 +79,8 @@ defmodule AgentMachine.Workflows.Agentic do
          %RunSpec{
            tool_harness: harness,
            tool_timeout_ms: tool_timeout_ms,
-           tool_max_rounds: tool_max_rounds
+           tool_max_rounds: tool_max_rounds,
+           tool_approval_mode: tool_approval_mode
          } = spec
        ) do
     opts
@@ -87,6 +88,7 @@ defmodule AgentMachine.Workflows.Agentic do
     |> Keyword.put(:tool_policy, AgentMachine.ToolHarness.builtin_policy!(harness))
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
     |> Keyword.put(:tool_max_rounds, tool_max_rounds)
+    |> Keyword.put(:tool_approval_mode, tool_approval_mode)
     |> maybe_put_tool_root(harness, spec)
   end
 

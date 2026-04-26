@@ -17,7 +17,8 @@ defmodule AgentMachine.RunSpec do
     :tool_harness,
     :tool_timeout_ms,
     :tool_max_rounds,
-    :tool_root
+    :tool_root,
+    :tool_approval_mode
   ]
 
   @type t :: %__MODULE__{
@@ -33,7 +34,9 @@ defmodule AgentMachine.RunSpec do
           tool_harness: :demo | :local_files | :code_edit | nil,
           tool_timeout_ms: pos_integer() | nil,
           tool_max_rounds: pos_integer() | nil,
-          tool_root: binary() | nil
+          tool_root: binary() | nil,
+          tool_approval_mode:
+            :read_only | :ask_before_write | :auto_approved_safe | :full_access | nil
         }
 
   def new!(attrs) when is_map(attrs) do
@@ -102,7 +105,8 @@ defmodule AgentMachine.RunSpec do
          tool_harness: nil,
          tool_timeout_ms: nil,
          tool_max_rounds: nil,
-         tool_root: nil
+         tool_root: nil,
+         tool_approval_mode: nil
        }),
        do: :ok
 
@@ -114,22 +118,26 @@ defmodule AgentMachine.RunSpec do
   defp validate_tool_options!(%__MODULE__{
          tool_harness: :demo,
          tool_timeout_ms: timeout_ms,
-         tool_max_rounds: max_rounds
+         tool_max_rounds: max_rounds,
+         tool_approval_mode: approval_mode
        }) do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
     require_positive_integer!(max_rounds, :tool_max_rounds)
+    require_tool_approval_mode!(approval_mode)
   end
 
   defp validate_tool_options!(%__MODULE__{
          tool_harness: harness,
          tool_timeout_ms: timeout_ms,
          tool_max_rounds: max_rounds,
-         tool_root: root
+         tool_root: root,
+         tool_approval_mode: approval_mode
        })
        when harness in [:local_files, :code_edit] do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
     require_positive_integer!(max_rounds, :tool_max_rounds)
     require_non_empty_binary!(root, :tool_root)
+    require_tool_approval_mode!(approval_mode)
   end
 
   defp validate_tool_options!(%__MODULE__{tool_harness: harness}) do
@@ -153,5 +161,14 @@ defmodule AgentMachine.RunSpec do
   defp require_positive_integer!(value, field) do
     raise ArgumentError,
           "run spec #{inspect(field)} must be a positive integer, got: #{inspect(value)}"
+  end
+
+  defp require_tool_approval_mode!(mode)
+       when mode in [:read_only, :ask_before_write, :auto_approved_safe, :full_access],
+       do: :ok
+
+  defp require_tool_approval_mode!(mode) do
+    raise ArgumentError,
+          "run spec :tool_approval_mode must be :read_only, :ask_before_write, :auto_approved_safe, or :full_access, got: #{inspect(mode)}"
   end
 end

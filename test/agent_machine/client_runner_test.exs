@@ -85,7 +85,8 @@ defmodule AgentMachine.ClientRunnerTest do
         max_attempts: 1,
         tool_harness: :demo,
         tool_timeout_ms: 100,
-        tool_max_rounds: 2
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
       })
 
     {_agents, opts} = Basic.build!(spec)
@@ -98,6 +99,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert MapSet.member?(permissions, :demo_time)
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
     assert Keyword.fetch!(opts, :tool_max_rounds) == 2
+    assert Keyword.fetch!(opts, :tool_approval_mode) == :read_only
   end
 
   test "requires tool timeout when a tool harness is enabled" do
@@ -110,7 +112,8 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 2,
         max_attempts: 1,
         tool_harness: :demo,
-        tool_max_rounds: 2
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
       })
     end
   end
@@ -125,7 +128,24 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 2,
         max_attempts: 1,
         tool_harness: :demo,
-        tool_timeout_ms: 100
+        tool_timeout_ms: 100,
+        tool_approval_mode: :read_only
+      })
+    end
+  end
+
+  test "requires tool approval mode when a tool harness is enabled" do
+    assert_raise ArgumentError, ~r/:tool_approval_mode/, fn ->
+      RunSpec.new!(%{
+        task: "what time is it?",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :demo,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2
       })
     end
   end
@@ -142,7 +162,8 @@ defmodule AgentMachine.ClientRunnerTest do
         tool_harness: :local_files,
         tool_timeout_ms: 100,
         tool_max_rounds: 2,
-        tool_root: "/tmp/agent-machine"
+        tool_root: "/tmp/agent-machine",
+        tool_approval_mode: :auto_approved_safe
       })
 
     {_agents, opts} = Basic.build!(spec)
@@ -161,6 +182,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
     assert Keyword.fetch!(opts, :tool_max_rounds) == 2
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
+    assert Keyword.fetch!(opts, :tool_approval_mode) == :auto_approved_safe
 
     assert %AgentMachine.ToolPolicy{harness: :local_files, permissions: permissions} =
              Keyword.fetch!(opts, :tool_policy)
@@ -179,7 +201,8 @@ defmodule AgentMachine.ClientRunnerTest do
         max_attempts: 1,
         tool_harness: :local_files,
         tool_timeout_ms: 100,
-        tool_max_rounds: 2
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
       })
     end
   end
@@ -196,7 +219,8 @@ defmodule AgentMachine.ClientRunnerTest do
         tool_harness: :code_edit,
         tool_timeout_ms: 100,
         tool_max_rounds: 2,
-        tool_root: "/tmp/agent-machine"
+        tool_root: "/tmp/agent-machine",
+        tool_approval_mode: :full_access
       })
 
     {_agents, opts} = Basic.build!(spec)
@@ -211,6 +235,7 @@ defmodule AgentMachine.ClientRunnerTest do
            ]
 
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
+    assert Keyword.fetch!(opts, :tool_approval_mode) == :full_access
 
     assert %AgentMachine.ToolPolicy{harness: :code_edit, permissions: permissions} =
              Keyword.fetch!(opts, :tool_policy)
@@ -230,7 +255,8 @@ defmodule AgentMachine.ClientRunnerTest do
         max_attempts: 1,
         tool_harness: :code_edit,
         tool_timeout_ms: 100,
-        tool_max_rounds: 2
+        tool_max_rounds: 2,
+        tool_approval_mode: :full_access
       })
     end
   end
