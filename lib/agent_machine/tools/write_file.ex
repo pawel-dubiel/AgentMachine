@@ -4,7 +4,7 @@ defmodule AgentMachine.Tools.WriteFile do
   """
 
   @behaviour AgentMachine.Tool
-  alias AgentMachine.Tools.PathGuard
+  alias AgentMachine.Tools.{PathGuard, ToolResultSummary}
 
   @max_bytes_limit 200_000
 
@@ -41,9 +41,18 @@ defmodule AgentMachine.Tools.WriteFile do
     path = input |> fetch_input!("path") |> require_non_empty_binary!("path")
     content = input |> fetch_input!("content") |> require_content!()
     target = PathGuard.writable_target!(root, path)
+    before_state = read_existing_text_state!(target)
 
     File.write!(target, content)
-    {:ok, %{path: target, bytes: byte_size(content)}}
+
+    summary =
+      ToolResultSummary.from_file_states("write_file", root, target, before_state, content)
+
+    {:ok,
+     Map.merge(summary, %{
+       path: ToolResultSummary.relative_path!(root, target),
+       bytes: byte_size(content)
+     })}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end
@@ -80,5 +89,26 @@ defmodule AgentMachine.Tools.WriteFile do
 
   defp require_content!(value) do
     raise ArgumentError, "content must be a binary, got: #{inspect(value)}"
+  end
+
+  defp read_existing_text_state!(target) do
+    case File.lstat(target) do
+      {:ok, %{type: :regular, size: size}} when size <= @max_bytes_limit ->
+        File.read!(target)
+
+      {:ok, %{type: :regular, size: size}} ->
+        raise ArgumentError,
+              "existing file must be at most #{@max_bytes_limit} bytes, got: #{size}"
+
+      {:ok, %{type: type}} ->
+        raise ArgumentError,
+              "write_file path must be a regular file or missing, got: #{inspect(type)}"
+
+      {:error, :enoent} ->
+        :missing
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect file", path: target
+    end
   end
 end

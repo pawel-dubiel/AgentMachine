@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.ReplaceInFile do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.PathGuard
+  alias AgentMachine.Tools.{PathGuard, ToolResultSummary}
 
   @max_file_bytes 200_000
   @max_replacement_bytes 200_000
@@ -66,12 +66,15 @@ defmodule AgentMachine.Tools.ReplaceInFile do
     require_updated_size!(updated)
     File.write!(target, updated)
 
+    summary =
+      ToolResultSummary.from_file_states("replace_in_file", root, target, content, updated)
+
     {:ok,
-     %{
-       path: target,
+     Map.merge(summary, %{
+       path: ToolResultSummary.relative_path!(root, target),
        replacements: actual_replacements,
        bytes: byte_size(updated)
-     }}
+     })}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end

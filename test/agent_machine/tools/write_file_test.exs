@@ -10,11 +10,18 @@ defmodule AgentMachine.Tools.WriteFileTest do
     on_exit(fn -> File.rm_rf(root) end)
     File.mkdir_p!(root)
 
-    assert {:ok, %{path: path, bytes: 5}} =
+    assert {:ok, %{path: path, bytes: 5, summary: summary, changed_files: [changed]}} =
              WriteFile.run(%{"path" => "hello.md", "content" => "hello"}, tool_root: root)
 
-    assert Path.basename(path) == "hello.md"
-    assert File.read!(path) == "hello"
+    assert path == "hello.md"
+    assert summary.tool == "write_file"
+    assert summary.created_count == 1
+    assert changed.path == "hello.md"
+    assert changed.action == "created"
+    assert changed.after_bytes == 5
+    assert changed.diff_summary == %{added_lines: 1, removed_lines: 0}
+    refute Map.has_key?(changed, :content)
+    assert File.read!(Path.join(root, path)) == "hello"
   end
 
   test "rejects paths outside the configured tool root" do

@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.AppendFile do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.PathGuard
+  alias AgentMachine.Tools.{PathGuard, ToolResultSummary}
 
   @max_bytes_limit 200_000
 
@@ -45,10 +45,27 @@ defmodule AgentMachine.Tools.AppendFile do
     target = PathGuard.existing_writable_target!(root, path, "append_file path")
 
     stat = require_regular_file!(target)
+    before_content = File.read!(target)
     require_final_size!(stat.size, byte_size(content))
 
     File.write!(target, content, [:append])
-    {:ok, %{path: target, bytes: byte_size(content), total_bytes: stat.size + byte_size(content)}}
+    after_content = before_content <> content
+
+    summary =
+      ToolResultSummary.from_file_states(
+        "append_file",
+        root,
+        target,
+        before_content,
+        after_content
+      )
+
+    {:ok,
+     Map.merge(summary, %{
+       path: ToolResultSummary.relative_path!(root, target),
+       bytes: byte_size(content),
+       total_bytes: stat.size + byte_size(content)
+     })}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end

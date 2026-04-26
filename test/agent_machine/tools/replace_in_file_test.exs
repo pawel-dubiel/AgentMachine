@@ -10,7 +10,8 @@ defmodule AgentMachine.Tools.ReplaceInFileTest do
     File.mkdir_p!(root)
     File.write!(Path.join(root, "notes.md"), "hello old\nold")
 
-    assert {:ok, %{path: path, replacements: 2, bytes: 17}} =
+    assert {:ok,
+            %{path: path, replacements: 2, bytes: 17, summary: summary, changed_files: [changed]}} =
              ReplaceInFile.run(
                %{
                  "path" => "notes.md",
@@ -21,7 +22,11 @@ defmodule AgentMachine.Tools.ReplaceInFileTest do
                tool_root: root
              )
 
-    assert File.read!(path) == "hello newer\nnewer"
+    assert path == "notes.md"
+    assert summary.tool == "replace_in_file"
+    assert summary.updated_count == 1
+    assert changed.diff_summary == %{added_lines: 2, removed_lines: 2}
+    assert File.read!(Path.join(root, path)) == "hello newer\nnewer"
   end
 
   test "rejects replacement count mismatches without writing" do
