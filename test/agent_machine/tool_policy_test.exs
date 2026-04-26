@@ -24,4 +24,11 @@ defmodule AgentMachine.ToolPolicyTest do
       ToolPolicy.permit!(policy, AgentMachine.Tools.ApplyEdits)
     end
   end
+
+  test "reads tool approval risks" do
+    assert ToolPolicy.approval_risk!(AgentMachine.Tools.Now) == :read
+    assert ToolPolicy.approval_risk!(AgentMachine.Tools.ReadFile) == :read
+    assert ToolPolicy.approval_risk!(AgentMachine.Tools.WriteFile) == :write
+    assert ToolPolicy.approval_risk!(AgentMachine.Tools.ApplyPatch) == :write
+  end
 end

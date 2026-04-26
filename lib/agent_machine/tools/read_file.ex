@@ -13,6 +13,9 @@ defmodule AgentMachine.Tools.ReadFile do
   def permission, do: :local_files_read
 
   @impl true
+  def approval_risk, do: :read
+
+  @impl true
   def definition do
     %{
       name: "read_file",

@@ -13,6 +13,9 @@ defmodule AgentMachine.Tools.AppendFile do
   def permission, do: :local_files_append
 
   @impl true
+  def approval_risk, do: :write
+
+  @impl true
   def definition do
     %{
       name: "append_file",

@@ -82,6 +82,19 @@ defmodule AgentMachine.ToolHarnessTest do
            )
   end
 
+  test "all built-in harness tools expose approval risks" do
+    for harness <- [:demo, :local_files, :code_edit],
+        tool <- ToolHarness.builtin!(harness) do
+      assert AgentMachine.ToolPolicy.approval_risk!(tool) in [
+               :read,
+               :write,
+               :delete,
+               :command,
+               :network
+             ]
+    end
+  end
+
   test "builds OpenRouter tool definitions from allowed tools" do
     body =
       ToolHarness.put_openrouter_tools!(%{"model" => "test"},

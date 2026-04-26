@@ -12,6 +12,9 @@ defmodule AgentMachine.Tools.WriteFile do
   def permission, do: :local_files_write
 
   @impl true
+  def approval_risk, do: :write
+
+  @impl true
   def definition do
     %{
       name: "write_file",

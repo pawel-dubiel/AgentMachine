@@ -61,6 +61,25 @@ defmodule AgentMachine.ToolPolicy do
     raise ArgumentError, "tool must be a module atom, got: #{inspect(tool)}"
   end
 
+  def approval_risk!(tool) when is_atom(tool) do
+    unless Code.ensure_loaded?(tool) and function_exported?(tool, :approval_risk, 0) do
+      raise ArgumentError, "tool #{inspect(tool)} must export approval_risk/0 for execution"
+    end
+
+    case tool.approval_risk() do
+      risk when risk in [:read, :write, :delete, :command, :network] ->
+        risk
+
+      risk ->
+        raise ArgumentError,
+              "tool #{inspect(tool)} approval_risk/0 must return :read, :write, :delete, :command, or :network, got: #{inspect(risk)}"
+    end
+  end
+
+  def approval_risk!(tool) do
+    raise ArgumentError, "tool must be a module atom, got: #{inspect(tool)}"
+  end
+
   defp permissions!(permissions) when is_list(permissions) and permissions != [] do
     Enum.each(permissions, fn
       permission when is_atom(permission) and not is_nil(permission) ->

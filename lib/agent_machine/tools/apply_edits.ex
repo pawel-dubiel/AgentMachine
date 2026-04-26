@@ -11,6 +11,9 @@ defmodule AgentMachine.Tools.ApplyEdits do
   def permission, do: :code_edit_apply_edits
 
   @impl true
+  def approval_risk, do: :write
+
+  @impl true
   def definition do
     %{
       name: "apply_edits",

@@ -15,6 +15,9 @@ defmodule AgentMachine.Tools.ReplaceInFile do
   def permission, do: :local_files_replace
 
   @impl true
+  def approval_risk, do: :write
+
+  @impl true
   def definition do
     %{
       name: "replace_in_file",

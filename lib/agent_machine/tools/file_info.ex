@@ -11,6 +11,9 @@ defmodule AgentMachine.Tools.FileInfo do
   def permission, do: :local_files_info
 
   @impl true
+  def approval_risk, do: :read
+
+  @impl true
   def definition do
     %{
       name: "file_info",

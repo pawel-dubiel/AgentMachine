@@ -11,6 +11,9 @@ defmodule AgentMachine.Tools.CreateDir do
   def permission, do: :local_files_create_dir
 
   @impl true
+  def approval_risk, do: :write
+
+  @impl true
   def definition do
     %{
       name: "create_dir",

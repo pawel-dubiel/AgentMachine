@@ -9,6 +9,9 @@ defmodule AgentMachine.Tools.Now do
   def permission, do: :demo_time
 
   @impl true
+  def approval_risk, do: :read
+
+  @impl true
   def definition do
     %{
       name: "now",
