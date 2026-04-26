@@ -26,6 +26,16 @@ Prefer small changes that move the architecture forward without turning the proj
   require explicit permissions, log security-relevant decisions, and prefer
   narrow capability over broad convenience.
 
+## Feature Workflow
+
+- For every new nontrivial feature, first produce a decision-complete plan.
+- Implement only after the user explicitly asks to implement that plan.
+- Keep each `plan.md` backlog item as its own iteration unless the user
+  explicitly groups items.
+- For each implementation, prefer TDD: write or update the smallest meaningful
+  failing focused test, implement the behavior, then run the relevant focused
+  tests before the full quality gate.
+
 ## Responsibility Boundaries
 
 Keep these ownership lines explicit. If a change does not fit one of these
