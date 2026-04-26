@@ -77,6 +77,42 @@ defmodule AgentMachine.Tools.PathGuard do
     end
   end
 
+  def existing_writable_target!(root, path, label) do
+    target = target!(root, path)
+
+    case File.lstat(target) do
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "#{label} must not be a symlink: #{inspect(target)}"
+
+      {:ok, _stat} ->
+        existing_target!(root, target)
+
+      {:error, :enoent} ->
+        raise ArgumentError, "path does not exist: #{inspect(target)}"
+
+      {:error, reason} ->
+        raise ArgumentError, "could not inspect #{label} #{inspect(target)}: #{inspect(reason)}"
+    end
+  end
+
+  def inspectable_target!(root, path, label) do
+    target = target!(root, path)
+    parent = Path.dirname(target)
+
+    case realpath(parent) do
+      {:ok, real_parent} ->
+        if inside_root?(real_parent, root) do
+          target
+        else
+          raise ArgumentError,
+                "parent #{inspect(real_parent)} is outside tool root #{inspect(root)}"
+        end
+
+      {:error, _reason} ->
+        raise ArgumentError, "#{label} parent directory does not exist: #{inspect(parent)}"
+    end
+  end
+
   def require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0,
     do: value
 
