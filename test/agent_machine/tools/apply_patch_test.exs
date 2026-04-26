@@ -38,6 +38,85 @@ defmodule AgentMachine.Tools.ApplyPatchTest do
     refute File.exists?(Path.join(root, "delete.txt"))
   end
 
+  test "applies git-style new file mode patch with matching old and new headers" do
+    root = tmp_root()
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(Path.join(root, "docs"))
+
+    patch = """
+    diff --git a/docs/health_check.md b/docs/health_check.md
+    new file mode 100644
+    --- a/docs/health_check.md
+    +++ b/docs/health_check.md
+    @@ -0,0 +1,3 @@
+    +# Health Check
+    +
+    +Status: STATUS_GREEN
+    """
+
+    assert {:ok, %{count: 1, patch_files: [%{path: "docs/health_check.md", action: "create"}]}} =
+             ApplyPatch.run(%{"patch" => patch}, tool_root: root)
+
+    assert File.read!(Path.join(root, "docs/health_check.md")) ==
+             "# Health Check\n\nStatus: STATUS_GREEN\n"
+  end
+
+  test "applies git-style deleted file mode patch with matching old and new headers" do
+    root = tmp_root()
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "obsolete.txt"), "remove\n")
+
+    patch = """
+    diff --git a/obsolete.txt b/obsolete.txt
+    deleted file mode 100644
+    --- a/obsolete.txt
+    +++ b/obsolete.txt
+    @@ -1 +0,0 @@
+    -remove
+    """
+
+    assert {:ok, %{count: 1, patch_files: [%{path: "obsolete.txt", action: "delete"}]}} =
+             ApplyPatch.run(%{"patch" => patch}, tool_root: root)
+
+    refute File.exists?(Path.join(root, "obsolete.txt"))
+  end
+
+  test "applies adjacent file metadata after a hunk without diff header" do
+    root = tmp_root()
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(Path.join(root, "docs"))
+
+    File.write!(
+      Path.join(root, "app_status.txt"),
+      "component: health\nstatus: STATUS_PLACEHOLDER\n"
+    )
+
+    patch = """
+    --- a/app_status.txt
+    +++ b/app_status.txt
+    @@ -1,2 +1,2 @@
+     component: health
+    -status: STATUS_PLACEHOLDER
+    +status: STATUS_GREEN
+    new file mode 100644
+    --- /dev/null
+    +++ b/docs/health_check.md
+    @@ -0,0 +1,3 @@
+    +# Health Check
+    +
+    +Status: STATUS_GREEN
+    """
+
+    assert {:ok, %{count: 2}} = ApplyPatch.run(%{"patch" => patch}, tool_root: root)
+
+    assert File.read!(Path.join(root, "app_status.txt")) ==
+             "component: health\nstatus: STATUS_GREEN\n"
+
+    assert File.read!(Path.join(root, "docs/health_check.md")) ==
+             "# Health Check\n\nStatus: STATUS_GREEN\n"
+  end
+
   test "rejects malformed patches" do
     root = tmp_root()
     on_exit(fn -> File.rm_rf(root) end)

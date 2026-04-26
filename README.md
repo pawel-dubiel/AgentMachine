@@ -52,6 +52,9 @@ Run the full quality gate:
 make quality
 ```
 
+For a linked overview of the complete feature set, see
+[FEATURES.md](FEATURES.md).
+
 ## Common Commands
 
 ```sh

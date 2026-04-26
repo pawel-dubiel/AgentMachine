@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ func TestPaidOpenRouterRunThroughTUIAdapter(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "agent-machine-paid-openrouter.jsonl")
 	t.Logf("starting paid OpenRouter basic TUI adapter run with model=%s", paidModel)
 
-	summary, raw, err := runAgentMachine(runConfig{
+	summary, raw, err := runPaidAgentMachine(t, runConfig{
 		Task:        "Reply with one concise sentence that includes AgentMachine and TUI.",
 		Workflow:    workflowBasic,
 		Provider:    providerOpenRouter,
@@ -60,7 +61,7 @@ func TestPaidOpenRouterAgenticRunThroughTUIAdapter(t *testing.T) {
 	paidModel := paidOpenRouterModel(t)
 	t.Logf("starting paid OpenRouter agentic delegation TUI adapter run with model=%s", paidModel)
 
-	summary, raw, err := runAgentMachine(runConfig{
+	summary, raw, err := runPaidAgentMachine(t, runConfig{
 		Task:        "Use exactly one delegated worker. The worker should answer with a concise sentence containing AgentMachine worker result. The final answer should mention that worker result.",
 		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
@@ -120,7 +121,7 @@ func TestPaidOpenRouterAgenticToolsCreateDirectoryAndFileThroughTUIAdapter(t *te
 	targetFile := filepath.Join(targetDir, fileName)
 	t.Logf("starting paid OpenRouter agentic local-files run with model=%s root=%s", paidModel, root)
 
-	summary, raw, err := runAgentMachine(runConfig{
+	summary, raw, err := runPaidAgentMachine(t, runConfig{
 		Task: "Use exactly one delegated worker. The worker must use the available local-files tools to create directory " + dirName +
 			" under tool_root, then create " + dirName + "/" + fileName + " with exactly this UTF-8 text: " + expectedContent +
 			" Do not only describe the change; use tools and report the confirmed result.",
@@ -226,7 +227,7 @@ func TestPaidOpenRouterAgenticCodeEditThroughTUIAdapter(t *testing.T) {
 	}
 	t.Logf("starting paid OpenRouter agentic code-edit run with model=%s root=%s", paidModel, root)
 
-	summary, raw, err := runAgentMachine(runConfig{
+	summary, raw, err := runPaidAgentMachine(t, runConfig{
 		Task: "Use exactly one delegated worker. The worker must use the available code-edit tools to make these two edits under tool_root: " +
 			"1. In app_status.txt replace STATUS_PLACEHOLDER with STATUS_GREEN exactly once. " +
 			"2. Create docs/health_check.md with exactly this content: " + createdDoc +
@@ -308,6 +309,82 @@ func paidOpenRouterAPIKey(t *testing.T) string {
 		t.Fatal("OPENROUTER_API_KEY is required for paid OpenRouter TUI adapter tests")
 	}
 	return apiKey
+}
+
+func runPaidAgentMachine(t *testing.T, config runConfig) (summary, string, error) {
+	t.Helper()
+
+	session, err := startAgentMachineStream(config)
+	if err != nil {
+		return summary{}, "", err
+	}
+
+	var lines []string
+	var final summary
+	sawSummary := false
+
+	for session.scanner.Scan() {
+		line := session.scanner.Text()
+		lines = append(lines, line)
+		envelope, ok, parseErr := parseJSONLLine(line)
+		if parseErr != nil {
+			return summary{}, strings.Join(lines, "\n"), parseErr
+		}
+		if !ok {
+			continue
+		}
+
+		switch envelope.Type {
+		case "event":
+			t.Logf("event: %s", paidEventLog(envelope.Event))
+		case "summary":
+			final = envelope.Summary
+			sawSummary = true
+			t.Logf("summary: status=%s run_id=%s tokens=%d results=%d", final.Status, final.RunID, final.Usage.TotalTokens, len(final.Results))
+		}
+	}
+
+	if err := session.scanner.Err(); err != nil {
+		return summary{}, strings.Join(lines, "\n"), err
+	}
+	if err := session.cmd.Wait(); err != nil {
+		stderr := strings.TrimSpace(session.stderr.String())
+		if stderr != "" {
+			return summary{}, strings.Join(lines, "\n"), fmt.Errorf("mix command failed: %w\n%s", err, stderr)
+		}
+		return summary{}, strings.Join(lines, "\n"), fmt.Errorf("mix command failed: %w", err)
+	}
+	if !sawSummary {
+		return summary{}, strings.Join(lines, "\n"), fmt.Errorf("AgentMachine stream ended without a summary")
+	}
+	if final.Status == "failed" {
+		return final, strings.Join(lines, "\n"), fmt.Errorf("AgentMachine run failed: %s", summaryError(final))
+	}
+
+	return final, strings.Join(lines, "\n"), nil
+}
+
+func paidEventLog(event eventSummary) string {
+	parts := []string{event.Type}
+	if event.AgentID != "" {
+		parts = append(parts, "agent="+event.AgentID)
+	}
+	if event.ParentAgentID != "" {
+		parts = append(parts, "parent="+event.ParentAgentID)
+	}
+	if event.Tool != "" {
+		parts = append(parts, "tool="+event.Tool)
+	}
+	if event.Status != "" {
+		parts = append(parts, "status="+event.Status)
+	}
+	if event.DurationMS != nil {
+		parts = append(parts, fmt.Sprintf("duration_ms=%d", *event.DurationMS))
+	}
+	if event.Reason != "" {
+		parts = append(parts, "reason="+event.Reason)
+	}
+	return strings.Join(parts, " ")
 }
 
 func paidOpenRouterModel(t *testing.T) string {

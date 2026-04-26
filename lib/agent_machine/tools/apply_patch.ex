@@ -100,34 +100,45 @@ defmodule AgentMachine.Tools.ApplyPatch do
     end)
   end
 
-  defp parse_files!([], files), do: {files, []}
+  defp parse_files!(lines, files), do: parse_files!(lines, files, nil)
 
-  defp parse_files!(["diff --git " <> _diff | rest], files), do: parse_files!(rest, files)
-  defp parse_files!(["index " <> _index | rest], files), do: parse_files!(rest, files)
-  defp parse_files!(["new file mode " <> _mode | rest], files), do: parse_files!(rest, files)
-  defp parse_files!(["deleted file mode " <> _mode | rest], files), do: parse_files!(rest, files)
+  defp parse_files!([], files, _mode), do: {files, []}
 
-  defp parse_files!(["--- " <> old_header, "+++ " <> new_header | rest], files) do
+  defp parse_files!(["diff --git " <> _diff | rest], files, _mode),
+    do: parse_files!(rest, files, nil)
+
+  defp parse_files!(["index " <> _index | rest], files, mode),
+    do: parse_files!(rest, files, mode)
+
+  defp parse_files!(["new file mode " <> _file_mode | rest], files, _current_mode),
+    do: parse_files!(rest, files, :create)
+
+  defp parse_files!(["deleted file mode " <> _file_mode | rest], files, _current_mode),
+    do: parse_files!(rest, files, :delete)
+
+  defp parse_files!(["--- " <> old_header, "+++ " <> new_header | rest], files, mode) do
     old_path = parse_header_path!(old_header)
     new_path = parse_header_path!(new_header)
     {hunks, rest} = parse_hunks!(rest, [])
-    action = action!(old_path, new_path)
-    path = patch_path!(old_path, new_path)
+    action = action!(mode, old_path, new_path)
+    path = patch_path!(action, old_path, new_path)
 
     if hunks == [] do
       raise ArgumentError, "file patch for #{inspect(path)} must contain at least one hunk"
     end
 
-    parse_files!(rest, [%{action: action, path: path, hunks: Enum.reverse(hunks)} | files])
+    parse_files!(rest, [%{action: action, path: path, hunks: Enum.reverse(hunks)} | files], nil)
   end
 
-  defp parse_files!([line | _rest], _files) do
+  defp parse_files!([line | _rest], _files, _mode) do
     raise ArgumentError, "malformed patch near line: #{inspect(line)}"
   end
 
   defp parse_hunks!([], hunks), do: {hunks, []}
 
   defp parse_hunks!(["diff --git " <> _diff | _rest] = rest, hunks), do: {hunks, rest}
+  defp parse_hunks!(["new file mode " <> _mode | _rest] = rest, hunks), do: {hunks, rest}
+  defp parse_hunks!(["deleted file mode " <> _mode | _rest] = rest, hunks), do: {hunks, rest}
   defp parse_hunks!(["--- " <> _header | _rest] = rest, hunks), do: {hunks, rest}
 
   defp parse_hunks!(["@@ " <> _ = header | rest], hunks) do
@@ -171,6 +182,8 @@ defmodule AgentMachine.Tools.ApplyPatch do
   defp take_hunk_body!([], body), do: {body, []}
 
   defp take_hunk_body!(["diff --git " <> _diff | _rest] = rest, body), do: {body, rest}
+  defp take_hunk_body!(["new file mode " <> _mode | _rest] = rest, body), do: {body, rest}
+  defp take_hunk_body!(["deleted file mode " <> _mode | _rest] = rest, body), do: {body, rest}
   defp take_hunk_body!(["--- " <> _header | _rest] = rest, body), do: {body, rest}
   defp take_hunk_body!(["@@ " <> _header | _rest] = rest, body), do: {body, rest}
 
@@ -239,14 +252,48 @@ defmodule AgentMachine.Tools.ApplyPatch do
     end
   end
 
+  defp action!(nil, old_path, new_path), do: action!(old_path, new_path)
+
+  defp action!(:create, old_path, new_path) when is_binary(new_path) do
+    if old_path == :dev_null or old_path == new_path do
+      :create
+    else
+      unsupported_rename!(old_path, new_path)
+    end
+  end
+
+  defp action!(:create, old_path, new_path) do
+    raise ArgumentError,
+          "new file mode patch must create a real path: #{inspect(old_path)} -> #{inspect(new_path)}"
+  end
+
+  defp action!(:delete, old_path, new_path) when is_binary(old_path) do
+    if new_path == :dev_null or old_path == new_path do
+      :delete
+    else
+      unsupported_rename!(old_path, new_path)
+    end
+  end
+
+  defp action!(:delete, old_path, new_path) do
+    raise ArgumentError,
+          "deleted file mode patch must delete a real path: #{inspect(old_path)} -> #{inspect(new_path)}"
+  end
+
   defp action!(:dev_null, path) when is_binary(path), do: :create
   defp action!(path, :dev_null) when is_binary(path), do: :delete
   defp action!(path, path) when is_binary(path), do: :update
 
-  defp action!(old_path, new_path) do
+  defp action!(old_path, new_path), do: unsupported_rename!(old_path, new_path)
+
+  defp unsupported_rename!(old_path, new_path) do
     raise ArgumentError,
           "rename patches are not supported: #{inspect(old_path)} -> #{inspect(new_path)}"
   end
+
+  defp patch_path!(:create, _old_path, path) when is_binary(path), do: path
+  defp patch_path!(:delete, path, _new_path) when is_binary(path), do: path
+  defp patch_path!(:update, old_path, new_path), do: patch_path!(old_path, new_path)
 
   defp patch_path!(:dev_null, path), do: path
   defp patch_path!(path, :dev_null), do: path

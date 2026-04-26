@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed `apply_patch` to honor git-style `new file mode` and `deleted file mode` patches when headers use matching `a/` and `b/` paths.
+- Added `FEATURES.md` as a linked index of the current project feature set.
 - Added `AGENT_MACHINE_PAID_OPENROUTER_MODEL` to run paid OpenRouter tests against an explicit alternate model.
 - Added opt-in paid OpenRouter Step 3.5 Flash provider, client, MCP tool-use, Mix CLI, TUI adapter, TUI agentic delegation, local-files, and code-edit tool integration tests with a separate manual pipeline.
 - Added repeated tool harness support plus explicit MCP stdio/Streamable HTTP integration with allowlisted namespaced tools.
