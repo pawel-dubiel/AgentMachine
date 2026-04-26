@@ -156,6 +156,9 @@ func buildRunArgs(config runConfig) []string {
 		if config.ToolRoot != "" {
 			args = append(args, "--tool-root", config.ToolRoot)
 		}
+		for _, command := range config.TestCommands {
+			args = append(args, "--test-command", command)
+		}
 	}
 
 	if config.LogFile != "" {

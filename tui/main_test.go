@@ -135,6 +135,27 @@ func TestBuildRunArgsIncludesRunLogFile(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesRepeatedTestCommands(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "verify changes",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "full-access",
+		TestCommands:  []string{"mix test", "go test ./..."},
+	})
+
+	if !containsArgPair(args, "--test-command", "mix test") {
+		t.Fatalf("expected mix test command arg, got %#v", args)
+	}
+	if !containsArgPair(args, "--test-command", "go test ./...") {
+		t.Fatalf("expected go test command arg, got %#v", args)
+	}
+}
+
 func TestPrepareRunLogCreatesPrivateDirectory(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "agent-machine", "logs", "run.jsonl")
 
@@ -653,6 +674,97 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 	}
 	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/Users/pawel/project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "full-access" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestTestCommandAddListAndClear(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/test-command add mix test")
+	result := updated.(model)
+
+	if len(result.savedConfig.TestCommands) != 1 || result.savedConfig.TestCommands[0] != "mix test" {
+		t.Fatalf("expected saved test command, got %#v", result.savedConfig.TestCommands)
+	}
+
+	updated, _ = result.handleCommand("/test-command list")
+	result = updated.(model)
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "mix test") {
+		t.Fatalf("expected test command list, got %#v", result.messages)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if len(loaded.TestCommands) != 1 || loaded.TestCommands[0] != "mix test" {
+		t.Fatalf("expected persisted test command, got %#v", loaded.TestCommands)
+	}
+
+	updated, _ = result.handleCommand("/test-command clear")
+	result = updated.(model)
+	if len(result.savedConfig.TestCommands) != 0 {
+		t.Fatalf("expected cleared test commands, got %#v", result.savedConfig.TestCommands)
+	}
+}
+
+func TestValidateConfigRejectsTestCommandsWithoutCodeEditFullAccess(t *testing.T) {
+	err := validateToolConfig(runConfig{
+		ToolHarness:   "local-files",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "full-access",
+		TestCommands:  []string{"mix test"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "test commands require code-edit") {
+		t.Fatalf("expected code-edit validation error, got %v", err)
+	}
+
+	err = validateToolConfig(runConfig{
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
+		TestCommands:  []string{"mix test"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "test commands require full-access") {
+		t.Fatalf("expected full-access validation error, got %v", err)
+	}
+}
+
+func TestToolsOffClearsTestCommands(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "full-access",
+		TestCommands:  []string{"mix test"},
+	}); err != nil {
+		t.Fatalf("expected saved config write to succeed, got %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools off")
+	result := updated.(model)
+
+	if len(result.savedConfig.TestCommands) != 0 {
+		t.Fatalf("expected test commands to clear, got %#v", result.savedConfig.TestCommands)
 	}
 }
 

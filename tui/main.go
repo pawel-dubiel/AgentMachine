@@ -134,21 +134,23 @@ type runConfig struct {
 	ToolTimeout   string
 	ToolMaxRounds string
 	ToolApproval  string
+	TestCommands  []string
 	LogFile       string
 }
 
 type savedConfig struct {
-	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
-	Workflow         string `json:"workflow,omitempty"`
-	Provider         string `json:"provider,omitempty"`
-	OpenAIModel      string `json:"openai_model,omitempty"`
-	OpenRouterModel  string `json:"openrouter_model,omitempty"`
-	ToolHarness      string `json:"tool_harness,omitempty"`
-	ToolRoot         string `json:"tool_root,omitempty"`
-	ToolTimeout      string `json:"tool_timeout_ms,omitempty"`
-	ToolMaxRounds    string `json:"tool_max_rounds,omitempty"`
-	ToolApproval     string `json:"tool_approval_mode,omitempty"`
+	OpenAIAPIKey     string   `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey string   `json:"openrouter_api_key,omitempty"`
+	Workflow         string   `json:"workflow,omitempty"`
+	Provider         string   `json:"provider,omitempty"`
+	OpenAIModel      string   `json:"openai_model,omitempty"`
+	OpenRouterModel  string   `json:"openrouter_model,omitempty"`
+	ToolHarness      string   `json:"tool_harness,omitempty"`
+	ToolRoot         string   `json:"tool_root,omitempty"`
+	ToolTimeout      string   `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds    string   `json:"tool_max_rounds,omitempty"`
+	ToolApproval     string   `json:"tool_approval_mode,omitempty"`
+	TestCommands     []string `json:"test_commands,omitempty"`
 }
 
 type chatMessage struct {
@@ -600,6 +602,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleKeyCommand(args)
 	case "tools":
 		return m.handleToolsCommand(args)
+	case "test-command":
+		return m.handleTestCommand(args)
 	case "allow-tools":
 		return m.handleAllowToolsCommand(args, "auto-approved-safe")
 	case "yolo-tools":
@@ -802,6 +806,7 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolTimeout = ""
 		m.savedConfig.ToolMaxRounds = ""
 		m.savedConfig.ToolApproval = ""
+		m.savedConfig.TestCommands = nil
 	case "local-files", "code-edit":
 		if len(args) != 5 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools " + args[0] + " <root> <timeout-ms> <max-rounds> <approval-mode>"})
@@ -823,6 +828,10 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 			return m, nil
 		}
+		if len(m.savedConfig.TestCommands) > 0 && (args[0] != "code-edit" || args[4] != "full-access") {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access"})
+			return m, nil
+		}
 		m.savedConfig.ToolHarness = args[0]
 		m.savedConfig.ToolRoot = args[1]
 		m.savedConfig.ToolTimeout = args[2]
@@ -830,6 +839,56 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolApproval = args[4]
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files|code-edit <root> <timeout-ms> <max-rounds> <approval-mode>"})
+		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.toolsStatus()})
+	return m, nil
+}
+
+func (m model) handleTestCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /test-command add <command>|list|clear"})
+		return m, nil
+	}
+
+	switch args[0] {
+	case "add":
+		command := strings.TrimSpace(strings.Join(args[1:], " "))
+		if command == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "test command must not be empty"})
+			return m, nil
+		}
+		for _, existing := range m.savedConfig.TestCommands {
+			if existing == command {
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "test command already exists: " + command})
+				return m, nil
+			}
+		}
+		m.savedConfig.TestCommands = append(m.savedConfig.TestCommands, command)
+	case "list":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /test-command list"})
+			return m, nil
+		}
+		if len(m.savedConfig.TestCommands) == 0 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "test commands: none"})
+			return m, nil
+		}
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "test commands:\n" + strings.Join(m.savedConfig.TestCommands, "\n")})
+		return m, nil
+	case "clear":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /test-command clear"})
+			return m, nil
+		}
+		m.savedConfig.TestCommands = nil
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /test-command add <command>|list|clear"})
 		return m, nil
 	}
 
@@ -1054,6 +1113,7 @@ func (m model) runConfig(task string) runConfig {
 		ToolTimeout:   m.savedConfig.ToolTimeout,
 		ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 		ToolApproval:  m.savedConfig.ToolApproval,
+		TestCommands:  append([]string(nil), m.savedConfig.TestCommands...),
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -1221,8 +1281,8 @@ func validateConfig(config runConfig) error {
 func validateToolConfig(config runConfig) error {
 	switch config.ToolHarness {
 	case "":
-		if config.ToolRoot != "" || config.ToolTimeout != "" || config.ToolMaxRounds != "" || config.ToolApproval != "" {
-			return errors.New("tool root, timeout, max rounds, and approval mode require a selected tool harness")
+		if config.ToolRoot != "" || config.ToolTimeout != "" || config.ToolMaxRounds != "" || config.ToolApproval != "" || len(config.TestCommands) != 0 {
+			return errors.New("tool root, timeout, max rounds, approval mode, and test commands require a selected tool harness")
 		}
 		return nil
 	case "local-files", "code-edit":
@@ -1237,6 +1297,17 @@ func validateToolConfig(config runConfig) error {
 		}
 		if err := validateToolApprovalMode(config.ToolApproval); err != nil {
 			return err
+		}
+		if len(config.TestCommands) > 0 {
+			if config.ToolHarness != "code-edit" {
+				return errors.New("test commands require code-edit tool harness")
+			}
+			if config.ToolApproval != "full-access" {
+				return errors.New("test commands require full-access approval mode")
+			}
+			if err := validateTestCommands(config.TestCommands); err != nil {
+				return err
+			}
 		}
 		return nil
 	default:
@@ -1253,6 +1324,21 @@ func validateToolApprovalMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported tool approval mode: %s", mode)
 	}
+}
+
+func validateTestCommands(commands []string) error {
+	seen := map[string]bool{}
+	for _, command := range commands {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			return errors.New("test command must not be empty")
+		}
+		if seen[command] {
+			return fmt.Errorf("duplicate test command: %s", command)
+		}
+		seen[command] = true
+	}
+	return nil
 }
 
 func (m model) toolPermissionPrompt(task string) (string, string, bool) {
@@ -1490,7 +1576,7 @@ func (m model) toolsStatus() string {
 	case "":
 		return "tools: off"
 	case "local-files", "code-edit":
-		return "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval)
+		return "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval) + " test_commands=" + fmt.Sprintf("%d", len(m.savedConfig.TestCommands))
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
 	}
@@ -1505,7 +1591,7 @@ func runToolsStatus(config runConfig) string {
 	case "":
 		return "tools off"
 	case "local-files", "code-edit":
-		return "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot)
+		return "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot) + " timeout_ms=" + emptyAsNone(config.ToolTimeout) + " max_rounds=" + emptyAsNone(config.ToolMaxRounds)
 	default:
 		return "tools unsupported " + config.ToolHarness
 	}
@@ -1540,6 +1626,7 @@ func (m *model) applySavedSettings() error {
 			ToolTimeout:   m.savedConfig.ToolTimeout,
 			ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 			ToolApproval:  m.savedConfig.ToolApproval,
+			TestCommands:  m.savedConfig.TestCommands,
 		}); err != nil {
 			return fmt.Errorf("invalid saved tools in TUI config: %w", err)
 		}
