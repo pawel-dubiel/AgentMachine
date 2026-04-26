@@ -879,6 +879,22 @@ func TestSummaryDisplayTextFallsBackToAgentOutputs(t *testing.T) {
 	}
 }
 
+func TestSummaryDisplayTextReportsTimeout(t *testing.T) {
+	text := summaryDisplayText(summary{
+		Status: "timeout",
+		Results: map[string]runResultSummary{
+			"planner": {Status: "ok", Output: "planned worker"},
+		},
+	})
+
+	if !strings.Contains(text, "Run timed out before a final response") {
+		t.Fatalf("expected timeout heading, got %q", text)
+	}
+	if !strings.Contains(text, "planner: planned worker") {
+		t.Fatalf("expected partial planner output, got %q", text)
+	}
+}
+
 func TestSummaryDisplayTextUsesFinalOutputWhenPresent(t *testing.T) {
 	text := summaryDisplayText(summary{FinalOutput: "done"})
 

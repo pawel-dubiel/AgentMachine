@@ -556,10 +556,21 @@ func summaryDisplayText(summary summary) string {
 	}
 
 	if len(lines) == 0 {
-		return "Run completed without a final response. Open /agents and inspect agent details."
+		return summaryFallbackHeading(summary) + " Open /agents and inspect agent details."
 	}
 
-	return "Run completed without a final response. Agent outputs:\n" + strings.Join(lines, "\n")
+	return summaryFallbackHeading(summary) + " Agent outputs:\n" + strings.Join(lines, "\n")
+}
+
+func summaryFallbackHeading(summary summary) string {
+	switch summary.Status {
+	case "timeout":
+		return "Run timed out before a final response."
+	case "failed":
+		return "Run failed before a final response."
+	default:
+		return "Run completed without a final response."
+	}
 }
 
 func sortedResultIDs(results map[string]runResultSummary) []string {
@@ -651,7 +662,7 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	m.savedConfig.ToolHarness = "local-files"
 	m.savedConfig.ToolRoot = root
 	m.savedConfig.ToolTimeout = "1000"
-	m.savedConfig.ToolMaxRounds = "4"
+	m.savedConfig.ToolMaxRounds = "6"
 	m.savedConfig.ToolApproval = approval
 
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {

@@ -109,6 +109,7 @@ defmodule AgentMachine.Workflows.Agentic do
 
     Use an empty next_agents list when no split is useful. Keep worker ids short, lowercase, and unique.
     If the task needs external side effects such as writing files or creating directories, you MUST create a worker agent for that exact action and require it to use available tools.
+    For a single filesystem change request, create one worker that inspects, reads, and mutates files sequentially. Do not split exploration and file mutation into parallel workers unless the worker specs include explicit depends_on ordering.
     Do not return an empty next_agents list for filesystem create, write, edit, delete, or rename requests.
     Do not claim side effects happened unless tool_results confirm them.
     Do not call tools yourself. You are only planning and delegating.
