@@ -29,6 +29,27 @@ defmodule AgentMachine.ToolHarnessTest do
            ]
   end
 
+  test "built-in harnesses expose explicit tool policies" do
+    assert %AgentMachine.ToolPolicy{harness: :demo, permissions: demo_permissions} =
+             ToolHarness.builtin_policy!(:demo)
+
+    assert MapSet.member?(demo_permissions, :demo_time)
+
+    assert %AgentMachine.ToolPolicy{harness: :local_files, permissions: local_permissions} =
+             ToolHarness.builtin_policy!(:local_files)
+
+    assert MapSet.subset?(
+             MapSet.new([
+               :local_files_create_dir,
+               :local_files_list,
+               :local_files_read,
+               :local_files_search,
+               :local_files_write
+             ]),
+             local_permissions
+           )
+  end
+
   test "builds OpenRouter tool definitions from allowed tools" do
     body =
       ToolHarness.put_openrouter_tools!(%{"model" => "test"},

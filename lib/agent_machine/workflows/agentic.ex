@@ -84,6 +84,7 @@ defmodule AgentMachine.Workflows.Agentic do
        ) do
     opts
     |> Keyword.put(:allowed_tools, AgentMachine.ToolHarness.builtin!(harness))
+    |> Keyword.put(:tool_policy, AgentMachine.ToolHarness.builtin_policy!(harness))
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
     |> Keyword.put(:tool_max_rounds, tool_max_rounds)
     |> maybe_put_tool_root(harness, spec)

@@ -91,6 +91,11 @@ defmodule AgentMachine.ClientRunnerTest do
     {_agents, opts} = Basic.build!(spec)
 
     assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.Now]
+
+    assert %AgentMachine.ToolPolicy{harness: :demo, permissions: permissions} =
+             Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.member?(permissions, :demo_time)
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
     assert Keyword.fetch!(opts, :tool_max_rounds) == 2
   end
@@ -153,6 +158,11 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
     assert Keyword.fetch!(opts, :tool_max_rounds) == 2
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
+
+    assert %AgentMachine.ToolPolicy{harness: :local_files, permissions: permissions} =
+             Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.member?(permissions, :local_files_write)
   end
 
   test "requires tool root for local file harness" do

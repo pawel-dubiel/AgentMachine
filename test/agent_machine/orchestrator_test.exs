@@ -465,6 +465,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
                tool_max_rounds: 2
              )
@@ -499,6 +500,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
                tool_max_rounds: 2
              )
@@ -527,6 +529,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
                tool_max_rounds: 1
              )
@@ -550,6 +553,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
                tool_max_rounds: 1
              )
@@ -573,6 +577,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
                tool_max_rounds: 2
              )
@@ -596,6 +601,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Failing],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
                tool_timeout_ms: 100,
                tool_max_rounds: 1
              )
@@ -620,12 +626,62 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Failing],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
                tool_timeout_ms: 100,
                tool_max_rounds: 1
              )
 
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "not in :allowed_tools"
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
+  end
+
+  test "requires explicit tool policy when a provider requests tools" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "explicit :tool_policy"
+  end
+
+  test "rejects a tool call outside the explicit tool policy" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "requires permission :test_uppercase"
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
   end
 
   test "returns an agent error when a tool call times out" do
@@ -643,6 +699,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Sleeping],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_sleeping]),
                tool_timeout_ms: 1,
                tool_max_rounds: 1
              )
