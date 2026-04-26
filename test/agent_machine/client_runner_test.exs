@@ -148,9 +148,12 @@ defmodule AgentMachine.ClientRunnerTest do
     {_agents, opts} = Basic.build!(spec)
 
     assert Keyword.fetch!(opts, :allowed_tools) == [
+             AgentMachine.Tools.AppendFile,
              AgentMachine.Tools.CreateDir,
+             AgentMachine.Tools.FileInfo,
              AgentMachine.Tools.ListFiles,
              AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.ReplaceInFile,
              AgentMachine.Tools.SearchFiles,
              AgentMachine.Tools.WriteFile
            ]
@@ -175,6 +178,57 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 2,
         max_attempts: 1,
         tool_harness: :local_files,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2
+      })
+    end
+  end
+
+  test "builds code edit tool options from explicit harness and root" do
+    spec =
+      RunSpec.new!(%{
+        task: "edit code",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :code_edit,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_root: "/tmp/agent-machine"
+      })
+
+    {_agents, opts} = Basic.build!(spec)
+
+    assert Keyword.fetch!(opts, :allowed_tools) == [
+             AgentMachine.Tools.ApplyEdits,
+             AgentMachine.Tools.ApplyPatch,
+             AgentMachine.Tools.FileInfo,
+             AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.SearchFiles
+           ]
+
+    assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
+
+    assert %AgentMachine.ToolPolicy{harness: :code_edit, permissions: permissions} =
+             Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.member?(permissions, :code_edit_apply_edits)
+    assert MapSet.member?(permissions, :code_edit_apply_patch)
+  end
+
+  test "requires tool root for code edit harness" do
+    assert_raise ArgumentError, ~r/:tool_root/, fn ->
+      RunSpec.new!(%{
+        task: "edit code",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :code_edit,
         tool_timeout_ms: 100,
         tool_max_rounds: 2
       })
@@ -403,6 +457,46 @@ defmodule AgentMachine.ClientRunnerTest do
         "what time is it?"
       ])
     end
+  end
+
+  test "mix agent_machine.run accepts code-edit tool harness with explicit root budget and timeout" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+    root = Path.join(System.tmp_dir!(), "agent-machine-code-edit-cli-#{System.unique_integer()}")
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(root)
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "basic",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "2",
+      "--max-attempts",
+      "1",
+      "--tool-harness",
+      "code-edit",
+      "--tool-root",
+      root,
+      "--tool-timeout-ms",
+      "100",
+      "--tool-max-rounds",
+      "2",
+      "--json",
+      "summarize"
+    ])
+
+    assert_receive {:mix_shell, :info, [line]}
+    assert %{"status" => "completed"} = JSON.decode!(line)
   end
 
   test "mix agent_machine.run writes JSONL run log file" do

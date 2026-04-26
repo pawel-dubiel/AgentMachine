@@ -21,11 +21,25 @@ defmodule AgentMachine.ToolHarnessTest do
 
   test "built-in local files harness exposes constrained file tools" do
     assert ToolHarness.builtin!(:local_files) == [
+             AgentMachine.Tools.AppendFile,
              AgentMachine.Tools.CreateDir,
+             AgentMachine.Tools.FileInfo,
              AgentMachine.Tools.ListFiles,
              AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.ReplaceInFile,
              AgentMachine.Tools.SearchFiles,
              AgentMachine.Tools.WriteFile
+           ]
+  end
+
+  test "built-in code edit harness exposes patch tools and read-only context tools" do
+    assert ToolHarness.builtin!(:code_edit) == [
+             AgentMachine.Tools.ApplyEdits,
+             AgentMachine.Tools.ApplyPatch,
+             AgentMachine.Tools.FileInfo,
+             AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.SearchFiles
            ]
   end
 
@@ -40,13 +54,31 @@ defmodule AgentMachine.ToolHarnessTest do
 
     assert MapSet.subset?(
              MapSet.new([
+               :local_files_append,
                :local_files_create_dir,
+               :local_files_info,
                :local_files_list,
                :local_files_read,
+               :local_files_replace,
                :local_files_search,
                :local_files_write
              ]),
              local_permissions
+           )
+
+    assert %AgentMachine.ToolPolicy{harness: :code_edit, permissions: code_edit_permissions} =
+             ToolHarness.builtin_policy!(:code_edit)
+
+    assert MapSet.subset?(
+             MapSet.new([
+               :code_edit_apply_edits,
+               :code_edit_apply_patch,
+               :local_files_info,
+               :local_files_list,
+               :local_files_read,
+               :local_files_search
+             ]),
+             code_edit_permissions
            )
   end
 

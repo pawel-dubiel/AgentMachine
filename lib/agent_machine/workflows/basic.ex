@@ -91,7 +91,8 @@ defmodule AgentMachine.Workflows.Basic do
     |> maybe_put_tool_root(harness, spec)
   end
 
-  defp maybe_put_tool_root(opts, :local_files, %RunSpec{tool_root: root}) do
+  defp maybe_put_tool_root(opts, harness, %RunSpec{tool_root: root})
+       when harness in [:local_files, :code_edit] do
     Keyword.put(opts, :tool_root, root)
   end
 

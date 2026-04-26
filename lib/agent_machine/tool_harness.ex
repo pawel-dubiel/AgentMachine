@@ -7,10 +7,21 @@ defmodule AgentMachine.ToolHarness do
 
   @builtin_harnesses %{
     demo: [AgentMachine.Tools.Now],
-    local_files: [
-      AgentMachine.Tools.CreateDir,
+    code_edit: [
+      AgentMachine.Tools.ApplyEdits,
+      AgentMachine.Tools.ApplyPatch,
+      AgentMachine.Tools.FileInfo,
       AgentMachine.Tools.ListFiles,
       AgentMachine.Tools.ReadFile,
+      AgentMachine.Tools.SearchFiles
+    ],
+    local_files: [
+      AgentMachine.Tools.AppendFile,
+      AgentMachine.Tools.CreateDir,
+      AgentMachine.Tools.FileInfo,
+      AgentMachine.Tools.ListFiles,
+      AgentMachine.Tools.ReadFile,
+      AgentMachine.Tools.ReplaceInFile,
       AgentMachine.Tools.SearchFiles,
       AgentMachine.Tools.WriteFile
     ]
@@ -18,10 +29,21 @@ defmodule AgentMachine.ToolHarness do
 
   @builtin_policies %{
     demo: [:demo_time],
-    local_files: [
-      :local_files_create_dir,
+    code_edit: [
+      :code_edit_apply_edits,
+      :code_edit_apply_patch,
+      :local_files_info,
       :local_files_list,
       :local_files_read,
+      :local_files_search
+    ],
+    local_files: [
+      :local_files_append,
+      :local_files_create_dir,
+      :local_files_info,
+      :local_files_list,
+      :local_files_read,
+      :local_files_replace,
       :local_files_search,
       :local_files_write
     ]

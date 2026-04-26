@@ -30,7 +30,7 @@ defmodule AgentMachine.RunSpec do
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
           pricing: map() | nil,
-          tool_harness: :demo | :local_files | nil,
+          tool_harness: :demo | :local_files | :code_edit | nil,
           tool_timeout_ms: pos_integer() | nil,
           tool_max_rounds: pos_integer() | nil,
           tool_root: binary() | nil
@@ -121,11 +121,12 @@ defmodule AgentMachine.RunSpec do
   end
 
   defp validate_tool_options!(%__MODULE__{
-         tool_harness: :local_files,
+         tool_harness: harness,
          tool_timeout_ms: timeout_ms,
          tool_max_rounds: max_rounds,
          tool_root: root
-       }) do
+       })
+       when harness in [:local_files, :code_edit] do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
     require_positive_integer!(max_rounds, :tool_max_rounds)
     require_non_empty_binary!(root, :tool_root)
@@ -133,7 +134,7 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_tool_options!(%__MODULE__{tool_harness: harness}) do
     raise ArgumentError,
-          "run spec :tool_harness must be :demo or :local_files, got: #{inspect(harness)}"
+          "run spec :tool_harness must be :demo, :local_files, or :code_edit, got: #{inspect(harness)}"
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0 do

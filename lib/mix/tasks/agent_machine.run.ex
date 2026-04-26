@@ -190,8 +190,13 @@ defmodule Mix.Tasks.AgentMachine.Run do
       {:ok, "local-files"} ->
         :local_files
 
+      {:ok, "code-edit"} ->
+        :code_edit
+
       {:ok, harness} ->
-        Mix.raise("--tool-harness must be demo or local-files, got: #{inspect(harness)}")
+        Mix.raise(
+          "--tool-harness must be demo, local-files, or code-edit, got: #{inspect(harness)}"
+        )
 
       :error ->
         nil

@@ -16,4 +16,12 @@ defmodule AgentMachine.ToolPolicyTest do
       ToolPolicy.permit!(policy, AgentMachine.Tools.Now)
     end
   end
+
+  test "rejects code edit tools without code edit permission" do
+    policy = ToolPolicy.new!(permissions: [:local_files_read])
+
+    assert_raise ArgumentError, ~r/requires permission :code_edit_apply_edits/, fn ->
+      ToolPolicy.permit!(policy, AgentMachine.Tools.ApplyEdits)
+    end
+  end
 end
