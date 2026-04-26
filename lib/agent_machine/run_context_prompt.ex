@@ -1,18 +1,59 @@
 defmodule AgentMachine.RunContextPrompt do
   @moduledoc false
 
-  alias AgentMachine.JSON
+  alias AgentMachine.{JSON, ToolHarness, ToolPolicy}
 
   def text(opts) when is_list(opts) do
     context = Keyword.fetch!(opts, :run_context)
     results = Map.fetch!(context, :results)
     artifacts = Map.fetch!(context, :artifacts)
+    tools = tool_context(opts)
 
-    if map_size(results) == 0 and map_size(artifacts) == 0 do
+    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) do
       ""
     else
-      JSON.encode!(%{results: json_value(results), artifacts: json_value(artifacts)})
+      %{results: json_value(results), artifacts: json_value(artifacts)}
+      |> maybe_put_tools(tools)
+      |> JSON.encode!()
     end
+  end
+
+  defp tool_context(opts) do
+    case Keyword.fetch(opts, :allowed_tools) do
+      {:ok, tools} when is_list(tools) and tools != [] ->
+        policy = Keyword.fetch!(opts, :tool_policy)
+
+        %{
+          harness: harness_name!(policy),
+          root: Keyword.get(opts, :tool_root),
+          approval_mode: Keyword.fetch!(opts, :tool_approval_mode),
+          available_tools: tool_names!(tools),
+          instruction:
+            "Use tools for external side effects. For filesystem tools, use paths relative to tool_root unless an absolute path is inside tool_root. Do not claim file or directory changes unless tool_results confirm them."
+        }
+
+      {:ok, []} ->
+        nil
+
+      :error ->
+        nil
+    end
+  end
+
+  defp maybe_put_tools(context, nil), do: context
+  defp maybe_put_tools(context, tools), do: Map.put(context, :tools, json_value(tools))
+
+  defp harness_name!(%ToolPolicy{harness: harness}) when is_atom(harness),
+    do: Atom.to_string(harness)
+
+  defp harness_name!(policy) do
+    raise ArgumentError, ":tool_policy must include a harness, got: #{inspect(policy)}"
+  end
+
+  defp tool_names!(tools) do
+    tools
+    |> ToolHarness.definitions!()
+    |> Enum.map(& &1.name)
   end
 
   defp json_value(value) when is_map(value) do
