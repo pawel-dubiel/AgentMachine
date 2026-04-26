@@ -26,10 +26,17 @@ type summary struct {
 }
 
 type runResultSummary struct {
-	Status  string `json:"status"`
-	Output  string `json:"output"`
-	Error   string `json:"error"`
-	Attempt int    `json:"attempt"`
+	Status   string          `json:"status"`
+	Output   string          `json:"output"`
+	Decision plannerDecision `json:"decision"`
+	Error    string          `json:"error"`
+	Attempt  int             `json:"attempt"`
+}
+
+type plannerDecision struct {
+	Mode              string   `json:"mode"`
+	Reason            string   `json:"reason"`
+	DelegatedAgentIDs []string `json:"delegated_agent_ids"`
 }
 
 type usageSummary struct {
@@ -89,6 +96,7 @@ type agentState struct {
 	Status        string
 	Attempt       int
 	Output        string
+	Decision      plannerDecision
 	Error         string
 	StartedAt     string
 	FinishedAt    string
@@ -235,7 +243,7 @@ func initialModel() (model, error) {
 		savedConfig: savedConfig,
 		configPath:  configPath,
 		messages: []chatMessage{
-			{Role: "system", Text: "Open Setup and select a workflow and provider before running AgentMachine."},
+			{Role: "system", Text: "Open Setup and select a provider before running AgentMachine."},
 		},
 		view:   viewSetup,
 		agents: map[string]agentState{},
@@ -437,12 +445,6 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
-	if !m.workflowSet {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a workflow in Setup before running"})
-		m.view = viewSetup
-		return m, nil
-	}
-
 	if !m.providerSet {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider in Setup before running"})
 		m.view = viewSetup
@@ -552,6 +554,9 @@ func summaryDisplayText(summary summary) string {
 	lines := make([]string, 0, len(summary.Results)+1)
 	for _, id := range sortedResultIDs(summary.Results) {
 		result := summary.Results[id]
+		if strings.TrimSpace(result.Decision.Mode) != "" {
+			lines = append(lines, id+" decision: "+decisionSummaryText(result.Decision))
+		}
 		switch {
 		case strings.TrimSpace(result.Output) != "":
 			lines = append(lines, id+": "+result.Output)
@@ -565,6 +570,14 @@ func summaryDisplayText(summary summary) string {
 	}
 
 	return summaryFallbackHeading(summary) + " Agent outputs:\n" + strings.Join(lines, "\n")
+}
+
+func decisionSummaryText(decision plannerDecision) string {
+	text := emptyAsNone(decision.Mode)
+	if strings.TrimSpace(decision.Reason) != "" {
+		text += " - " + decision.Reason
+	}
+	return text
 }
 
 func summaryFallbackHeading(summary summary) string {
@@ -698,34 +711,9 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
-	if len(args) == 0 {
-		if !m.workflowSet {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow: (missing)"})
-			return m, nil
-		}
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow: " + string(m.workflow)})
-		return m, nil
-	}
-	if len(args) != 1 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /workflow basic|agentic"})
-		return m, nil
-	}
-
-	nextWorkflow, err := parseWorkflow(args[0])
-	if err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
-		return m, nil
-	}
-
-	m.workflow = nextWorkflow
-	m.workflowSet = true
-	m.savedConfig.Workflow = string(nextWorkflow)
-	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
-		return m, nil
-	}
+	_ = args
 	m.view = viewChat
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "workflow set to " + string(m.workflow)})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses planner-managed agentic mode"})
 	return m, nil
 }
 
@@ -1127,6 +1115,7 @@ func (m *model) applySummaryResults(summary summary) {
 		agent.Status = result.Status
 		agent.Attempt = result.Attempt
 		agent.Output = result.Output
+		agent.Decision = result.Decision
 		agent.Error = result.Error
 		m.agents[id] = agent
 	}
@@ -1135,7 +1124,7 @@ func (m *model) applySummaryResults(summary summary) {
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
 		Task:          task,
-		Workflow:      m.workflow,
+		Workflow:      workflowAgentic,
 		Provider:      m.provider,
 		APIKey:        m.apiKey(),
 		Model:         m.modelID(),
@@ -1662,15 +1651,6 @@ func runToolsStatus(config runConfig) string {
 }
 
 func (m *model) applySavedSettings() error {
-	if strings.TrimSpace(m.savedConfig.Workflow) != "" {
-		workflow, err := parseWorkflow(m.savedConfig.Workflow)
-		if err != nil {
-			return fmt.Errorf("invalid saved workflow in TUI config: %w", err)
-		}
-		m.workflow = workflow
-		m.workflowSet = true
-	}
-
 	if strings.TrimSpace(m.savedConfig.Provider) != "" {
 		provider, err := parseProvider(m.savedConfig.Provider)
 		if err != nil {
@@ -1710,7 +1690,7 @@ func (m *model) applySavedSettings() error {
 		}
 	}
 
-	if m.workflowSet && m.providerSet {
+	if m.providerSet {
 		m.view = viewChat
 		m.messages = []chatMessage{
 			{Role: "system", Text: "Loaded saved TUI setup. Use /setup to change it."},
@@ -1806,7 +1786,11 @@ func (m model) agentTreeLine(agent agentState) string {
 	if attempt == 0 {
 		attempt = 1
 	}
-	return fmt.Sprintf("%s%s  %s  attempt %d", indent, agent.ID, status, attempt)
+	decision := ""
+	if strings.TrimSpace(agent.Decision.Mode) != "" {
+		decision = "  decision " + agent.Decision.Mode
+	}
+	return fmt.Sprintf("%s%s  %s  attempt %d%s", indent, agent.ID, status, attempt, decision)
 }
 
 func (m model) agentDepth(id string) int {

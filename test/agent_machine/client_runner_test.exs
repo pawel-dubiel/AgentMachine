@@ -367,6 +367,8 @@ defmodule AgentMachine.ClientRunnerTest do
            }
 
     assert planner.instructions =~ "Return only JSON"
+    assert planner.instructions =~ "\"direct\""
+    assert planner.instructions =~ "\"delegate\""
     assert Keyword.fetch!(opts, :max_steps) == 6
     finalizer = Keyword.fetch!(opts, :finalizer)
     assert finalizer.id == "finalizer"
@@ -389,6 +391,30 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(summary.results) |> Enum.sort() == ["assistant", "finalizer"]
     assert summary.usage.agents == 2
     assert Enum.map(summary.events, & &1.type) |> List.last() == "run_completed"
+  end
+
+  test "runs the agentic echo workflow in direct mode and exposes planner decision" do
+    summary =
+      ClientRunner.run!(%{
+        task: "summarize the project",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1
+      })
+
+    assert summary.status == "completed"
+    assert summary.final_output =~ "finalizer"
+    assert Map.keys(summary.results) |> Enum.sort() == ["finalizer", "planner"]
+
+    assert summary.results["planner"].decision == %{
+             mode: "direct",
+             reason: "Echo provider completes structured planner requests directly.",
+             delegated_agent_ids: []
+           }
+
+    assert summary.results["planner"].output =~ "agent planner: summarize the project"
   end
 
   test "streams live events without changing the final summary" do

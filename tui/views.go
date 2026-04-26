@@ -50,11 +50,6 @@ func (m model) View() string {
 
 func (m model) statusLine() string {
 	parts := []string{"view=" + m.viewName()}
-	if !m.workflowSet {
-		parts = append(parts, "workflow=missing")
-	} else {
-		parts = append(parts, "workflow="+string(m.workflow))
-	}
 	if !m.providerSet {
 		parts = append(parts, "provider=missing")
 		return strings.Join(parts, " | ")
@@ -98,10 +93,6 @@ func (m model) chatView() string {
 }
 
 func (m model) setupView() string {
-	workflowValue := "(missing)"
-	if m.workflowSet {
-		workflowValue = string(m.workflow)
-	}
 	providerValue := "(missing)"
 	if m.providerSet {
 		providerValue = string(m.provider)
@@ -109,7 +100,7 @@ func (m model) setupView() string {
 
 	return strings.Join([]string{
 		labelStyle.Render("Setup"),
-		"workflow: " + workflowValue,
+		"mode: planner-managed agentic",
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
@@ -119,7 +110,6 @@ func (m model) setupView() string {
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
 		"Commands",
-		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
@@ -256,6 +246,9 @@ func (m model) agentDetailView() string {
 		"finished: " + emptyAsNone(agent.FinishedAt),
 		"duration: " + duration,
 		"",
+		labelStyle.Render("Decision"),
+		decisionText(agent.Decision),
+		"",
 		labelStyle.Render("Output"),
 		emptyAsNone(agent.Output),
 		"",
@@ -271,6 +264,20 @@ func (m model) agentDetailView() string {
 
 func (m model) helpView() string {
 	return helpText()
+}
+
+func decisionText(decision plannerDecision) string {
+	if strings.TrimSpace(decision.Mode) == "" && strings.TrimSpace(decision.Reason) == "" {
+		return "(none)"
+	}
+	parts := []string{"mode: " + emptyAsNone(decision.Mode)}
+	if strings.TrimSpace(decision.Reason) != "" {
+		parts = append(parts, "reason: "+decision.Reason)
+	}
+	if len(decision.DelegatedAgentIDs) > 0 {
+		parts = append(parts, "delegated: "+strings.Join(decision.DelegatedAgentIDs, ", "))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func agentEventLines(events []eventSummary) string {
@@ -334,7 +341,6 @@ func helpText() string {
 		"",
 		"Commands:",
 		"/setup",
-		"/workflow basic|agentic",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",

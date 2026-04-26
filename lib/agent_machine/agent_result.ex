@@ -10,6 +10,7 @@ defmodule AgentMachine.AgentResult do
     :status,
     :attempt,
     :output,
+    :decision,
     :next_agents,
     :artifacts,
     :tool_results,

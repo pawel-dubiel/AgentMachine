@@ -131,6 +131,7 @@ defmodule AgentMachine.ClientRunner do
        %{
          status: Atom.to_string(result.status),
          output: result.output,
+         decision: result.decision,
          error: result.error,
          attempt: result.attempt,
          artifacts: result.artifacts || %{},

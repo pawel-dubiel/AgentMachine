@@ -37,6 +37,7 @@ func TestPaidOpenRouterRunThroughTUIAdapter(t *testing.T) {
 	if summary.Status != "completed" {
 		t.Fatalf("expected completed summary, got %#v", summary)
 	}
+	assertPlannerDecision(t, summary.Results, "delegate")
 	if strings.TrimSpace(summary.FinalOutput) == "" {
 		t.Fatalf("expected non-empty final output, got %#v", summary)
 	}
@@ -147,6 +148,7 @@ func TestPaidOpenRouterAgenticToolsCreateDirectoryAndFileThroughTUIAdapter(t *te
 	if summary.Status != "completed" {
 		t.Fatalf("expected completed summary, got %#v", summary)
 	}
+	assertPlannerDecision(t, summary.Results, "delegate")
 	if !hasEvent(summary.Events, "tool_call_finished") {
 		t.Fatalf("expected tool_call_finished event, got %#v", summary.Events)
 	}
@@ -255,6 +257,7 @@ func TestPaidOpenRouterAgenticCodeEditThroughTUIAdapter(t *testing.T) {
 	if summary.Status != "completed" {
 		t.Fatalf("expected completed summary, got %#v", summary)
 	}
+	assertPlannerDecision(t, summary.Results, "delegate")
 	if !hasEvent(summary.Events, "tool_call_finished") {
 		t.Fatalf("expected tool_call_finished event, got %#v", summary.Events)
 	}
@@ -421,6 +424,21 @@ func delegatedWorkerResult(results map[string]runResultSummary) (string, runResu
 		}
 	}
 	return "", runResultSummary{}
+}
+
+func assertPlannerDecision(t *testing.T, results map[string]runResultSummary, mode string) {
+	t.Helper()
+
+	planner, ok := results["planner"]
+	if !ok {
+		t.Fatalf("expected planner result, got %#v", results)
+	}
+	if planner.Decision.Mode != mode {
+		t.Fatalf("expected planner decision mode %q, got %#v", mode, planner.Decision)
+	}
+	if strings.TrimSpace(planner.Decision.Reason) == "" {
+		t.Fatalf("expected planner decision reason, got %#v", planner.Decision)
+	}
 }
 
 func hasEvent(events []eventSummary, eventType string) bool {

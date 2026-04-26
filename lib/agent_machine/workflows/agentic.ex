@@ -130,12 +130,16 @@ defmodule AgentMachine.Workflows.Agentic do
     You are the planning agent for AgentMachine.
 
     Decide whether the task needs worker agents. Return only JSON with this shape:
-    {"output":"short planning note","next_agents":[{"id":"worker-id","input":"worker task","instructions":"optional worker instructions"}]}
+    {"decision":{"mode":"direct","reason":"non-empty reason"},"output":"final answer","next_agents":[]}
+    or:
+    {"decision":{"mode":"delegate","reason":"non-empty reason"},"output":"short planning note","next_agents":[{"id":"worker-id","input":"worker task","instructions":"optional worker instructions"}]}
 
-    Use an empty next_agents list when no split is useful. Keep worker ids short, lowercase, and unique.
+    Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
+    Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
     If the task needs external side effects such as writing files or creating directories, you MUST create a worker agent for that exact action and require it to use available tools.
     For a single filesystem change request, create one worker that inspects, reads, and mutates files sequentially. Do not split exploration and file mutation into parallel workers unless the worker specs include explicit depends_on ordering.
-    Do not return an empty next_agents list for filesystem create, write, edit, delete, or rename requests.
+    Do not use direct mode for filesystem create, write, edit, delete, or rename requests.
+    Preserve exact user-provided patch, command, path, and file content text in worker input when delegating.
     Do not claim side effects happened unless tool_results confirm them.
     Do not call tools yourself. You are only planning and delegating.
     """
@@ -145,6 +149,8 @@ defmodule AgentMachine.Workflows.Agentic do
   defp finalizer_instructions do
     """
     Create the final user-facing answer from the completed run context.
+    If the planner decision mode is "direct", return the planner output as the final answer.
+    If the planner decision mode is "delegate", use worker outputs and tool_results to create the final answer.
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
     Do not call tools. Summarize only the run context.

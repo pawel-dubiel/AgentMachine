@@ -8,12 +8,12 @@ defmodule AgentMachine.Providers.Echo do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.Agent
+  alias AgentMachine.{Agent, JSON}
 
   @impl true
   def complete(%Agent{} = agent, _opts) do
     input_tokens = token_count(agent.input) + token_count(agent.instructions)
-    output = "agent #{agent.id}: #{agent.input}"
+    output = output(agent)
     output_tokens = token_count(output)
 
     {:ok,
@@ -26,6 +26,28 @@ defmodule AgentMachine.Providers.Echo do
        }
      }}
   end
+
+  defp output(%Agent{} = agent) do
+    if structured_delegation_response?(agent) do
+      JSON.encode!(%{
+        "decision" => %{
+          "mode" => "direct",
+          "reason" => "Echo provider completes structured planner requests directly."
+        },
+        "output" => "agent #{agent.id}: #{agent.input}",
+        "next_agents" => []
+      })
+    else
+      "agent #{agent.id}: #{agent.input}"
+    end
+  end
+
+  defp structured_delegation_response?(%Agent{metadata: metadata}) when is_map(metadata) do
+    Map.get(metadata, :agent_machine_response) == "delegation" ||
+      Map.get(metadata, "agent_machine_response") == "delegation"
+  end
+
+  defp structured_delegation_response?(_agent), do: false
 
   defp token_count(nil), do: 0
 

@@ -558,6 +558,7 @@ defmodule AgentMachine.Orchestrator do
        %{
          status: result.status,
          output: result.output,
+         decision: result.decision,
          error: result.error,
          artifacts: result.artifacts || %{},
          tool_results: result.tool_results || %{}

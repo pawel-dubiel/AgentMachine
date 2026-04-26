@@ -27,6 +27,7 @@ defmodule AgentMachine.AgentRunner do
         payload = DelegationResponse.normalize_payload!(agent, payload)
         output = payload.output
         usage = Usage.from_provider!(agent, run_id, provider_usage)
+        decision = decision_from_payload!(payload)
         next_agents = next_agents_from_payload!(payload)
         artifacts = artifacts_from_payload!(payload)
         :ok = UsageLedger.record!(usage)
@@ -37,6 +38,7 @@ defmodule AgentMachine.AgentRunner do
           status: :ok,
           attempt: attempt,
           output: output,
+          decision: decision,
           next_agents: next_agents,
           artifacts: artifacts,
           tool_results: completion.tool_results,
@@ -249,6 +251,19 @@ defmodule AgentMachine.AgentRunner do
       {:ok, specs} ->
         raise ArgumentError,
               "provider next_agents must be a list of agent specs, got: #{inspect(specs)}"
+    end
+  end
+
+  defp decision_from_payload!(payload) when is_map(payload) do
+    case fetch_optional_payload_field(payload, :decision) do
+      :error ->
+        nil
+
+      {:ok, decision} when is_map(decision) ->
+        decision
+
+      {:ok, decision} ->
+        raise ArgumentError, "provider decision must be a map, got: #{inspect(decision)}"
     end
   end
 

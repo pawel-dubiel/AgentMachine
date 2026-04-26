@@ -142,7 +142,8 @@ value was masked.
 Choose one workflow for each run:
 
 - `basic`: runs a straightforward assistant task and returns a final answer.
-- `agentic`: asks a planner to split the work before returning a final answer.
+- `agentic`: asks a planner to choose a direct answer or delegated worker agents
+  before returning a final answer.
 
 Examples:
 
@@ -373,6 +374,7 @@ Local file tool rules:
 - In the `agentic` workflow, planner and finalizer agents do not receive tools;
   filesystem actions should be delegated to worker agents and reported only from
   worker `tool_results`.
+- The `agentic` planner returns a visible direct/delegate decision with a reason.
 - Planner and finalizer prompts still receive tool availability and `tool_root`
   as context, but they cannot call tools directly.
 - Search requires `rg` in `PATH`.
@@ -461,17 +463,20 @@ cd tui
 go run .
 ```
 
-In the UI, set a workflow and provider before sending normal messages. Normal
-messages include a short recent user/assistant conversation context so follow-up
-wording like "inside this dir" can resolve from chat history.
+In the UI, set a provider, model, and optional tools before sending normal
+messages. The TUI always uses planner-managed `agentic` runs: the planner chooses
+a direct answer for simple requests or delegates worker agents when tools or
+separate execution are needed. Normal messages include a short recent
+user/assistant conversation context so follow-up wording like "inside this dir"
+can resolve from chat history.
 Each TUI run writes an Elixir JSONL log next to the config file under
-`logs/*.jsonl`; the run banner shows the exact log path.
+`logs/*.jsonl`; the run banner shows the exact log path. Open `/agents` or
+`/agent planner` to read the planner decision.
 
 Useful commands:
 
 ```text
 /setup
-/workflow basic|agentic
 /provider echo|openai|openrouter
 /key <api-key>
 /models reload

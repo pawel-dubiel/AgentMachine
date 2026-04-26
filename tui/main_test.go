@@ -421,6 +421,28 @@ func TestAgentDetailRendersToolEvents(t *testing.T) {
 	}
 }
 
+func TestAgentDetailRendersPlannerDecision(t *testing.T) {
+	m := model{
+		selectedAgent: "planner",
+		agents: map[string]agentState{
+			"planner": {
+				ID:     "planner",
+				Status: "ok",
+				Decision: plannerDecision{
+					Mode:              "delegate",
+					Reason:            "Needs file edits.",
+					DelegatedAgentIDs: []string{"worker"},
+				},
+			},
+		},
+	}
+
+	view := m.agentDetailView()
+	if !strings.Contains(view, "mode: delegate") || !strings.Contains(view, "delegated: worker") {
+		t.Fatalf("expected planner decision in detail view, got %q", view)
+	}
+}
+
 func TestResolveConfigUsesOpenAIPricingProfileAndTimeoutDefault(t *testing.T) {
 	resolved, err := resolveConfig(runConfig{
 		Task:     "review this project",
@@ -544,8 +566,6 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 	}
 	m.provider = providerOpenRouter
 	m.providerSet = true
-	m.workflow = workflowBasic
-	m.workflowSet = true
 	m.savedConfig.OpenRouterAPIKey = "test-key"
 	m.selectedModel = "openai/gpt-4o-mini"
 	m.modelOptions = []modelOption{
@@ -553,6 +573,10 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 	}
 
 	config := m.runConfig("review this project")
+
+	if config.Workflow != workflowAgentic {
+		t.Fatalf("expected planner-managed agentic workflow, got %q", config.Workflow)
+	}
 
 	if config.InputPrice != "0.15" {
 		t.Fatalf("unexpected input price: %q", config.InputPrice)
@@ -630,7 +654,7 @@ func TestProviderCommandPersistsSelectedProvider(t *testing.T) {
 	}
 }
 
-func TestInitialModelRequiresSetupBeforeRun(t *testing.T) {
+func TestInitialModelRequiresProviderBeforeRun(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
 	m, err := initialModel()
@@ -647,12 +671,52 @@ func TestInitialModelRequiresSetupBeforeRun(t *testing.T) {
 	if result.view != viewSetup {
 		t.Fatalf("expected setup view, got %v", result.view)
 	}
-	if !strings.Contains(result.messages[len(result.messages)-1].Text, "select a workflow") {
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "select a provider") {
 		t.Fatalf("unexpected message: %#v", result.messages[len(result.messages)-1])
 	}
 }
 
-func TestWorkflowCommandSwitchesSessionWorkflow(t *testing.T) {
+func TestStartRunUsesAgenticWithoutWorkflowSetup(t *testing.T) {
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  filepath.Join(t.TempDir(), "config.json"),
+	}
+
+	updated, cmd := m.startRun("review this project")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command")
+	}
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected agentic workflow, got %q", result.activeConfig.Workflow)
+	}
+}
+
+func TestSetupAndHelpUsePlannerManagedMode(t *testing.T) {
+	m := model{provider: providerEcho, providerSet: true}
+
+	setup := m.setupView()
+	if !strings.Contains(setup, "mode: planner-managed agentic") {
+		t.Fatalf("expected planner mode in setup view, got %q", setup)
+	}
+	if strings.Contains(setup, "/workflow") || strings.Contains(setup, "workflow:") {
+		t.Fatalf("expected setup view to omit workflow selection, got %q", setup)
+	}
+
+	help := helpText()
+	if strings.Contains(help, "/workflow") {
+		t.Fatalf("expected help to omit workflow command, got %q", help)
+	}
+
+	status := m.statusLine()
+	if strings.Contains(status, "workflow=") {
+		t.Fatalf("expected status to omit workflow, got %q", status)
+	}
+}
+
+func TestWorkflowCommandReportsPlannerManagedMode(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
 	m, err := initialModel()
@@ -663,15 +727,15 @@ func TestWorkflowCommandSwitchesSessionWorkflow(t *testing.T) {
 	updated, _ := m.handleCommand("/workflow agentic")
 	result := updated.(model)
 
-	if result.workflow != workflowAgentic {
-		t.Fatalf("unexpected workflow: %q", result.workflow)
+	if result.workflowSet {
+		t.Fatal("expected workflow command not to mutate workflow setup")
 	}
-	if !result.workflowSet {
-		t.Fatal("expected workflow to be explicit")
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "planner-managed agentic") {
+		t.Fatalf("unexpected workflow message: %#v", result.messages[len(result.messages)-1])
 	}
 }
 
-func TestWorkflowCommandPersistsSelectedWorkflow(t *testing.T) {
+func TestWorkflowCommandDoesNotPersistWorkflow(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
 
@@ -686,8 +750,8 @@ func TestWorkflowCommandPersistsSelectedWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.Workflow != "agentic" {
-		t.Fatalf("expected workflow to persist, got %q", loaded.Workflow)
+	if loaded.Workflow != "" {
+		t.Fatalf("expected workflow not to persist, got %q", loaded.Workflow)
 	}
 }
 
@@ -1102,6 +1166,27 @@ func TestSummaryDisplayTextFallsBackToAgentOutputs(t *testing.T) {
 	}
 }
 
+func TestSummaryDisplayTextIncludesPlannerDecision(t *testing.T) {
+	text := summaryDisplayText(summary{
+		Status: "completed",
+		Results: map[string]runResultSummary{
+			"planner": {
+				Status: "ok",
+				Output: "planned worker",
+				Decision: plannerDecision{
+					Mode:              "delegate",
+					Reason:            "Filesystem edits require tools.",
+					DelegatedAgentIDs: []string{"worker"},
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "planner decision: delegate - Filesystem edits require tools.") {
+		t.Fatalf("expected planner decision, got %q", text)
+	}
+}
+
 func TestSummaryDisplayTextReportsTimeout(t *testing.T) {
 	text := summaryDisplayText(summary{
 		Status: "timeout",
@@ -1202,7 +1287,7 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
 
 	if err := saveSavedConfig(configPath, savedConfig{
-		Workflow:        "agentic",
+		Workflow:        "legacy-invalid",
 		Provider:        "openrouter",
 		OpenRouterModel: "openai/gpt-4o-mini",
 		ToolHarness:     "local-files",
@@ -1219,8 +1304,8 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	if !m.workflowSet || m.workflow != workflowAgentic {
-		t.Fatalf("expected saved workflow, got set=%v workflow=%q", m.workflowSet, m.workflow)
+	if m.workflowSet || m.workflow != "" {
+		t.Fatalf("expected saved workflow to be ignored, got set=%v workflow=%q", m.workflowSet, m.workflow)
 	}
 	if !m.providerSet || m.provider != providerOpenRouter {
 		t.Fatalf("expected saved provider, got set=%v provider=%q", m.providerSet, m.provider)

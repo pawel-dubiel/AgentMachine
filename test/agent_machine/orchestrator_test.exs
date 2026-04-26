@@ -108,6 +108,8 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.status == :completed
     assert run.agent_order == ["planner", "worker-a", "worker-b"]
     assert run.results["planner"].output == "Created two workers."
+    assert run.results["planner"].decision.mode == "delegate"
+    assert run.results["planner"].decision.delegated_agent_ids == ["worker-a", "worker-b"]
     assert run.results["planner"].next_agents |> Enum.map(& &1.id) == ["worker-a", "worker-b"]
     assert run.results["worker-a"].output == "finished worker-a"
     assert run.results["worker-b"].output == "finished worker-b"
@@ -128,6 +130,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_steps: 2)
     assert run.status == :completed
     assert run.results["planner"].output == "Created worker."
+    assert run.results["planner"].decision.mode == "delegate"
     assert run.results["worker"].output == "finished worker"
   end
 
@@ -1122,6 +1125,10 @@ defmodule AgentMachine.TestProviders.StructuredDelegating do
   def complete(%Agent{id: "planner"} = agent, _opts) do
     output =
       JSON.encode!(%{
+        decision: %{
+          mode: "delegate",
+          reason: "The work should be split across two workers."
+        },
         output: "Created two workers.",
         next_agents: [
           %{
@@ -1171,6 +1178,10 @@ defmodule AgentMachine.TestProviders.FencedStructuredDelegating do
   def complete(%Agent{id: "planner"} = agent, _opts) do
     json =
       JSON.encode!(%{
+        decision: %{
+          mode: "delegate",
+          reason: "A worker should handle the task."
+        },
         output: "Created worker.",
         next_agents: [
           %{

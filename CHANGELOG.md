@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed the TUI to use planner-managed `agentic` runs, expose planner direct/delegate decisions, and ignore legacy saved workflow values.
 - Fixed `apply_patch` to honor git-style `new file mode` and `deleted file mode` patches when headers use matching `a/` and `b/` paths.
 - Added `FEATURES.md` as a linked index of the current project feature set.
 - Added `AGENT_MACHINE_PAID_OPENROUTER_MODEL` to run paid OpenRouter tests against an explicit alternate model.
