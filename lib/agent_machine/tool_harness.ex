@@ -25,6 +25,10 @@ defmodule AgentMachine.ToolHarness do
       AgentMachine.Tools.ReplaceInFile,
       AgentMachine.Tools.SearchFiles,
       AgentMachine.Tools.WriteFile
+    ],
+    skills: [
+      AgentMachine.Tools.ListSkillResources,
+      AgentMachine.Tools.ReadSkillResource
     ]
   }
 
@@ -48,6 +52,9 @@ defmodule AgentMachine.ToolHarness do
       :local_files_replace,
       :local_files_search,
       :local_files_write
+    ],
+    skills: [
+      :skills_resource_read
     ]
   }
 
@@ -58,7 +65,9 @@ defmodule AgentMachine.ToolHarness do
   def builtin!(name, opts) when is_atom(name) do
     case Map.fetch(@builtin_harnesses, name) do
       {:ok, tools} ->
-        maybe_put_test_command_tool(name, tools, opts)
+        tools
+        |> maybe_put_test_command_tool(name, opts)
+        |> maybe_put_skill_script_tool(name, opts)
 
       :error when name == :mcp ->
         ToolFactory.tools!(Keyword.fetch!(opts, :mcp_config))
@@ -88,6 +97,7 @@ defmodule AgentMachine.ToolHarness do
     case Map.fetch(@builtin_policies, name) do
       {:ok, permissions} ->
         permissions = maybe_put_test_command_permission(name, permissions, opts)
+        permissions = maybe_put_skill_script_permission(name, permissions, opts)
         ToolPolicy.new!(harness: name, permissions: permissions)
 
       :error when name == :mcp ->
@@ -309,7 +319,7 @@ defmodule AgentMachine.ToolHarness do
     raise ArgumentError, "#{label} must be a non-empty binary, got: #{inspect(value)}"
   end
 
-  defp maybe_put_test_command_tool(:code_edit, tools, opts) do
+  defp maybe_put_test_command_tool(tools, :code_edit, opts) do
     if test_commands_configured?(opts) do
       tools ++ [AgentMachine.Tools.RunTestCommand]
     else
@@ -317,7 +327,17 @@ defmodule AgentMachine.ToolHarness do
     end
   end
 
-  defp maybe_put_test_command_tool(_name, tools, _opts), do: tools
+  defp maybe_put_test_command_tool(tools, _name, _opts), do: tools
+
+  defp maybe_put_skill_script_tool(tools, :skills, opts) do
+    if Keyword.get(opts, :allow_skill_scripts, false) == true do
+      tools ++ [AgentMachine.Tools.RunSkillScript]
+    else
+      tools
+    end
+  end
+
+  defp maybe_put_skill_script_tool(tools, _name, _opts), do: tools
 
   defp maybe_put_test_command_permission(:code_edit, permissions, opts) do
     if test_commands_configured?(opts) do
@@ -328,6 +348,16 @@ defmodule AgentMachine.ToolHarness do
   end
 
   defp maybe_put_test_command_permission(_name, permissions, _opts), do: permissions
+
+  defp maybe_put_skill_script_permission(:skills, permissions, opts) do
+    if Keyword.get(opts, :allow_skill_scripts, false) == true do
+      permissions ++ [:skills_script_run]
+    else
+      permissions
+    end
+  end
+
+  defp maybe_put_skill_script_permission(_name, permissions, _opts), do: permissions
 
   defp test_commands_configured?(opts) do
     case Keyword.get(opts, :test_commands) do

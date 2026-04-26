@@ -102,8 +102,16 @@ defmodule AgentMachine.Workflows.Basic do
     |> maybe_put_mcp_config(spec)
   end
 
-  defp tool_harness_opts(%RunSpec{test_commands: test_commands, mcp_config: mcp_config}),
-    do: [test_commands: test_commands, mcp_config: mcp_config]
+  defp tool_harness_opts(%RunSpec{
+         test_commands: test_commands,
+         mcp_config: mcp_config,
+         allow_skill_scripts: allow_skill_scripts
+       }),
+       do: [
+         test_commands: test_commands,
+         mcp_config: mcp_config,
+         allow_skill_scripts: allow_skill_scripts
+       ]
 
   defp maybe_put_tool_root(opts, harnesses, %RunSpec{tool_root: root})
        when is_list(harnesses) do
