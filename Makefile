@@ -9,7 +9,7 @@ help:
 	@printf '%s\n' 'AgentMachine targets:'
 	@printf '%s\n' '  make deps                         Fetch Elixir and Go dependencies'
 	@printf '%s\n' '  make test                         Run Elixir tests'
-	@printf '%s\n' '  make test-openrouter-paid         Run paid OpenRouter Step 3.5 Flash tests'
+	@printf '%s\n' '  make test-openrouter-paid         Run paid OpenRouter tests'
 	@printf '%s\n' '  make quality                      Run full Elixir quality gate'
 	@printf '%s\n' '  make format                       Format Elixir and Go code'
 	@printf '%s\n' '  make format-check                 Check Elixir formatting'
@@ -36,14 +36,17 @@ test:
 
 test-openrouter-paid:
 	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
-	mix test --only paid_openrouter
+	@if [ "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL+x}" = "x" ] && [ -z "$$AGENT_MACHINE_PAID_OPENROUTER_MODEL" ]; then printf '%s\n' 'AGENT_MACHINE_PAID_OPENROUTER_MODEL must be non-empty when set.' >&2; exit 2; fi
+	@printf 'Running paid OpenRouter tests with model=%s\n' "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL:-stepfun/step-3.5-flash}"
+	mix test --only paid_openrouter --timeout 180000
+	cd $(TUI_DIR) && AGENT_MACHINE_PAID_OPENROUTER=1 go test ./... -run '^TestPaidOpenRouter' -count=1 -v
 
 quality:
 	mix quality
 
 format:
 	mix format
-	gofmt -w tui/main.go tui/main_test.go
+	gofmt -w tui/*.go
 
 format-check:
 	mix format --check-formatted

@@ -688,6 +688,10 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "tool AgentMachine.TestTools.Failing failed"
     assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
+
+    assert run.events
+           |> Enum.filter(&(&1.type in [:tool_call_started, :tool_call_failed]))
+           |> Enum.map(& &1.type) == [:tool_call_started, :tool_call_failed]
   end
 
   test "rejects a tool call outside allowed_tools" do

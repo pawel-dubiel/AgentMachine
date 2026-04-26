@@ -416,15 +416,15 @@ defmodule AgentMachine.AgentRunner do
 
       {:ok, result} ->
         reason = "tool #{inspect(tool)} returned invalid result: #{inspect(result)}"
-        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+        failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
 
       {:error, reason} ->
         reason = "tool #{inspect(tool)} failed for call #{inspect(id)}: #{inspect(reason)}"
-        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+        failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
 
       other ->
         reason = "tool #{inspect(tool)} returned invalid payload: #{inspect(other)}"
-        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+        failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
     end
   end
 
@@ -440,15 +440,19 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp failed_tool_call(opts, event_context, id, tool, started_at, reason) do
+  defp failed_tool_call(opts, event_context, id, tool, started_at, reason, emit_started? \\ true) do
     finished_at = DateTime.utc_now()
     started_event = tool_call_started_event(event_context, id, tool, started_at)
 
     failed_event =
       tool_call_failed_event(event_context, id, tool, started_at, finished_at, reason)
 
-    emit_event!(opts, started_event)
+    if emit_started? do
+      emit_event!(opts, started_event)
+    end
+
     emit_event!(opts, failed_event)
+
     {:error, reason, [started_event, failed_event]}
   end
 

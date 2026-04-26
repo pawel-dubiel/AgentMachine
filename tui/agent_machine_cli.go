@@ -131,7 +131,7 @@ func buildRunArgs(config runConfig) []string {
 		"agent_machine.run",
 		"--workflow", string(config.Workflow),
 		"--provider", string(config.Provider),
-		"--timeout-ms", defaultRunTimeoutMS,
+		"--timeout-ms", runTimeoutMS(config),
 		"--max-steps", maxSteps(config.Workflow),
 		"--max-attempts", "1",
 		"--jsonl",
@@ -182,6 +182,13 @@ func maxSteps(workflow runWorkflow) string {
 	default:
 		return ""
 	}
+}
+
+func runTimeoutMS(config runConfig) string {
+	if strings.TrimSpace(config.RunTimeout) != "" {
+		return config.RunTimeout
+	}
+	return defaultRunTimeoutMS
 }
 
 func parseSummary(raw string) (summary, error) {

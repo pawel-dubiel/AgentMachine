@@ -76,6 +76,36 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:       "review this project",
+		Workflow:   workflowAgentic,
+		Provider:   providerEcho,
+		RunTimeout: "240000",
+	})
+
+	expected := []string{
+		"agent_machine.run",
+		"--workflow", "agentic",
+		"--provider", "echo",
+		"--timeout-ms", "240000",
+		"--max-steps", defaultAgenticSteps,
+		"--max-attempts", "1",
+		"--jsonl",
+		"review this project",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
+	}
+
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
 func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "create hello",
@@ -274,6 +304,23 @@ func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected missing key error")
+	}
+}
+
+func TestPaidOpenRouterModelUsesDefaultWhenUnset(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_PAID_OPENROUTER_MODEL", "")
+	os.Unsetenv("AGENT_MACHINE_PAID_OPENROUTER_MODEL")
+
+	if model := paidOpenRouterModel(t); model != defaultPaidOpenRouterModel {
+		t.Fatalf("expected default paid OpenRouter model %q, got %q", defaultPaidOpenRouterModel, model)
+	}
+}
+
+func TestPaidOpenRouterModelUsesExplicitEnvironmentValue(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_PAID_OPENROUTER_MODEL", " openai/gpt-4o-mini ")
+
+	if model := paidOpenRouterModel(t); model != "openai/gpt-4o-mini" {
+		t.Fatalf("expected explicit paid OpenRouter model, got %q", model)
 	}
 }
 

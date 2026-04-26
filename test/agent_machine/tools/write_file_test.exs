@@ -39,6 +39,32 @@ defmodule AgentMachine.Tools.WriteFileTest do
     assert message =~ root
   end
 
+  test "accepts absolute paths through a symlinked parent when they resolve inside root" do
+    real_parent =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-real-#{System.unique_integer()}"))
+
+    link_parent =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-link-#{System.unique_integer()}"))
+
+    on_exit(fn ->
+      File.rm_rf(real_parent)
+      File.rm_rf(link_parent)
+    end)
+
+    File.mkdir_p!(real_parent)
+    File.ln_s!(real_parent, link_parent)
+
+    root = Path.join(link_parent, "root")
+    File.mkdir_p!(root)
+
+    assert {:ok, %{path: "hello.md"}} =
+             WriteFile.run(%{"path" => Path.join(root, "hello.md"), "content" => "hello"},
+               tool_root: root
+             )
+
+    assert File.read!(Path.join([real_parent, "root", "hello.md"])) == "hello"
+  end
+
   test "rejects symlink write targets" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-tools-#{System.unique_integer()}"))

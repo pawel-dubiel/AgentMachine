@@ -27,10 +27,13 @@ defmodule AgentMachine.Tools.PathGuard do
         Path.expand(path, root)
       end
 
-    if inside_root?(target, root) do
-      target
+    canonical_target = canonical_target(target)
+
+    if inside_root?(canonical_target, root) do
+      canonical_target
     else
-      raise ArgumentError, "path #{inspect(target)} is outside tool root #{inspect(root)}"
+      raise ArgumentError,
+            "path #{inspect(canonical_target)} is outside tool root #{inspect(root)}"
     end
   end
 
@@ -123,6 +126,16 @@ defmodule AgentMachine.Tools.PathGuard do
   defp inside_root?(target, root), do: target == root or String.starts_with?(target, root <> "/")
 
   defp realpath(path), do: path |> Path.expand() |> do_realpath(0)
+
+  defp canonical_target(target) do
+    case realpath(Path.dirname(target)) do
+      {:ok, real_parent} ->
+        Path.join(real_parent, Path.basename(target))
+
+      {:error, _reason} ->
+        target
+    end
+  end
 
   defp do_realpath(_path, depth) when depth > @max_symlink_depth, do: {:error, :eloop}
 

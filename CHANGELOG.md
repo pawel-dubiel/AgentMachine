@@ -4,7 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
-- Added opt-in paid OpenRouter Step 3.5 Flash integration tests with a separate manual pipeline.
+- Added `AGENT_MACHINE_PAID_OPENROUTER_MODEL` to run paid OpenRouter tests against an explicit alternate model.
+- Added opt-in paid OpenRouter Step 3.5 Flash provider, client, MCP tool-use, Mix CLI, TUI adapter, TUI agentic delegation, local-files, and code-edit tool integration tests with a separate manual pipeline.
 - Added repeated tool harness support plus explicit MCP stdio/Streamable HTTP integration with allowlisted namespaced tools.
 - Increased the TUI remote-provider HTTP timeout and tightened agentic filesystem planning to avoid fragile parallel read/write workers.
 - Improved TUI timeout reporting, run banners, and default tool-run budget for multi-step file tasks.

@@ -129,6 +129,7 @@ type runConfig struct {
 	InputPrice    string
 	OutputPrice   string
 	HTTPTimeout   string
+	RunTimeout    string
 	ToolHarness   string
 	ToolRoot      string
 	ToolTimeout   string

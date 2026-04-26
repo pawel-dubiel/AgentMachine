@@ -544,11 +544,26 @@ mix test
 ```
 
 Paid OpenRouter integration tests are excluded from normal test and quality
-runs. They use the real `stepfun/step-3.5-flash` model and require an API key:
+runs. By default they use the real `stepfun/step-3.5-flash` model through
+provider, `ClientRunner`, MCP stdio tool calling, `mix agent_machine.run`, and
+TUI CLI adapter flows including agentic delegated-worker, local-files
+side-effect, and code-edit checkpoint runs. They require an API key:
 
 ```sh
 OPENROUTER_API_KEY="..." make test-openrouter-paid
 ```
+
+Set `AGENT_MACHINE_PAID_OPENROUTER_MODEL` to run the same paid tests against a
+different OpenRouter model:
+
+```sh
+OPENROUTER_API_KEY="..." AGENT_MACHINE_PAID_OPENROUTER_MODEL="openai/gpt-4o-mini" make test-openrouter-paid
+```
+
+The paid Elixir tests use a 180 second ExUnit timeout because real OpenRouter
+responses can exceed the default 60 second test timeout.
+The paid TUI agentic tests pass a 240 second run timeout to the CLI adapter so
+slower paid models can finish planner and worker phases.
 
 The GitHub workflow `OpenRouter Paid Integration` is manual-only
 (`workflow_dispatch`) and expects the `OPENROUTER_API_KEY` repository secret.
