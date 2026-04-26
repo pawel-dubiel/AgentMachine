@@ -168,6 +168,98 @@ mix agent_machine.run \
   "Review this project and suggest the next change"
 ```
 
+## Skills
+
+Skills are Codex-compatible instruction bundles installed under an explicit
+skills directory. A skill folder must contain `SKILL.md` with YAML frontmatter:
+
+```markdown
+---
+name: docs-helper
+description: Helps write concise project documentation.
+---
+Use short sections and prefer command examples over prose.
+```
+
+Optional `references/`, `assets/`, `scripts/`, and `agents/openai.yaml` paths
+are accepted. Manifest validation rejects missing fields, duplicate skill names,
+unsafe names, bad paths, and symlinks.
+
+Manage skills from the CLI:
+
+```sh
+mix agent_machine.skills create docs-helper \
+  --skills-dir ~/.agent_machine/skills \
+  --description "Helps write concise project documentation" \
+  --resources references,assets
+
+mix agent_machine.skills list --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills show docs-helper --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills validate ~/.agent_machine/skills/docs-helper
+mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills remove docs-helper --skills-dir ~/.agent_machine/skills
+```
+
+Use skills in a run either by exact name or by deterministic auto-selection:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --skills auto \
+  --skills-dir ~/.agent_machine/skills \
+  --jsonl \
+  "Update README documentation"
+```
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --skills-dir ~/.agent_machine/skills \
+  --skill docs-helper \
+  --json \
+  "Update README documentation"
+```
+
+Skill selection is visible in JSON/JSONL as `skills_loaded`,
+`skills_selected`, and top-level `summary.skills`. Selected `SKILL.md`
+instructions are injected into planner, worker, and finalizer run context.
+
+Skill resource access is explicit. Add the fixed `skills` tool harness when a
+model should read selected skill `references/` or `assets/`:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider openrouter \
+  --model "YOUR_OPENROUTER_MODEL" \
+  --timeout-ms 30000 \
+  --http-timeout-ms 120000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --skills-dir ~/.agent_machine/skills \
+  --skill docs-helper \
+  --tool-harness skills \
+  --tool-timeout-ms 1000 \
+  --tool-max-rounds 2 \
+  --tool-approval-mode read-only \
+  --json \
+  "Use the docs-helper references to update this answer"
+```
+
+Skill scripts are not executable by default. `run_skill_script` appears only
+when `--allow-skill-scripts` is provided with `--tool-harness skills`, and it is
+still governed by normal tool approval policy.
+
 ## Providers
 
 Available providers:
@@ -320,7 +412,9 @@ mix agent_machine.run \
 ```
 
 Harnesses may be repeated. The runtime merges their allowed tools and policies,
-then fails fast if two tools expose the same provider-visible name.
+then fails fast if two tools expose the same provider-visible name. The `skills`
+harness exposes only fixed skill resource tools for selected skills; skills do
+not create dynamic provider-visible tools.
 
 MCP tools are enabled with the `mcp` harness and an explicit config file. Tool
 names exposed to the model are namespaced as `mcp_<server_id>_<tool_name>`.
@@ -487,6 +581,13 @@ Useful commands:
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools off
+/skills auto <skills-dir>
+/skills dir <skills-dir>
+/skills add <name>
+/skills list
+/skills show <name>
+/skills install <name>
+/skills off
 /test-command add <command>
 /test-command list
 /test-command clear
@@ -543,6 +644,9 @@ values are:
 - `--test-command` values require `code-edit` and `full-access`.
 - `--mcp-config` requires repeated `--tool-harness mcp`; the TUI only passes the
   path through and Elixir owns MCP validation/execution.
+- `--skills-dir` or `AGENT_MACHINE_SKILLS_DIR` when `--skills auto` or
+  `--skill <name>` is used.
+- `--skills auto` cannot be combined with explicit `--skill` values.
 
 ## Development
 

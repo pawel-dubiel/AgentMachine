@@ -22,6 +22,10 @@ defmodule Mix.Tasks.AgentMachine.Run do
     tool_approval_mode: :string,
     test_command: :string,
     mcp_config: :string,
+    skills: :string,
+    skills_dir: :string,
+    skill: :string,
+    allow_skill_scripts: :boolean,
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
@@ -143,7 +147,11 @@ defmodule Mix.Tasks.AgentMachine.Run do
       tool_root: Keyword.get(opts, :tool_root),
       tool_approval_mode: tool_approval_mode_from_opts!(opts),
       test_commands: test_commands_from_opts(opts),
-      mcp_config_path: Keyword.get(opts, :mcp_config)
+      mcp_config_path: Keyword.get(opts, :mcp_config),
+      skills_mode: skills_mode_from_opts!(opts),
+      skills_dir: skills_dir_from_opts(opts),
+      skill_names: Keyword.get_values(opts, :skill),
+      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false)
     }
   end
 
@@ -199,11 +207,35 @@ defmodule Mix.Tasks.AgentMachine.Run do
   defp tool_harness_from_string!("local-files"), do: :local_files
   defp tool_harness_from_string!("code-edit"), do: :code_edit
   defp tool_harness_from_string!("mcp"), do: :mcp
+  defp tool_harness_from_string!("skills"), do: :skills
 
   defp tool_harness_from_string!(harness) do
     Mix.raise(
-      "--tool-harness must be demo, local-files, code-edit, or mcp, got: #{inspect(harness)}"
+      "--tool-harness must be demo, local-files, code-edit, mcp, or skills, got: #{inspect(harness)}"
     )
+  end
+
+  defp skills_mode_from_opts!(opts) do
+    case Keyword.fetch(opts, :skills) do
+      {:ok, "off"} ->
+        :off
+
+      {:ok, "auto"} ->
+        :auto
+
+      {:ok, mode} ->
+        Mix.raise("--skills must be off or auto, got: #{inspect(mode)}")
+
+      :error ->
+        :off
+    end
+  end
+
+  defp skills_dir_from_opts(opts) do
+    case Keyword.fetch(opts, :skills_dir) do
+      {:ok, path} -> path
+      :error -> System.get_env("AGENT_MACHINE_SKILLS_DIR")
+    end
   end
 
   defp tool_approval_mode_from_opts!(opts) do

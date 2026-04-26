@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added Codex-compatible skills with strict `SKILL.md` manifests, registry install/create/list/show/remove commands, run-time auto or explicit skill selection, summary/events visibility, fixed skill resource tools, and TUI `/skills` commands.
 - Skipped the finalizer for direct planner decisions so simple TUI requests complete after the planner answer.
 - Changed the TUI to use planner-managed `agentic` runs, expose planner direct/delegate decisions, and ignore legacy saved workflow values.
 - Fixed `apply_patch` to honor git-style `new file mode` and `deleted file mode` patches when headers use matching `a/` and `b/` paths.
