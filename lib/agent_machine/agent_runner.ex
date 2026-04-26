@@ -264,15 +264,24 @@ defmodule AgentMachine.AgentRunner do
   defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round) do
     allowed_tools = allowed_tools_from_opts!(opts)
     tool_policy = tool_policy_from_opts!(opts)
+    tool_approval_mode = tool_approval_mode_from_opts!(opts)
     tool_timeout_ms = tool_timeout_ms_from_opts!(opts)
 
     Enum.reduce_while(tool_calls, {:ok, [], []}, fn tool_call, {:ok, results, events} ->
-      case run_tool_call(tool_call, opts, allowed_tools, tool_policy, tool_timeout_ms, %{
-             run_id: run_id,
-             agent_id: agent_id,
-             attempt: attempt,
-             round: round
-           }) do
+      case run_tool_call(
+             tool_call,
+             opts,
+             allowed_tools,
+             tool_policy,
+             tool_approval_mode,
+             tool_timeout_ms,
+             %{
+               run_id: run_id,
+               agent_id: agent_id,
+               attempt: attempt,
+               round: round
+             }
+           ) do
         {:ok, result, call_events} ->
           {:cont, {:ok, results ++ [result], events ++ call_events}}
 
@@ -282,7 +291,15 @@ defmodule AgentMachine.AgentRunner do
     end)
   end
 
-  defp run_tool_call(tool_call, opts, allowed_tools, tool_policy, tool_timeout_ms, event_context)
+  defp run_tool_call(
+         tool_call,
+         opts,
+         allowed_tools,
+         tool_policy,
+         tool_approval_mode,
+         tool_timeout_ms,
+         event_context
+       )
        when is_map(tool_call) do
     started_at = DateTime.utc_now()
     id = safe_tool_call_id(tool_call)
@@ -292,7 +309,8 @@ defmodule AgentMachine.AgentRunner do
          {:ok, tool} <- validate_tool_module(tool),
          :ok <- validate_allowed_tool(tool, allowed_tools),
          :ok <- validate_tool_permission(tool_policy, tool),
-         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)) do
+         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)),
+         :ok <- validate_tool_approval(opts, tool_approval_mode, tool, id, input, event_context) do
       do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at)
     else
       {:error, reason} ->
@@ -305,6 +323,7 @@ defmodule AgentMachine.AgentRunner do
          _opts,
          _allowed_tools,
          _tool_policy,
+         _tool_approval_mode,
          _tool_timeout_ms,
          _event_context
        ) do
@@ -468,6 +487,79 @@ defmodule AgentMachine.AgentRunner do
 
   defp validate_tool_input(input) do
     {:error, "tool input must be a map, got: #{inspect(input)}"}
+  end
+
+  defp validate_tool_approval(opts, mode, tool, id, input, event_context) do
+    risk = ToolPolicy.approval_risk!(tool)
+
+    cond do
+      approval_allowed?(mode, risk) ->
+        :ok
+
+      mode == :ask_before_write and risk in [:write, :delete, :command, :network] ->
+        request_tool_approval(opts, tool, id, input, event_context, risk)
+
+      true ->
+        {:error,
+         "tool #{inspect(tool)} with approval risk #{inspect(risk)} is not allowed by tool approval mode #{inspect(mode)}"}
+    end
+  rescue
+    exception in ArgumentError -> {:error, Exception.message(exception)}
+  end
+
+  defp approval_allowed?(:read_only, :read), do: true
+  defp approval_allowed?(:auto_approved_safe, risk) when risk in [:read, :write], do: true
+
+  defp approval_allowed?(:full_access, risk)
+       when risk in [:read, :write, :delete, :command, :network], do: true
+
+  defp approval_allowed?(_mode, _risk), do: false
+
+  defp request_tool_approval(opts, tool, id, input, event_context, risk) do
+    case Keyword.fetch(opts, :tool_approval_callback) do
+      {:ok, callback} when is_function(callback, 1) ->
+        approval_context =
+          Map.merge(event_context, %{tool_call_id: id, tool: tool, input: input, risk: risk})
+
+        callback.(approval_context)
+        |> approval_callback_result()
+
+      {:ok, callback} ->
+        {:error,
+         ":tool_approval_callback must be a function of arity 1, got: #{inspect(callback)}"}
+
+      :error ->
+        {:error,
+         "tool #{inspect(tool)} with approval risk #{inspect(risk)} requires approval for tool approval mode :ask_before_write"}
+    end
+  end
+
+  defp approval_callback_result(:approved), do: :ok
+  defp approval_callback_result(true), do: :ok
+  defp approval_callback_result({:approved, _reason}), do: :ok
+
+  defp approval_callback_result({:denied, reason}),
+    do: {:error, "tool approval denied: #{inspect(reason)}"}
+
+  defp approval_callback_result(false), do: {:error, "tool approval denied"}
+
+  defp approval_callback_result(result) do
+    {:error, "tool approval callback returned invalid result: #{inspect(result)}"}
+  end
+
+  defp tool_approval_mode_from_opts!(opts) do
+    case Keyword.fetch(opts, :tool_approval_mode) do
+      {:ok, mode}
+      when mode in [:read_only, :ask_before_write, :auto_approved_safe, :full_access] ->
+        mode
+
+      {:ok, mode} ->
+        raise ArgumentError,
+              ":tool_approval_mode must be :read_only, :ask_before_write, :auto_approved_safe, or :full_access, got: #{inspect(mode)}"
+
+      :error ->
+        raise ArgumentError, "provider tool_calls require explicit :tool_approval_mode option"
+    end
   end
 
   defp tool_policy_from_opts!(opts) do

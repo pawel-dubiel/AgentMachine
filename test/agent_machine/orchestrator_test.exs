@@ -467,7 +467,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 2
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :ok
@@ -502,7 +503,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 2
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :ok
@@ -531,7 +533,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -555,7 +558,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -579,7 +583,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 2
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -603,7 +608,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Failing],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -628,7 +634,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Failing],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -652,7 +659,8 @@ defmodule AgentMachine.OrchestratorTest do
                timeout: 1_000,
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -676,12 +684,147 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Uppercase],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_failing]),
                tool_timeout_ms: 100,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "requires permission :test_uppercase"
     assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
+  end
+
+  test "requires explicit tool approval mode when a provider requests tools" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "explicit :tool_approval_mode"
+  end
+
+  test "read-only approval mode allows read tools" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.NowUsing,
+        model: "test",
+        input: "what time is it?",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.Now],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:demo_time]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :read_only
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].output =~ "final answer:"
+    assert %{"now" => %{utc: _utc}} = run.results["tool-user"].tool_results
+  end
+
+  test "read-only approval mode rejects write tools before execution" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :read_only
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "approval risk :write"
+    assert run.results["tool-user"].tool_results in [nil, %{}]
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
+  end
+
+  test "ask-before-write approval mode rejects writes without callback" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :ask_before_write
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "requires approval"
+  end
+
+  test "ask-before-write approval mode allows writes with approval callback" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      assert context.tool_call_id == "uppercase"
+      assert context.risk == :write
+      :approved
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].tool_results["uppercase"].value == "HELLO"
   end
 
   test "returns an agent error when a tool call times out" do
@@ -701,7 +844,8 @@ defmodule AgentMachine.OrchestratorTest do
                allowed_tools: [AgentMachine.TestTools.Sleeping],
                tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_sleeping]),
                tool_timeout_ms: 1,
-               tool_max_rounds: 1
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
              )
 
     assert run.results["tool-user"].status == :error
@@ -1091,6 +1235,69 @@ defmodule AgentMachine.TestProviders.ToolUsing do
            id: "uppercase",
            tool: AgentMachine.TestTools.Uppercase,
            input: %{value: agent.input}
+         }
+       ],
+       tool_state: %{round: 1},
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.NowUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{utc: utc}}]} -> final_response(utc)
+      nil -> tool_request(agent)
+    end
+  end
+
+  defp final_response(utc) do
+    output = "final answer: #{utc}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp tool_request(agent) do
+    output = "called now tool"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: "now",
+           tool: AgentMachine.Tools.Now,
+           input: %{}
          }
        ],
        tool_state: %{round: 1},
