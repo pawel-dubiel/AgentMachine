@@ -339,10 +339,6 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp run_tool_call(tool_call, _opts, _allowed_tools, _tool_timeout_ms, _event_context) do
-    raise ArgumentError, "tool call must be a map, got: #{inspect(tool_call)}"
-  end
-
   defp run_tool_with_timeout(tool, input, opts, tool_timeout_ms) do
     task = Task.async(fn -> tool.run(input, opts) end)
 
@@ -357,12 +353,14 @@ defmodule AgentMachine.AgentRunner do
 
   defp failed_tool_call(opts, event_context, id, tool, started_at, reason) do
     finished_at = DateTime.utc_now()
+    started_event = tool_call_started_event(event_context, id, tool, started_at)
 
     failed_event =
       tool_call_failed_event(event_context, id, tool, started_at, finished_at, reason)
 
+    emit_event!(opts, started_event)
     emit_event!(opts, failed_event)
-    {:error, reason, [tool_call_started_event(event_context, id, tool, started_at), failed_event]}
+    {:error, reason, [started_event, failed_event]}
   end
 
   defp validate_new_tool_call_ids(tool_calls, seen_ids) do
@@ -576,7 +574,7 @@ defmodule AgentMachine.AgentRunner do
     DateTime.diff(finished_at, started_at, :millisecond)
   end
 
-  defp tool_name(tool) do
+  defp tool_name(tool) when is_atom(tool) do
     if function_exported?(tool, :definition, 0) do
       tool.definition().name
     else
