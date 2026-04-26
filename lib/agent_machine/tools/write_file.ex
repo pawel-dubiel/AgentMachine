@@ -6,6 +6,11 @@ defmodule AgentMachine.Tools.WriteFile do
   @behaviour AgentMachine.Tool
   alias AgentMachine.Tools.PathGuard
 
+  @max_bytes_limit 200_000
+
+  @impl true
+  def permission, do: :local_files_write
+
   @impl true
   def definition do
     %{

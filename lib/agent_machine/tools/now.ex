@@ -6,6 +6,9 @@ defmodule AgentMachine.Tools.Now do
   @behaviour AgentMachine.Tool
 
   @impl true
+  def permission, do: :demo_time
+
+  @impl true
   def definition do
     %{
       name: "now",

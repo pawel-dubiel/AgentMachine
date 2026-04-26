@@ -10,6 +10,9 @@ defmodule AgentMachine.Tools.ListFiles do
   @max_entries_limit 500
 
   @impl true
+  def permission, do: :local_files_list
+
+  @impl true
   def definition do
     %{
       name: "list_files",

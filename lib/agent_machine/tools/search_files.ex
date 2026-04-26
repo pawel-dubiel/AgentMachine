@@ -10,6 +10,9 @@ defmodule AgentMachine.Tools.SearchFiles do
   @max_results_limit 200
 
   @impl true
+  def permission, do: :local_files_search
+
+  @impl true
   def definition do
     %{
       name: "search_files",

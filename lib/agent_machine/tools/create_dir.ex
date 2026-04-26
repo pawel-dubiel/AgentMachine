@@ -8,6 +8,9 @@ defmodule AgentMachine.Tools.CreateDir do
   alias AgentMachine.Tools.PathGuard
 
   @impl true
+  def permission, do: :local_files_create_dir
+
+  @impl true
   def definition do
     %{
       name: "create_dir",

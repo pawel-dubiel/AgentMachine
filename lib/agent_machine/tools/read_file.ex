@@ -10,6 +10,9 @@ defmodule AgentMachine.Tools.ReadFile do
   @max_bytes_limit 200_000
 
   @impl true
+  def permission, do: :local_files_read
+
+  @impl true
   def definition do
     %{
       name: "read_file",
