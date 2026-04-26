@@ -2,7 +2,7 @@ defmodule AgentMachine.Skills.Installer do
   @moduledoc false
 
   alias AgentMachine.{JSON, Skills.Registry}
-  alias AgentMachine.Skills.{Loader, Manifest}
+  alias AgentMachine.Skills.{ClawHub, Loader, Manifest}
 
   @lockfile ".agent_machine_skills.lock.json"
 
@@ -36,6 +36,88 @@ defmodule AgentMachine.Skills.Installer do
     after
       File.rm_rf(tmp)
     end
+  end
+
+  def install_clawhub!(target, opts) when is_list(opts) do
+    version = Keyword.get(opts, :version, "latest")
+
+    download =
+      ClawHub.download!(target, version,
+        registry: Keyword.get(opts, :clawhub_registry),
+        http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000)
+      )
+
+    source_path = ClawHub.extract_skill_zip!(download.zip)
+    skill = Manifest.load!(source_path)
+
+    entry = %{
+      name: skill.name,
+      description: skill.description,
+      source: %{
+        type: :clawhub,
+        slug: download.slug,
+        version: download.version,
+        requested_version: download.requested_version,
+        registry: download.registry,
+        bundle_hash: download.hash,
+        metadata: clawhub_metadata_snapshot(download.metadata)
+      }
+    }
+
+    try do
+      do_install!(entry, source_path, opts)
+    after
+      ClawHub.cleanup_extracted!(source_path)
+    end
+  end
+
+  def update_clawhub!("--all", opts) when is_list(opts) do
+    skills_dir = ensure_skills_dir!(Keyword.fetch!(opts, :skills_dir))
+    lock = read_lock(Path.join(skills_dir, @lockfile))
+
+    entries =
+      lock
+      |> Enum.filter(fn {_name, entry} -> get_in(entry, ["source", "type"]) == "clawhub" end)
+      |> Enum.map(fn {name, entry} ->
+        source = Map.fetch!(entry, "source")
+        assert_not_locally_modified!(skills_dir, name, entry, Keyword.get(opts, :force, false))
+
+        install_clawhub!(Map.fetch!(source, "slug"),
+          skills_dir: skills_dir,
+          version: Keyword.get(opts, :version, "latest"),
+          clawhub_registry: Keyword.get(opts, :clawhub_registry) || Map.get(source, "registry"),
+          http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000),
+          force: true
+        )
+      end)
+
+    %{updated: Enum.map(entries, &Manifest.catalog_entry/1)}
+  end
+
+  def update_clawhub!(target, opts) when is_list(opts) do
+    slug = ClawHub.normalize_slug!(target)
+    skills_dir = ensure_skills_dir!(Keyword.fetch!(opts, :skills_dir))
+    lock = read_lock(Path.join(skills_dir, @lockfile))
+
+    {name, entry} =
+      Enum.find(lock, fn {_name, entry} ->
+        get_in(entry, ["source", "type"]) == "clawhub" and
+          get_in(entry, ["source", "slug"]) == slug
+      end) || raise ArgumentError, "ClawHub skill is not installed: #{inspect(slug)}"
+
+    assert_not_locally_modified!(skills_dir, name, entry, Keyword.get(opts, :force, false))
+    source = Map.fetch!(entry, "source")
+
+    skill =
+      install_clawhub!(slug,
+        skills_dir: skills_dir,
+        version: Keyword.get(opts, :version, "latest"),
+        clawhub_registry: Keyword.get(opts, :clawhub_registry) || Map.get(source, "registry"),
+        http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000),
+        force: true
+      )
+
+    %{updated: [Manifest.catalog_entry(skill)]}
   end
 
   def install_entry!(%{name: name, source: source} = entry, opts) when is_list(opts) do
@@ -169,6 +251,53 @@ defmodule AgentMachine.Skills.Installer do
 
   defp lock_source(%{type: :git, repo: repo, ref: ref, path: path}) do
     %{type: "git", repo: repo, ref: ref, path: path}
+  end
+
+  defp lock_source(%{
+         type: :clawhub,
+         slug: slug,
+         version: version,
+         requested_version: requested_version,
+         registry: registry,
+         bundle_hash: bundle_hash,
+         metadata: metadata
+       }) do
+    %{
+      type: "clawhub",
+      slug: slug,
+      version: version,
+      requested_version: requested_version,
+      registry: registry,
+      bundle_hash: bundle_hash,
+      metadata: metadata
+    }
+  end
+
+  defp clawhub_metadata_snapshot(metadata) do
+    %{
+      slug: metadata.slug,
+      name: metadata.name,
+      description: metadata.description,
+      latest_version: metadata.latest_version,
+      tags: metadata.tags,
+      stats: metadata.stats,
+      owner: metadata.owner,
+      moderation: metadata.moderation
+    }
+  end
+
+  defp assert_not_locally_modified!(skills_dir, name, entry, force?) do
+    root = Path.join(skills_dir, name)
+
+    if File.dir?(root) do
+      expected = Map.fetch!(entry, "hash")
+      actual = skill_hash(root)
+
+      if actual != expected and not force? do
+        raise ArgumentError,
+              "installed skill #{inspect(name)} has local modifications; pass --force to overwrite"
+      end
+    end
   end
 
   defp skill_hash(root) do

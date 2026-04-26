@@ -7,6 +7,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
 
   alias AgentMachine.{
     JSON,
+    Skills.ClawHub,
     Skills.Creator,
     Skills.Installer,
     Skills.Loader,
@@ -24,7 +25,14 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     path: :string,
     description: :string,
     resources: :string,
+    source: :string,
+    sort: :string,
+    limit: :integer,
+    version: :string,
+    clawhub_registry: :string,
+    http_timeout_ms: :integer,
     force: :boolean,
+    all: :boolean,
     json: :boolean
   ]
 
@@ -38,7 +46,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
 
       [] ->
         Mix.raise(
-          "usage: mix agent_machine.skills <list|search|show|validate|install|install-git|create|remove>"
+          "usage: mix agent_machine.skills <list|search|show|validate|install|install-git|create|remove|update>"
         )
     end
   end
@@ -63,6 +71,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
   defp dispatch!("install-git", opts, positional), do: install_git!(opts, positional)
   defp dispatch!("create", opts, positional), do: create!(opts, positional)
   defp dispatch!("remove", opts, positional), do: remove!(opts, positional)
+  defp dispatch!("update", opts, positional), do: update!(opts, positional)
 
   defp dispatch!(command, _opts, _positional),
     do: Mix.raise("unknown skills command: #{inspect(command)}")
@@ -81,6 +90,30 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     do: Mix.raise("usage: mix agent_machine.skills list --skills-dir <path>")
 
   defp search!(opts, [query]) do
+    case Keyword.get(opts, :source) do
+      "clawhub" ->
+        ClawHub.search!(query,
+          registry: clawhub_registry(opts),
+          sort: Keyword.get(opts, :sort, "downloads"),
+          limit: Keyword.get(opts, :limit, 20),
+          http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000)
+        )
+
+      nil ->
+        local_search!(opts, query)
+
+      source ->
+        Mix.raise("unknown skills source: #{inspect(source)}")
+    end
+  end
+
+  defp search!(_opts, _positional),
+    do:
+      Mix.raise(
+        "usage: mix agent_machine.skills search <query> [--source clawhub --sort downloads --limit 20]"
+      )
+
+  defp local_search!(opts, query) do
     query = String.downcase(require_non_empty_binary!(query, "query"))
 
     installed =
@@ -100,10 +133,24 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     %{skills: matches}
   end
 
-  defp search!(_opts, _positional),
-    do: Mix.raise("usage: mix agent_machine.skills search <query> --skills-dir <path>")
-
   defp show!(opts, [name]) do
+    if String.starts_with?(name, "clawhub:") do
+      name
+      |> String.replace_prefix("clawhub:", "")
+      |> ClawHub.show!(
+        registry: clawhub_registry(opts),
+        http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000)
+      )
+    else
+      local_show!(opts, name)
+    end
+  end
+
+  defp show!(_opts, _positional),
+    do:
+      Mix.raise("usage: mix agent_machine.skills show <name|clawhub:slug> [--skills-dir <path>]")
+
+  defp local_show!(opts, name) do
     skill =
       opts
       |> skills_dir!()
@@ -120,9 +167,6 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     }
   end
 
-  defp show!(_opts, _positional),
-    do: Mix.raise("usage: mix agent_machine.skills show <name> --skills-dir <path>")
-
   defp validate!(_opts, [path]) do
     skill = Manifest.load!(path)
     %{valid: true, skill: Manifest.catalog_entry(skill)}
@@ -133,17 +177,28 @@ defmodule Mix.Tasks.AgentMachine.Skills do
 
   defp install!(opts, [name]) do
     skill =
-      Installer.install_from_registry!(name,
-        skills_dir: skills_dir!(opts),
-        registry: Keyword.get(opts, :registry, Registry.default_path()),
-        force: Keyword.get(opts, :force, false)
-      )
+      if String.starts_with?(name, "clawhub:") do
+        Installer.install_clawhub!(name,
+          skills_dir: skills_dir!(opts),
+          version: Keyword.get(opts, :version, "latest"),
+          clawhub_registry: clawhub_registry(opts),
+          http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000),
+          force: Keyword.get(opts, :force, false)
+        )
+      else
+        Installer.install_from_registry!(name,
+          skills_dir: skills_dir!(opts),
+          registry: Keyword.get(opts, :registry, Registry.default_path()),
+          force: Keyword.get(opts, :force, false)
+        )
+      end
 
     %{installed: Manifest.catalog_entry(skill)}
   end
 
   defp install!(_opts, _positional),
-    do: Mix.raise("usage: mix agent_machine.skills install <name> --skills-dir <path>")
+    do:
+      Mix.raise("usage: mix agent_machine.skills install <name|clawhub:slug> --skills-dir <path>")
 
   defp install_git!(opts, []) do
     skill =
@@ -189,6 +244,29 @@ defmodule Mix.Tasks.AgentMachine.Skills do
   defp remove!(_opts, _positional),
     do: Mix.raise("usage: mix agent_machine.skills remove <name> --skills-dir <path>")
 
+  defp update!(opts, []) do
+    if Keyword.get(opts, :all, false) do
+      Installer.update_clawhub!("--all", update_opts(opts))
+    else
+      Mix.raise("usage: mix agent_machine.skills update clawhub:<slug>|--all --skills-dir <path>")
+    end
+  end
+
+  defp update!(opts, [target]) do
+    target =
+      if target == "--all" do
+        target
+      else
+        ensure_clawhub_target!(target)
+      end
+
+    Installer.update_clawhub!(target, update_opts(opts))
+  end
+
+  defp update!(_opts, _positional),
+    do:
+      Mix.raise("usage: mix agent_machine.skills update clawhub:<slug>|--all --skills-dir <path>")
+
   defp registry_entries(opts) do
     registry = Keyword.get(opts, :registry, Registry.default_path())
 
@@ -209,6 +287,23 @@ defmodule Mix.Tasks.AgentMachine.Skills do
           Mix.raise("missing required --skills-dir option")
     end
   end
+
+  defp clawhub_registry(opts) do
+    Keyword.get(opts, :clawhub_registry) || System.get_env("AGENT_MACHINE_CLAWHUB_REGISTRY")
+  end
+
+  defp update_opts(opts) do
+    [
+      skills_dir: skills_dir!(opts),
+      version: Keyword.get(opts, :version, "latest"),
+      clawhub_registry: clawhub_registry(opts),
+      http_timeout_ms: Keyword.get(opts, :http_timeout_ms, 30_000),
+      force: Keyword.get(opts, :force, false)
+    ]
+  end
+
+  defp ensure_clawhub_target!("clawhub:" <> _rest = target), do: target
+  defp ensure_clawhub_target!(target), do: "clawhub:" <> target
 
   defp resources_from_opts(opts) do
     case Keyword.get(opts, :resources, "") do
@@ -256,8 +351,25 @@ defmodule Mix.Tasks.AgentMachine.Skills do
 
   defp format_text(%{valid: true, skill: skill}), do: "valid skill: #{skill.name}"
   defp format_text(%{installed: skill}), do: "installed skill: #{skill.name}"
+
+  defp format_text(%{updated: skills}),
+    do: "updated skills: #{Enum.map_join(skills, ", ", & &1.name)}"
+
   defp format_text(%{created: skill}), do: "created skill: #{skill.name}"
   defp format_text(%{removed: name}), do: "removed skill: #{name}"
+
+  defp format_text(%{slug: slug, name: name, description: description, latest_version: version}) do
+    resolved_version = Map.get(version, "version", "")
+
+    [
+      "#{name} (#{slug})",
+      description,
+      if(resolved_version == "", do: nil, else: "latest: #{resolved_version}")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+    |> String.trim()
+  end
 
   defp format_text(skill) when is_map(skill) and is_map_key(skill, :name) do
     [skill.name, skill.description, "", skill.instructions || ""]
