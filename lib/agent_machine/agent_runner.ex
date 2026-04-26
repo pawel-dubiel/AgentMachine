@@ -1,7 +1,7 @@
 defmodule AgentMachine.AgentRunner do
   @moduledoc false
 
-  alias AgentMachine.{Agent, AgentResult, DelegationResponse, Usage, UsageLedger}
+  alias AgentMachine.{Agent, AgentResult, DelegationResponse, ToolPolicy, Usage, UsageLedger}
 
   def run(%Agent{} = agent, opts) when is_list(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
@@ -263,10 +263,11 @@ defmodule AgentMachine.AgentRunner do
 
   defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round) do
     allowed_tools = allowed_tools_from_opts!(opts)
+    tool_policy = tool_policy_from_opts!(opts)
     tool_timeout_ms = tool_timeout_ms_from_opts!(opts)
 
     Enum.reduce_while(tool_calls, {:ok, [], []}, fn tool_call, {:ok, results, events} ->
-      case run_tool_call(tool_call, opts, allowed_tools, tool_timeout_ms, %{
+      case run_tool_call(tool_call, opts, allowed_tools, tool_policy, tool_timeout_ms, %{
              run_id: run_id,
              agent_id: agent_id,
              attempt: attempt,
@@ -281,18 +282,36 @@ defmodule AgentMachine.AgentRunner do
     end)
   end
 
-  defp run_tool_call(tool_call, opts, allowed_tools, tool_timeout_ms, event_context)
+  defp run_tool_call(tool_call, opts, allowed_tools, tool_policy, tool_timeout_ms, event_context)
        when is_map(tool_call) do
-    id = fetch_tool_call_field!(tool_call, :id)
-    tool = fetch_tool_call_field!(tool_call, :tool)
-    input = fetch_tool_call_field!(tool_call, :input)
-
-    require_non_empty_binary!(id, "tool call id")
-    require_tool_module!(tool)
-    require_allowed_tool!(tool, allowed_tools)
-    require_tool_input!(input)
-
     started_at = DateTime.utc_now()
+    id = safe_tool_call_id(tool_call)
+    tool = safe_tool_call_tool(tool_call)
+
+    with {:ok, id} <- validate_tool_call_id(id),
+         {:ok, tool} <- validate_tool_module(tool),
+         :ok <- validate_allowed_tool(tool, allowed_tools),
+         :ok <- validate_tool_permission(tool_policy, tool),
+         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)) do
+      do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at)
+    else
+      {:error, reason} ->
+        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+    end
+  end
+
+  defp run_tool_call(
+         tool_call,
+         _opts,
+         _allowed_tools,
+         _tool_policy,
+         _tool_timeout_ms,
+         _event_context
+       ) do
+    raise ArgumentError, "tool call must be a map, got: #{inspect(tool_call)}"
+  end
+
+  defp do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at) do
     started_event = tool_call_started_event(event_context, id, tool, started_at)
     emit_event!(opts, started_event)
 
@@ -383,39 +402,88 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp require_non_empty_binary!(value, _name) when is_binary(value) and byte_size(value) > 0 do
-    :ok
-  end
-
-  defp require_non_empty_binary!(value, name) do
-    raise ArgumentError, "#{name} must be a non-empty binary, got: #{inspect(value)}"
-  end
-
-  defp require_tool_module!(tool) when is_atom(tool) do
-    if Code.ensure_loaded?(tool) and function_exported?(tool, :run, 2) do
-      :ok
-    else
-      raise ArgumentError,
-            "tool must be a loaded module exporting run/2, got: #{inspect(tool)}"
+  defp safe_tool_call_id(tool_call) do
+    case fetch_optional_payload_field(tool_call, :id) do
+      {:ok, id} -> id
+      :error -> "missing-tool-call-id"
     end
+  end
+
+  defp safe_tool_call_tool(tool_call) do
+    case fetch_optional_payload_field(tool_call, :tool) do
+      {:ok, tool} -> tool
+      :error -> nil
+    end
+  end
+
+  defp safe_tool_call_input(tool_call) do
+    case fetch_optional_payload_field(tool_call, :input) do
+      {:ok, input} -> input
+      :error -> nil
+    end
+  end
+
+  defp validate_tool_call_id(value) when is_binary(value) and byte_size(value) > 0 do
+    {:ok, value}
+  end
+
+  defp validate_tool_call_id(value) do
+    {:error, "tool call id must be a non-empty binary, got: #{inspect(value)}"}
   end
 
   defp require_tool_module!(tool) do
-    raise ArgumentError, "tool must be a module atom, got: #{inspect(tool)}"
-  end
-
-  defp require_allowed_tool!(tool, allowed_tools) do
-    if tool in allowed_tools do
-      :ok
-    else
-      raise ArgumentError, "tool #{inspect(tool)} is not in :allowed_tools"
+    case validate_tool_module(tool) do
+      {:ok, _tool} -> :ok
+      {:error, reason} -> raise ArgumentError, reason
     end
   end
 
-  defp require_tool_input!(input) when is_map(input), do: :ok
+  defp validate_tool_module(tool) when is_atom(tool) do
+    if Code.ensure_loaded?(tool) and function_exported?(tool, :run, 2) do
+      {:ok, tool}
+    else
+      {:error, "tool must be a loaded module exporting run/2, got: #{inspect(tool)}"}
+    end
+  end
 
-  defp require_tool_input!(input) do
-    raise ArgumentError, "tool input must be a map, got: #{inspect(input)}"
+  defp validate_tool_module(tool) do
+    {:error, "tool must be a module atom, got: #{inspect(tool)}"}
+  end
+
+  defp validate_allowed_tool(tool, allowed_tools) do
+    if tool in allowed_tools do
+      :ok
+    else
+      {:error, "tool #{inspect(tool)} is not in :allowed_tools"}
+    end
+  end
+
+  defp validate_tool_permission(tool_policy, tool) do
+    case ToolPolicy.permit!(tool_policy, tool) do
+      :ok -> :ok
+    end
+  rescue
+    exception in ArgumentError -> {:error, Exception.message(exception)}
+  end
+
+  defp validate_tool_input(input) when is_map(input), do: {:ok, input}
+
+  defp validate_tool_input(input) do
+    {:error, "tool input must be a map, got: #{inspect(input)}"}
+  end
+
+  defp tool_policy_from_opts!(opts) do
+    case Keyword.fetch(opts, :tool_policy) do
+      {:ok, %ToolPolicy{} = policy} ->
+        policy
+
+      {:ok, policy} ->
+        raise ArgumentError,
+              ":tool_policy must be an AgentMachine.ToolPolicy, got: #{inspect(policy)}"
+
+      :error ->
+        raise ArgumentError, "provider tool_calls require explicit :tool_policy option"
+    end
   end
 
   defp merge_tool_results!(tool_results, round_results) do
@@ -515,6 +583,8 @@ defmodule AgentMachine.AgentRunner do
       inspect(tool)
     end
   end
+
+  defp tool_name(tool), do: inspect(tool)
 
   defp fetch_optional_payload_field(payload, field) do
     string_field = Atom.to_string(field)
