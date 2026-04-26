@@ -62,7 +62,8 @@ boundaries, pause and simplify the design before adding code.
   `AgentMachine.RunContextPrompt` when shared by providers.
 - CLI code in `mix agent_machine.run` is the stable client boundary: parse flags,
   fail fast on missing required options, call `AgentMachine.ClientRunner`, print
-  text/JSON/JSONL output, and write explicit run log files when requested.
+  redacted text/JSON/JSONL output, and write explicit redacted run log files
+  when requested.
 - `tui/` is only a thin Go client over the CLI boundary. All agent runtime logic
   belongs in Elixir. The TUI may manage terminal state, local key storage, model
   lists, pricing lookup, command history, and display live events, but it must
@@ -164,7 +165,9 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   `rollback_checkpoint` tool.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
-  plus the final summary to an explicit file path.
+  plus the final summary to an explicit file path. Serialized logs, summaries,
+  JSONL events, and read-style tool results must pass through
+  `AgentMachine.Secrets.Redactor`; the TUI must not duplicate redaction logic.
 - `tui/` contains the Go Bubble Tea conversation client with slash commands and should call the CLI boundary instead of reimplementing orchestration.
 - The TUI may persist workflow, provider, provider-specific selected model, tool
   harness setup, and remote provider API keys in its local config file. It may

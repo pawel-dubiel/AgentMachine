@@ -4,6 +4,7 @@ defmodule AgentMachine.ClientRunner do
   """
 
   alias AgentMachine.{JSON, Orchestrator, RunSpec}
+  alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Workflows.{Agentic, Basic}
 
   def run!(attrs, opts \\ []) when is_list(opts) do
@@ -24,14 +25,16 @@ defmodule AgentMachine.ClientRunner do
   defp workflow_module(%RunSpec{workflow: :agentic}), do: Agentic
 
   def json!(summary) when is_map(summary) do
-    JSON.encode!(summary)
+    summary |> Redactor.redact_output() |> Map.fetch!(:value) |> JSON.encode!()
   end
 
   def jsonl_event!(event) when is_map(event) do
-    JSON.encode!(%{type: "event", event: summarize_event(event)})
+    event = event |> summarize_event() |> Redactor.redact_output() |> Map.fetch!(:value)
+    JSON.encode!(%{type: "event", event: event})
   end
 
   def jsonl_summary!(summary) when is_map(summary) do
+    summary = summary |> Redactor.redact_output() |> Map.fetch!(:value)
     JSON.encode!(%{type: "summary", summary: summary})
   end
 
@@ -85,6 +88,8 @@ defmodule AgentMachine.ClientRunner do
       usage: run.usage || empty_usage(),
       events: Enum.map(run.events, &summarize_event/1)
     }
+    |> Redactor.redact_output()
+    |> Map.fetch!(:value)
   end
 
   defp summary_status(%{status: :completed}, failed_results) when failed_results != [],

@@ -35,6 +35,29 @@ defmodule AgentMachine.Tools.SearchFilesTest do
              )
   end
 
+  test "redacts sensitive content in returned matches" do
+    root =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-search-#{System.unique_integer()}"))
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+
+    File.write!(
+      Path.join(root, "secrets.txt"),
+      "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456\n"
+    )
+
+    assert {:ok, %{matches: [match]} = result} =
+             SearchFiles.run(%{"pattern" => "OPENAI_API_KEY", "path" => ".", "max_results" => 10},
+               tool_root: root
+             )
+
+    refute match.text =~ "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    assert result.redacted == true
+    assert result.redaction_count >= 1
+    assert "secret_assignment" in result.redaction_reasons
+  end
+
   test "rejects search paths outside the configured root" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-search-#{System.unique_integer()}"))

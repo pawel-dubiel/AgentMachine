@@ -29,6 +29,26 @@ defmodule AgentMachine.Tools.ReadFileTest do
              ReadFile.run(%{"path" => "hello.md", "max_bytes" => 2}, tool_root: root)
   end
 
+  test "redacts sensitive content in returned reads" do
+    root =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-read-#{System.unique_integer()}"))
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+
+    File.write!(
+      Path.join(root, ".env"),
+      "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456\n"
+    )
+
+    assert {:ok, result} = ReadFile.run(%{"path" => ".env", "max_bytes" => 100}, tool_root: root)
+
+    refute result.content =~ "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    assert result.redacted == true
+    assert result.redaction_count >= 1
+    assert "secret_assignment" in result.redaction_reasons
+  end
+
   test "rejects read paths outside the configured root" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-read-#{System.unique_integer()}"))

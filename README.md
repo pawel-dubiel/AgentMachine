@@ -128,6 +128,12 @@ mix agent_machine.run \
   "Review this project and summarize the next step"
 ```
 
+JSON, JSONL, text summaries, and run log files are redacted before output.
+The redactor masks common API keys, bearer tokens, authorization headers,
+GitHub tokens, AWS access key IDs, private key blocks, and secret-looking
+`KEY=value` or JSON fields. Redacted payloads include redaction metadata when a
+value was masked.
+
 ## Workflows
 
 Choose one workflow for each run:
@@ -324,6 +330,10 @@ Local file tool rules:
   checkpoint.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` are required when a harness is enabled.
 - Approval modes are `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
+
+Read-style tools redact sensitive-looking text before returning file contents or
+search match lines to the provider. Mutation tools still apply the exact
+requested content; redaction is only for returned output and serialized logs.
 
 Mutation tools return compact summaries for agents, logs, and clients. File
 paths in summaries are relative to `--tool-root`; full file contents and full

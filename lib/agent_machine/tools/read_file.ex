@@ -5,6 +5,7 @@ defmodule AgentMachine.Tools.ReadFile do
 
   @behaviour AgentMachine.Tool
 
+  alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Tools.PathGuard
 
   @max_bytes_limit 200_000
@@ -50,7 +51,16 @@ defmodule AgentMachine.Tools.ReadFile do
     require_regular_file!(target)
 
     {content, truncated} = read_text!(target, max_bytes)
-    {:ok, %{path: target, content: content, bytes: byte_size(content), truncated: truncated}}
+    redaction = Redactor.redact_string(content)
+
+    result = %{
+      path: target,
+      content: redaction.value,
+      bytes: byte_size(redaction.value),
+      truncated: truncated
+    }
+
+    {:ok, Redactor.put_tool_metadata(result, redaction)}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end

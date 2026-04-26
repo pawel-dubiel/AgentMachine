@@ -6,6 +6,7 @@ defmodule AgentMachine.Tools.SearchFiles do
   @behaviour AgentMachine.Tool
 
   alias AgentMachine.{JSON, Tools.PathGuard}
+  alias AgentMachine.Secrets.Redactor
 
   @max_results_limit 200
 
@@ -52,11 +53,15 @@ defmodule AgentMachine.Tools.SearchFiles do
 
     case System.cmd(rg, ["--json", "--", pattern, target], stderr_to_stdout: true) do
       {output, 0} ->
-        {:ok,
-         %{
-           matches: output |> parse_matches(max_results),
-           truncated: truncated?(output, max_results)
-         }}
+        matches = parse_matches(output, max_results)
+        {matches, redaction} = redact_matches(matches)
+
+        result = %{
+          matches: matches,
+          truncated: truncated?(output, max_results)
+        }
+
+        {:ok, Redactor.put_tool_metadata(result, redaction)}
 
       {_output, 1} ->
         {:ok, %{matches: [], truncated: false}}
@@ -121,5 +126,26 @@ defmodule AgentMachine.Tools.SearchFiles do
       line: Map.fetch!(data, "line_number"),
       text: get_in(data, ["lines", "text"]) |> String.trim_trailing()
     }
+  end
+
+  defp redact_matches(matches) do
+    results = Enum.map(matches, &redact_match/1)
+
+    redaction = %{
+      redacted: Enum.any?(results, fn {_match, result} -> result.redacted end),
+      count: Enum.reduce(results, 0, fn {_match, result}, count -> count + result.count end),
+      reasons:
+        results
+        |> Enum.flat_map(fn {_match, result} -> result.reasons end)
+        |> Enum.uniq()
+        |> Enum.sort()
+    }
+
+    {Enum.map(results, fn {match, _redaction} -> match end), redaction}
+  end
+
+  defp redact_match(%{text: text} = match) when is_binary(text) do
+    redaction = Redactor.redact_string(text)
+    {%{match | text: redaction.value}, redaction}
   end
 end
