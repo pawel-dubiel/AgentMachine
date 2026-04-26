@@ -122,6 +122,28 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	}
 }
 
+func TestRunningStatusIncludesToolState(t *testing.T) {
+	withoutTools := runningStatus(runConfig{
+		Provider: providerOpenRouter,
+		Model:    "qwen/qwen3.5-flash-02-23",
+	})
+
+	if !strings.Contains(withoutTools, "tools off") {
+		t.Fatalf("expected tools off in running status, got %q", withoutTools)
+	}
+
+	withTools := runningStatus(runConfig{
+		Provider:    providerOpenRouter,
+		Model:       "qwen/qwen3.5-flash-02-23",
+		ToolHarness: "local-files",
+		ToolRoot:    "/Users/pawel",
+	})
+
+	if !strings.Contains(withTools, "tools local-files root=/Users/pawel") {
+		t.Fatalf("expected tool root in running status, got %q", withTools)
+	}
+}
+
 func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "edit code",

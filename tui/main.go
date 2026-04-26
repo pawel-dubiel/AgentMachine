@@ -462,7 +462,7 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 
 	m.messages = append(m.messages,
 		chatMessage{Role: "user", Text: task},
-		chatMessage{Role: "system", Text: "running " + config.Provider.Label() + " / " + config.Model + "..."},
+		chatMessage{Role: "system", Text: runningStatus(config)},
 	)
 	m.running = true
 	m.view = viewChat
@@ -1206,6 +1206,21 @@ func (m model) toolsStatus() string {
 		return "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval)
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
+	}
+}
+
+func runningStatus(config runConfig) string {
+	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + "..."
+}
+
+func runToolsStatus(config runConfig) string {
+	switch config.ToolHarness {
+	case "":
+		return "tools off"
+	case "local-files", "code-edit":
+		return "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot)
+	default:
+		return "tools unsupported " + config.ToolHarness
 	}
 }
 
