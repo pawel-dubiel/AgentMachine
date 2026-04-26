@@ -30,7 +30,8 @@ defmodule AgentMachine.Workflows.Basic do
       model: model(spec),
       instructions: finalizer_instructions(),
       input: "Prepare the final answer for this task: #{spec.task}",
-      pricing: pricing
+      pricing: pricing,
+      metadata: %{agent_machine_disable_tools: true}
     }
 
     opts =
@@ -115,6 +116,7 @@ defmodule AgentMachine.Workflows.Basic do
     Create the final user-facing answer from the completed run context.
     Only report side effects that are present in prior results or tool_results.
     Do not claim that files were created or changed unless a tool result confirms it.
+    Do not call tools. Summarize only the run context.
     """
     |> String.trim()
   end

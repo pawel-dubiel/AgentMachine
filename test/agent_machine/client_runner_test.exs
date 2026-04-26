@@ -281,10 +281,17 @@ defmodule AgentMachine.ClientRunnerTest do
     {[planner], opts} = Agentic.build!(spec)
 
     assert planner.id == "planner"
-    assert planner.metadata == %{agent_machine_response: "delegation"}
+
+    assert planner.metadata == %{
+             agent_machine_response: "delegation",
+             agent_machine_disable_tools: true
+           }
+
     assert planner.instructions =~ "Return only JSON"
     assert Keyword.fetch!(opts, :max_steps) == 6
-    assert Keyword.fetch!(opts, :finalizer).id == "finalizer"
+    finalizer = Keyword.fetch!(opts, :finalizer)
+    assert finalizer.id == "finalizer"
+    assert finalizer.metadata == %{agent_machine_disable_tools: true}
   end
 
   test "runs the basic echo workflow and returns a client summary" do

@@ -113,6 +113,24 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["worker-b"].output == "finished worker-b"
   end
 
+  test "parses fenced structured delegation output" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.FencedStructuredDelegating,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_response: "delegation"}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_steps: 2)
+    assert run.status == :completed
+    assert run.results["planner"].output == "Created worker."
+    assert run.results["worker"].output == "finished worker"
+  end
+
   test "fails a dynamic run when max_steps is missing" do
     agents = [
       %{
@@ -484,6 +502,61 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.events
            |> Enum.filter(&(&1.type in [:tool_call_started, :tool_call_finished]))
            |> Enum.map(& &1.tool_call_id) == ["uppercase", "uppercase"]
+  end
+
+  test "agent metadata can disable tools for that agent" do
+    agents = [
+      %{
+        id: "no-tools",
+        provider: AgentMachine.TestProviders.ToolOptionsInspecting,
+        model: "test",
+        input: "inspect opts",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_disable_tools: true}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
+             )
+
+    assert run.results["no-tools"].status == :ok
+    assert run.results["no-tools"].output == "tools disabled"
+  end
+
+  test "agent metadata can disable tool schemas while preserving tool context" do
+    agents = [
+      %{
+        id: "no-tools",
+        provider: AgentMachine.TestProviders.ToolContextInspecting,
+        model: "test",
+        input: "inspect opts",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_disable_tools: true}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.CreateDir],
+               tool_policy: AgentMachine.ToolHarness.builtin_policy!(:local_files),
+               tool_root: "/Users/pawel",
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
+             )
+
+    assert run.results["no-tools"].status == :ok
+    assert run.results["no-tools"].output =~ "worker agents only"
+    assert run.results["no-tools"].output =~ "create_dir"
+    assert run.results["no-tools"].output =~ "/Users/pawel"
   end
 
   test "runs multiple provider tool rounds up to the explicit limit" do
@@ -999,6 +1072,115 @@ defmodule AgentMachine.TestProviders.StructuredDelegating do
 
   def complete(%Agent{} = agent, _opts) do
     output = "finished #{agent.id}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.FencedStructuredDelegating do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.{Agent, JSON}
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    json =
+      JSON.encode!(%{
+        output: "Created worker.",
+        next_agents: [
+          %{
+            id: "worker",
+            input: "do work"
+          }
+        ]
+      })
+
+    output = "```json\n" <> json <> "\n```"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  def complete(%Agent{} = agent, _opts) do
+    output = "finished #{agent.id}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.ToolOptionsInspecting do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    output =
+      if Keyword.has_key?(opts, :allowed_tools) do
+        "tools enabled"
+      else
+        "tools disabled"
+      end
+
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.ToolContextInspecting do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.{Agent, RunContextPrompt}
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    output = RunContextPrompt.text(opts)
     {:ok, %{output: output, usage: usage(agent, output)}}
   end
 

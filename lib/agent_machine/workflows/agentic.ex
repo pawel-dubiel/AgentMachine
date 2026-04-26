@@ -20,7 +20,7 @@ defmodule AgentMachine.Workflows.Agentic do
       instructions: planner_instructions(),
       input: spec.task,
       pricing: pricing,
-      metadata: %{agent_machine_response: "delegation"}
+      metadata: %{agent_machine_response: "delegation", agent_machine_disable_tools: true}
     }
 
     finalizer = %{
@@ -29,7 +29,8 @@ defmodule AgentMachine.Workflows.Agentic do
       model: model(spec),
       instructions: finalizer_instructions(),
       input: "Create the final answer for this task: #{spec.task}",
-      pricing: pricing
+      pricing: pricing,
+      metadata: %{agent_machine_disable_tools: true}
     }
 
     opts =
@@ -107,8 +108,10 @@ defmodule AgentMachine.Workflows.Agentic do
     {"output":"short planning note","next_agents":[{"id":"worker-id","input":"worker task","instructions":"optional worker instructions"}]}
 
     Use an empty next_agents list when no split is useful. Keep worker ids short, lowercase, and unique.
-    If the task needs external side effects such as writing files, delegate that exact action to a worker and require it to use available tools.
+    If the task needs external side effects such as writing files or creating directories, you MUST create a worker agent for that exact action and require it to use available tools.
+    Do not return an empty next_agents list for filesystem create, write, edit, delete, or rename requests.
     Do not claim side effects happened unless tool_results confirm them.
+    Do not call tools yourself. You are only planning and delegating.
     """
     |> String.trim()
   end
@@ -118,6 +121,7 @@ defmodule AgentMachine.Workflows.Agentic do
     Create the final user-facing answer from the completed run context.
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
+    Do not call tools. Summarize only the run context.
     """
     |> String.trim()
   end

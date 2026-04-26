@@ -19,6 +19,19 @@ defmodule AgentMachine.RunContextPrompt do
   end
 
   defp tool_context(opts) do
+    case Keyword.fetch(opts, :tool_context) do
+      {:ok, context} when is_map(context) ->
+        context
+
+      {:ok, context} ->
+        raise ArgumentError, ":tool_context must be a map, got: #{inspect(context)}"
+
+      :error ->
+        allowed_tool_context(opts)
+    end
+  end
+
+  defp allowed_tool_context(opts) do
     case Keyword.fetch(opts, :allowed_tools) do
       {:ok, tools} when is_list(tools) and tools != [] ->
         policy = Keyword.fetch!(opts, :tool_policy)

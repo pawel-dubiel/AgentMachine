@@ -1,7 +1,15 @@
 defmodule AgentMachine.AgentRunner do
   @moduledoc false
 
-  alias AgentMachine.{Agent, AgentResult, DelegationResponse, ToolPolicy, Usage, UsageLedger}
+  alias AgentMachine.{
+    Agent,
+    AgentResult,
+    DelegationResponse,
+    ToolHarness,
+    ToolPolicy,
+    Usage,
+    UsageLedger
+  }
 
   def run(%Agent{} = agent, opts) when is_list(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
@@ -104,6 +112,8 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp do_complete_agent(agent, opts, context, state) do
+    opts = maybe_disable_tools(agent, opts)
+
     case agent.provider.complete(agent, opts) do
       {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
         state = %{state | usage: sum_usage!(state.usage, provider_usage)}
@@ -130,6 +140,61 @@ defmodule AgentMachine.AgentRunner do
       other ->
         {:invalid, other}
     end
+  end
+
+  defp maybe_disable_tools(%Agent{metadata: metadata}, opts) when is_map(metadata) do
+    if Map.get(metadata, :agent_machine_disable_tools) == true ||
+         Map.get(metadata, "agent_machine_disable_tools") == true do
+      opts
+      |> put_disabled_tool_context()
+      |> Keyword.delete(:allowed_tools)
+      |> Keyword.delete(:tool_policy)
+      |> Keyword.delete(:tool_timeout_ms)
+      |> Keyword.delete(:tool_max_rounds)
+      |> Keyword.delete(:tool_approval_mode)
+    else
+      opts
+    end
+  end
+
+  defp maybe_disable_tools(_agent, opts), do: opts
+
+  defp put_disabled_tool_context(opts) do
+    case Keyword.fetch(opts, :allowed_tools) do
+      {:ok, tools} when is_list(tools) and tools != [] ->
+        put_disabled_tool_context!(opts, tools)
+
+      _other ->
+        opts
+    end
+  rescue
+    ArgumentError -> opts
+  end
+
+  defp put_disabled_tool_context!(opts, tools) do
+    policy = Keyword.fetch!(opts, :tool_policy)
+
+    Keyword.put(opts, :tool_context, %{
+      harness: disabled_tool_harness!(policy),
+      root: Keyword.get(opts, :tool_root),
+      approval_mode: Keyword.fetch!(opts, :tool_approval_mode),
+      available_tools: disabled_tool_names!(tools),
+      instruction:
+        "Tools are available to worker agents only. You cannot call tools in this agent. If the task needs filesystem side effects, delegate the exact action to a worker and require the worker to use tools. Do not claim file or directory changes unless worker tool_results confirm them."
+    })
+  end
+
+  defp disabled_tool_harness!(%ToolPolicy{harness: harness}) when is_atom(harness),
+    do: Atom.to_string(harness)
+
+  defp disabled_tool_harness!(policy) do
+    raise ArgumentError, ":tool_policy must include a harness, got: #{inspect(policy)}"
+  end
+
+  defp disabled_tool_names!(tools) do
+    tools
+    |> ToolHarness.definitions!()
+    |> Enum.map(& &1.name)
   end
 
   defp continue_after_tool_calls(agent, opts, context, state, payload, tool_calls) do

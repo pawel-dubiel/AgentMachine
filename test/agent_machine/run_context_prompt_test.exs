@@ -32,6 +32,30 @@ defmodule AgentMachine.RunContextPromptTest do
     assert instruction =~ "Do not claim file or directory changes unless tool_results confirm"
   end
 
+  test "includes explicit disabled tool context" do
+    text =
+      RunContextPrompt.text(
+        run_context: %{results: %{}, artifacts: %{}},
+        tool_context: %{
+          harness: "local_files",
+          root: "/Users/pawel",
+          approval_mode: :auto_approved_safe,
+          available_tools: ["create_dir"],
+          instruction: "Tools are available to worker agents only."
+        }
+      )
+
+    assert %{
+             "tools" => %{
+               "harness" => "local_files",
+               "root" => "/Users/pawel",
+               "approval_mode" => "auto_approved_safe",
+               "available_tools" => ["create_dir"],
+               "instruction" => "Tools are available to worker agents only."
+             }
+           } = JSON.decode!(text)
+  end
+
   test "encodes run context with atom keys and atom status values" do
     text =
       RunContextPrompt.text(

@@ -318,6 +318,11 @@ Local file tool rules:
 - Paths outside `--tool-root` fail.
 - Models receive the explicit `tool_root` in runtime context and should use
   relative paths under that root for local file tools.
+- In the `agentic` workflow, planner and finalizer agents do not receive tools;
+  filesystem actions should be delegated to worker agents and reported only from
+  worker `tool_results`.
+- Planner and finalizer prompts still receive tool availability and `tool_root`
+  as context, but they cannot call tools directly.
 - Search requires `rg` in `PATH`.
 - Writes require the parent directory to exist.
 - Append and replace require existing regular files.

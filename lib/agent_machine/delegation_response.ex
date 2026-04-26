@@ -5,7 +5,7 @@ defmodule AgentMachine.DelegationResponse do
 
   def normalize_payload!(%Agent{} = agent, payload) do
     if structured_delegation_response?(agent) do
-      parsed = JSON.decode!(payload.output)
+      parsed = payload.output |> delegation_json_text!() |> JSON.decode!()
       require_object!(parsed)
 
       output = fetch_required_string!(parsed, "output")
@@ -25,6 +25,28 @@ defmodule AgentMachine.DelegationResponse do
   end
 
   defp structured_delegation_response?(_agent), do: false
+
+  defp delegation_json_text!(output) when is_binary(output) do
+    output
+    |> String.trim()
+    |> strip_markdown_json_fence()
+  end
+
+  defp delegation_json_text!(output) do
+    raise ArgumentError,
+          "agent_machine delegation response output must be a binary, got: #{inspect(output)}"
+  end
+
+  defp strip_markdown_json_fence("```json\n" <> rest), do: strip_closing_fence(rest)
+  defp strip_markdown_json_fence("```\n" <> rest), do: strip_closing_fence(rest)
+  defp strip_markdown_json_fence(text), do: text
+
+  defp strip_closing_fence(text) do
+    text
+    |> String.trim()
+    |> String.trim_trailing("```")
+    |> String.trim()
+  end
 
   defp require_object!(value) when is_map(value), do: :ok
 
