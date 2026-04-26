@@ -122,6 +122,38 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesRunLogFile(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:     "review this project",
+		Workflow: workflowBasic,
+		Provider: providerEcho,
+		LogFile:  "/tmp/agent-machine-run.jsonl",
+	})
+
+	if !containsArgPair(args, "--log-file", "/tmp/agent-machine-run.jsonl") {
+		t.Fatalf("expected --log-file args, got %#v", args)
+	}
+}
+
+func TestPrepareRunLogCreatesPrivateDirectory(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "agent-machine", "logs", "run.jsonl")
+
+	if err := prepareRunLog(runConfig{LogFile: logFile}); err != nil {
+		t.Fatalf("expected log directory preparation to succeed, got %v", err)
+	}
+
+	info, err := os.Stat(filepath.Dir(logFile))
+	if err != nil {
+		t.Fatalf("expected log directory to exist, got %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected log parent to be a directory")
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected log directory permissions 0700, got %o", got)
+	}
+}
+
 func TestRunningStatusIncludesToolState(t *testing.T) {
 	withoutTools := runningStatus(runConfig{
 		Provider: providerOpenRouter,
@@ -781,6 +813,94 @@ func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
 	}
 }
 
+func TestStartRunIncludesRecentConversationContext(t *testing.T) {
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/Users/pawel",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "2",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "create me in home folder directory myproj1"},
+			{Role: "assistant", Text: "Created directory myproj1."},
+		},
+	}
+
+	updated, cmd := m.startRun("inside this dir create index.html")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command")
+	}
+	if !strings.Contains(result.activeConfig.Task, "Conversation context:") {
+		t.Fatalf("expected conversation context, got %q", result.activeConfig.Task)
+	}
+	if result.activeConfig.LogFile == "" {
+		t.Fatal("expected active run log file")
+	}
+	if !strings.Contains(result.activeConfig.Task, "myproj1") {
+		t.Fatalf("expected previous directory reference, got %q", result.activeConfig.Task)
+	}
+	if !strings.Contains(result.activeConfig.Task, "Current user request:\ninside this dir create index.html") {
+		t.Fatalf("expected current request marker, got %q", result.activeConfig.Task)
+	}
+}
+
+func TestTaskWithoutHistoryDoesNotAddConversationContext(t *testing.T) {
+	m := model{}
+
+	task := m.taskWithConversationContext("create index.html")
+
+	if task != "create index.html" {
+		t.Fatalf("expected unchanged task, got %q", task)
+	}
+}
+
+func TestSummaryDisplayTextFallsBackToAgentOutputs(t *testing.T) {
+	text := summaryDisplayText(summary{
+		Status: "completed",
+		Results: map[string]runResultSummary{
+			"planner": {Status: "ok", Output: "planned worker"},
+			"worker":  {Status: "ok", Output: "created index.html"},
+		},
+	})
+
+	if !strings.Contains(text, "Run completed without a final response") {
+		t.Fatalf("expected fallback heading, got %q", text)
+	}
+	if !strings.Contains(text, "worker: created index.html") {
+		t.Fatalf("expected worker output, got %q", text)
+	}
+}
+
+func TestSummaryDisplayTextUsesFinalOutputWhenPresent(t *testing.T) {
+	text := summaryDisplayText(summary{FinalOutput: "done"})
+
+	if text != "done" {
+		t.Fatalf("expected final output, got %q", text)
+	}
+}
+
+func TestRecentConversationMessagesSkipsSystemMessages(t *testing.T) {
+	messages := []chatMessage{
+		{Role: "system", Text: "running..."},
+		{Role: "user", Text: "one"},
+		{Role: "assistant", Text: "two"},
+	}
+
+	selected := recentConversationMessages(messages, 6)
+
+	if len(selected) != 2 || selected[0].Text != "one" || selected[1].Text != "two" {
+		t.Fatalf("unexpected selected messages: %#v", selected)
+	}
+}
+
 func TestFilesystemWritePromptWhenActiveRootDoesNotCoverRequest(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
@@ -1320,6 +1440,16 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 func containsEnv(env []string, expected string) bool {
 	for _, value := range env {
 		if value == expected {
+			return true
+		}
+	}
+
+	return false
+}
+
+func containsArgPair(args []string, key string, value string) bool {
+	for index := 0; index < len(args)-1; index++ {
+		if args[index] == key && args[index+1] == value {
 			return true
 		}
 	}

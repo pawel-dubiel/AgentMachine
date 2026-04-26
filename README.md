@@ -398,7 +398,11 @@ cd tui
 go run .
 ```
 
-In the UI, set a workflow and provider before sending normal messages.
+In the UI, set a workflow and provider before sending normal messages. Normal
+messages include a short recent user/assistant conversation context so follow-up
+wording like "inside this dir" can resolve from chat history.
+Each TUI run writes an Elixir JSONL log next to the config file under
+`logs/*.jsonl`; the run banner shows the exact log path.
 
 Useful commands:
 

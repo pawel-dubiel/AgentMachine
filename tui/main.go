@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -133,6 +134,7 @@ type runConfig struct {
 	ToolTimeout   string
 	ToolMaxRounds string
 	ToolApproval  string
+	LogFile       string
 }
 
 type savedConfig struct {
@@ -331,7 +333,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
 		} else {
-			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: emptyAsNone(msg.Summary.FinalOutput)})
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(msg.Summary)})
 		}
 		return m, nil
 
@@ -363,7 +365,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.lastSummary.Status == "failed" {
 				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + summaryError(m.lastSummary)})
 			} else {
-				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: emptyAsNone(m.lastSummary.FinalOutput)})
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(m.lastSummary)})
 			}
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
@@ -450,12 +452,14 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	config, err := resolveConfig(m.runConfig(task))
+	runTask := m.taskWithConversationContext(task)
+	config, err := resolveConfig(m.runConfig(runTask))
 	if err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 		m.view = viewSetup
 		return m, nil
 	}
+	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
@@ -485,6 +489,86 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	m.selectedAgent = ""
 	m.selectedAgentIndex = 0
 	return m, startStreamingCommand(config)
+}
+
+func (m model) taskWithConversationContext(task string) string {
+	history := recentConversationMessages(m.messages, 6)
+	if len(history) == 0 {
+		return task
+	}
+
+	lines := []string{"Conversation context:"}
+	for _, message := range history {
+		lines = append(lines, message.Role+": "+compactContextText(message.Text))
+	}
+	lines = append(lines, "", "Current user request:", task)
+	return strings.Join(lines, "\n")
+}
+
+func nextRunLogPath(configPath string) string {
+	return filepath.Join(
+		filepath.Dir(configPath),
+		"logs",
+		time.Now().UTC().Format("20060102T150405.000000000Z")+".jsonl",
+	)
+}
+
+func recentConversationMessages(messages []chatMessage, limit int) []chatMessage {
+	selected := make([]chatMessage, 0, limit)
+	for i := len(messages) - 1; i >= 0 && len(selected) < limit; i-- {
+		message := messages[i]
+		if message.Role != "user" && message.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		selected = append(selected, message)
+	}
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	return selected
+}
+
+func compactContextText(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= 500 {
+		return text
+	}
+	return text[:500] + "..."
+}
+
+func summaryDisplayText(summary summary) string {
+	if strings.TrimSpace(summary.FinalOutput) != "" {
+		return summary.FinalOutput
+	}
+
+	lines := make([]string, 0, len(summary.Results)+1)
+	for _, id := range sortedResultIDs(summary.Results) {
+		result := summary.Results[id]
+		switch {
+		case strings.TrimSpace(result.Output) != "":
+			lines = append(lines, id+": "+result.Output)
+		case strings.TrimSpace(result.Error) != "":
+			lines = append(lines, id+" error: "+result.Error)
+		}
+	}
+
+	if len(lines) == 0 {
+		return "Run completed without a final response. Open /agents and inspect agent details."
+	}
+
+	return "Run completed without a final response. Agent outputs:\n" + strings.Join(lines, "\n")
+}
+
+func sortedResultIDs(results map[string]runResultSummary) []string {
+	ids := make([]string, 0, len(results))
+	for id := range results {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
@@ -1402,7 +1486,7 @@ func (m model) toolsStatus() string {
 }
 
 func runningStatus(config runConfig) string {
-	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func runToolsStatus(config runConfig) string {

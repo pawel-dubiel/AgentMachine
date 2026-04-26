@@ -59,6 +59,10 @@ func readStreamCommand(session *streamSession) tea.Cmd {
 }
 
 func startAgentMachineStream(config runConfig) (*streamSession, error) {
+	if err := prepareRunLog(config); err != nil {
+		return nil, err
+	}
+
 	args := buildRunArgs(config)
 	cmd := exec.Command("mix", args...)
 	cmd.Dir = projectRoot()
@@ -86,6 +90,10 @@ func newLineScanner(reader io.Reader) *bufio.Scanner {
 }
 
 func runAgentMachine(config runConfig) (summary, string, error) {
+	if err := prepareRunLog(config); err != nil {
+		return summary{}, "", err
+	}
+
 	args := buildRunArgs(config)
 	cmd := exec.Command("mix", args...)
 	cmd.Dir = projectRoot()
@@ -106,6 +114,16 @@ func runAgentMachine(config runConfig) (summary, string, error) {
 	}
 
 	return parsed, raw, nil
+}
+
+func prepareRunLog(config runConfig) error {
+	if strings.TrimSpace(config.LogFile) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(config.LogFile), 0o700); err != nil {
+		return fmt.Errorf("failed to create AgentMachine log directory: %w", err)
+	}
+	return nil
 }
 
 func buildRunArgs(config runConfig) []string {
@@ -138,6 +156,10 @@ func buildRunArgs(config runConfig) []string {
 		if config.ToolRoot != "" {
 			args = append(args, "--tool-root", config.ToolRoot)
 		}
+	}
+
+	if config.LogFile != "" {
+		args = append(args, "--log-file", config.LogFile)
 	}
 
 	return append(args, config.Task)

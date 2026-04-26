@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added centralized secrets redaction for read/search tool output, summaries, JSONL events, and run logs.
+- Added per-run TUI JSONL log files and a fallback display for completed runs without final output.
+- Preserved tool availability context for agentic planner/finalizer prompts and included recent TUI chat context in runs.
+- Accepted fenced planner JSON in agentic delegation and disabled tools for planner/finalizer agents.
 - Added a TUI filesystem-write permission preflight with `/allow-tools`, `/yolo-tools`, and `/deny-tools`.
 - Added explicit tool-root runtime context and TUI run banners that show whether tools are active.
 - Added canonical mutation tool summaries with relative changed files, hashes, byte counts, and compact diff stats.
