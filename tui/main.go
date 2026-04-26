@@ -114,10 +114,10 @@ const (
 )
 
 const (
-	defaultRunTimeoutMS  = "30000"
+	defaultRunTimeoutMS  = "120000"
 	defaultBasicSteps    = "2"
 	defaultAgenticSteps  = "6"
-	defaultHTTPTimeoutMS = "25000"
+	defaultHTTPTimeoutMS = "120000"
 )
 
 type runConfig struct {

@@ -47,7 +47,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 		Model:       "openai/gpt-4o-mini",
 		InputPrice:  "0.15",
 		OutputPrice: "0.60",
-		HTTPTimeout: "25000",
+		HTTPTimeout: "120000",
 	})
 
 	expected := []string{
@@ -59,7 +59,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 		"--max-attempts", "1",
 		"--jsonl",
 		"--model", "openai/gpt-4o-mini",
-		"--http-timeout-ms", "25000",
+		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.15",
 		"--output-price-per-million", "0.60",
 		"review this project",
@@ -84,7 +84,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		Model:         "qwen/qwen3.5-flash-02-23",
 		InputPrice:    "0.01",
 		OutputPrice:   "0.01",
-		HTTPTimeout:   "25000",
+		HTTPTimeout:   "120000",
 		ToolHarness:   "local-files",
 		ToolRoot:      "/Users/pawel/mywiki",
 		ToolTimeout:   "1000",
@@ -101,7 +101,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		"--max-attempts", "1",
 		"--jsonl",
 		"--model", "qwen/qwen3.5-flash-02-23",
-		"--http-timeout-ms", "25000",
+		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.01",
 		"--output-price-per-million", "0.01",
 		"--tool-harness", "local-files",
@@ -184,7 +184,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		Model:         "qwen/qwen3.5-flash-02-23",
 		InputPrice:    "0.01",
 		OutputPrice:   "0.01",
-		HTTPTimeout:   "25000",
+		HTTPTimeout:   "120000",
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/Users/pawel/project",
 		ToolTimeout:   "1000",
@@ -201,7 +201,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		"--max-attempts", "1",
 		"--jsonl",
 		"--model", "qwen/qwen3.5-flash-02-23",
-		"--http-timeout-ms", "25000",
+		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.01",
 		"--output-price-per-million", "0.01",
 		"--tool-harness", "code-edit",
@@ -231,7 +231,7 @@ func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 		Model:       "openai/gpt-4o-mini",
 		InputPrice:  "0.15",
 		OutputPrice: "0.60",
-		HTTPTimeout: "25000",
+		HTTPTimeout: "120000",
 	})
 
 	if err == nil {
@@ -248,7 +248,7 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 		Model:       "openai/gpt-4o-mini",
 		InputPrice:  "0.15",
 		OutputPrice: "0.60",
-		HTTPTimeout: "25000",
+		HTTPTimeout: "120000",
 	})
 
 	if err != nil {

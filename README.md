@@ -191,7 +191,7 @@ mix agent_machine.run \
   --provider openai \
   --model "YOUR_OPENAI_MODEL" \
   --timeout-ms 30000 \
-  --http-timeout-ms 25000 \
+  --http-timeout-ms 120000 \
   --max-steps 2 \
   --max-attempts 1 \
   --input-price-per-million 0.25 \
@@ -216,7 +216,7 @@ mix agent_machine.run \
   --provider openrouter \
   --model "YOUR_OPENROUTER_MODEL" \
   --timeout-ms 30000 \
-  --http-timeout-ms 25000 \
+  --http-timeout-ms 120000 \
   --max-steps 2 \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
@@ -249,7 +249,7 @@ mix agent_machine.run \
   --provider openrouter \
   --model "YOUR_OPENROUTER_MODEL" \
   --timeout-ms 30000 \
-  --http-timeout-ms 25000 \
+  --http-timeout-ms 120000 \
   --max-steps 2 \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
@@ -272,7 +272,7 @@ mix agent_machine.run \
   --provider openrouter \
   --model "YOUR_OPENROUTER_MODEL" \
   --timeout-ms 30000 \
-  --http-timeout-ms 25000 \
+  --http-timeout-ms 120000 \
   --max-steps 2 \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
@@ -298,7 +298,7 @@ mix agent_machine.run \
   --provider openrouter \
   --model "YOUR_OPENROUTER_MODEL" \
   --timeout-ms 30000 \
-  --http-timeout-ms 25000 \
+  --http-timeout-ms 120000 \
   --max-steps 2 \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
