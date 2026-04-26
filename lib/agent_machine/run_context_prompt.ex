@@ -8,13 +8,29 @@ defmodule AgentMachine.RunContextPrompt do
     results = Map.fetch!(context, :results)
     artifacts = Map.fetch!(context, :artifacts)
     tools = tool_context(opts)
+    skills = skills_context(opts)
 
-    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) do
+    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) and
+         empty_skills?(skills) do
       ""
     else
       %{results: json_value(results), artifacts: json_value(artifacts)}
       |> maybe_put_tools(tools)
+      |> maybe_put_skills(skills)
       |> JSON.encode!()
+    end
+  end
+
+  defp skills_context(opts) do
+    case Keyword.fetch(opts, :skills_context) do
+      {:ok, skills} when is_list(skills) ->
+        skills
+
+      {:ok, skills} ->
+        raise ArgumentError, ":skills_context must be a list, got: #{inspect(skills)}"
+
+      :error ->
+        []
     end
   end
 
@@ -56,6 +72,11 @@ defmodule AgentMachine.RunContextPrompt do
 
   defp maybe_put_tools(context, nil), do: context
   defp maybe_put_tools(context, tools), do: Map.put(context, :tools, json_value(tools))
+  defp maybe_put_skills(context, []), do: context
+  defp maybe_put_skills(context, skills), do: Map.put(context, :skills, json_value(skills))
+
+  defp empty_skills?([]), do: true
+  defp empty_skills?(_skills), do: false
 
   defp harness_name!(%ToolPolicy{harness: harness}) when is_atom(harness),
     do: Atom.to_string(harness)

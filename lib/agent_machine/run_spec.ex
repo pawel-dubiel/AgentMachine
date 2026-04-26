@@ -4,6 +4,7 @@ defmodule AgentMachine.RunSpec do
   """
 
   alias AgentMachine.MCP.Config
+  alias AgentMachine.Skills.Manifest
   alias AgentMachine.Tools.RunTestCommand
 
   @enforce_keys [:task, :workflow, :provider, :timeout_ms, :max_steps, :max_attempts]
@@ -25,7 +26,11 @@ defmodule AgentMachine.RunSpec do
     :tool_approval_mode,
     :test_commands,
     :mcp_config_path,
-    :mcp_config
+    :mcp_config,
+    :skills_mode,
+    :skills_dir,
+    :skill_names,
+    :allow_skill_scripts
   ]
 
   @type t :: %__MODULE__{
@@ -38,8 +43,8 @@ defmodule AgentMachine.RunSpec do
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
           pricing: map() | nil,
-          tool_harness: :demo | :local_files | :code_edit | :mcp | nil,
-          tool_harnesses: [:demo | :local_files | :code_edit | :mcp] | nil,
+          tool_harness: :demo | :local_files | :code_edit | :mcp | :skills | nil,
+          tool_harnesses: [:demo | :local_files | :code_edit | :mcp | :skills] | nil,
           tool_timeout_ms: pos_integer() | nil,
           tool_max_rounds: pos_integer() | nil,
           tool_root: binary() | nil,
@@ -47,12 +52,17 @@ defmodule AgentMachine.RunSpec do
             :read_only | :ask_before_write | :auto_approved_safe | :full_access | nil,
           test_commands: [binary()] | nil,
           mcp_config_path: binary() | nil,
-          mcp_config: AgentMachine.MCP.Config.t() | nil
+          mcp_config: AgentMachine.MCP.Config.t() | nil,
+          skills_mode: :off | :auto,
+          skills_dir: binary() | nil,
+          skill_names: [binary()],
+          allow_skill_scripts: boolean()
         }
 
   def new!(attrs) when is_map(attrs) do
     attrs
     |> atomize_keys!()
+    |> normalize_skills!()
     |> normalize_tool_harnesses!()
     |> then(&struct!(__MODULE__, &1))
     |> validate!()
@@ -76,6 +86,7 @@ defmodule AgentMachine.RunSpec do
     require_positive_integer!(spec.max_steps, :max_steps)
     require_positive_integer!(spec.max_attempts, :max_attempts)
     validate_provider_options!(spec)
+    validate_skill_options!(spec)
     validate_tool_options!(spec)
     spec
   end
@@ -165,7 +176,30 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_tool_options!(%__MODULE__{tool_harnesses: harness}) do
     raise ArgumentError,
-          "run spec :tool_harnesses must be a non-empty list of :demo, :local_files, :code_edit, or :mcp, got: #{inspect(harness)}"
+          "run spec :tool_harnesses must be a non-empty list of :demo, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
+  end
+
+  defp normalize_skills!(attrs) do
+    attrs
+    |> Map.put_new(:skills_mode, :off)
+    |> Map.put_new(:skill_names, [])
+    |> Map.put_new(:allow_skill_scripts, false)
+    |> normalize_skill_names!()
+  end
+
+  defp normalize_skill_names!(%{skill_names: nil} = attrs), do: Map.put(attrs, :skill_names, [])
+
+  defp normalize_skill_names!(%{skill_names: names} = attrs) when is_list(names) do
+    Map.put(attrs, :skill_names, names)
+  end
+
+  defp normalize_skill_names!(%{skill_names: name} = attrs) when is_binary(name) do
+    Map.put(attrs, :skill_names, [name])
+  end
+
+  defp normalize_skill_names!(%{skill_names: names}) do
+    raise ArgumentError,
+          "run spec :skill_names must be a list of skill names, got: #{inspect(names)}"
   end
 
   defp normalize_tool_harnesses!(attrs) do
@@ -221,12 +255,12 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_harnesses!(harnesses) when is_list(harnesses) and harnesses != [] do
     Enum.each(harnesses, fn
-      harness when harness in [:demo, :local_files, :code_edit, :mcp] ->
+      harness when harness in [:demo, :local_files, :code_edit, :mcp, :skills] ->
         :ok
 
       harness ->
         raise ArgumentError,
-              "run spec :tool_harness must be :demo, :local_files, :code_edit, or :mcp, got: #{inspect(harness)}"
+              "run spec :tool_harness must be :demo, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
     end)
   end
 
@@ -254,6 +288,81 @@ defmodule AgentMachine.RunSpec do
         raise ArgumentError, "run spec :mcp_config_path requires :tool_harness :mcp"
       end
     end
+  end
+
+  defp validate_skill_options!(%__MODULE__{} = spec) do
+    require_skills_mode!(spec.skills_mode)
+    require_skill_names!(spec.skill_names)
+    require_boolean!(spec.allow_skill_scripts, :allow_skill_scripts)
+
+    skills_enabled? = spec.skills_mode == :auto or spec.skill_names != []
+    validate_skill_mode_combination!(spec)
+    validate_skills_dir!(spec, skills_enabled?)
+    validate_skill_scripts!(spec, skills_enabled?)
+    validate_skills_harness!(spec, skills_enabled?)
+  end
+
+  defp validate_skill_mode_combination!(%__MODULE__{skills_mode: :auto, skill_names: names})
+       when names != [] do
+    raise ArgumentError,
+          "run spec :skills_mode :auto cannot be combined with explicit :skill_names"
+  end
+
+  defp validate_skill_mode_combination!(_spec), do: :ok
+
+  defp validate_skills_dir!(spec, true),
+    do: require_non_empty_binary!(spec.skills_dir, :skills_dir)
+
+  defp validate_skills_dir!(%__MODULE__{skills_dir: nil}, false), do: :ok
+
+  defp validate_skills_dir!(spec, false),
+    do: require_non_empty_binary!(spec.skills_dir, :skills_dir)
+
+  defp validate_skill_scripts!(%__MODULE__{allow_skill_scripts: false}, _skills_enabled?),
+    do: :ok
+
+  defp validate_skill_scripts!(spec, true) do
+    unless is_list(spec.tool_harnesses) and :skills in spec.tool_harnesses do
+      raise ArgumentError, "run spec :allow_skill_scripts requires :tool_harness :skills"
+    end
+  end
+
+  defp validate_skill_scripts!(_spec, false) do
+    raise ArgumentError, "run spec :allow_skill_scripts requires enabled skills"
+  end
+
+  defp validate_skills_harness!(%__MODULE__{tool_harnesses: harnesses}, false)
+       when is_list(harnesses) do
+    if :skills in harnesses do
+      raise ArgumentError, "run spec :tool_harness :skills requires enabled skills"
+    end
+  end
+
+  defp validate_skills_harness!(_spec, _skills_enabled?), do: :ok
+
+  defp require_skills_mode!(mode) when mode in [:off, :auto], do: :ok
+
+  defp require_skills_mode!(mode) do
+    raise ArgumentError, "run spec :skills_mode must be :off or :auto, got: #{inspect(mode)}"
+  end
+
+  defp require_skill_names!(names) when is_list(names) do
+    Enum.each(names, fn name ->
+      require_non_empty_binary!(name, :skill_names)
+      Manifest.validate_name!(name)
+    end)
+
+    reject_duplicates!(names, "run spec :skill_names")
+  end
+
+  defp require_skill_names!(names) do
+    raise ArgumentError, "run spec :skill_names must be a list, got: #{inspect(names)}"
+  end
+
+  defp require_boolean!(value, _field) when is_boolean(value), do: :ok
+
+  defp require_boolean!(value, field) do
+    raise ArgumentError, "run spec #{inspect(field)} must be a boolean, got: #{inspect(value)}"
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0 do

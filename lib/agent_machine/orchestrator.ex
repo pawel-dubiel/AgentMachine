@@ -62,7 +62,7 @@ defmodule AgentMachine.Orchestrator do
       run_context = %{results: %{}, artifacts: %{}}
       {ready_agents, pending_agents} = split_ready_agents(agents, %{})
       {tasks, agent_events} = spawn_agents(ready_agents, opts, run_context, nil)
-      events = [run_started_event(run_id) | agent_events]
+      events = [run_started_event(run_id)] ++ skills_events(run_id, opts) ++ agent_events
       emit_events!(opts, events)
 
       run = %{
@@ -605,6 +605,35 @@ defmodule AgentMachine.Orchestrator do
       run_id: run_id,
       at: DateTime.utc_now()
     }
+  end
+
+  defp skills_events(run_id, opts) do
+    mode = Keyword.get(opts, :skills_mode, :off)
+    loaded = Keyword.get(opts, :skills_loaded, [])
+    selected = Keyword.get(opts, :skills_selected, [])
+
+    if mode == :off do
+      []
+    else
+      [
+        %{
+          type: :skills_loaded,
+          run_id: run_id,
+          mode: mode,
+          count: length(loaded),
+          skills: Enum.map(loaded, &Map.fetch!(&1, :name)),
+          at: DateTime.utc_now()
+        },
+        %{
+          type: :skills_selected,
+          run_id: run_id,
+          mode: mode,
+          count: length(selected),
+          skills: selected,
+          at: DateTime.utc_now()
+        }
+      ]
+    end
   end
 
   defp agent_started_event(run_id, agent_id, parent_agent_id, attempt) do

@@ -5,12 +5,15 @@ defmodule AgentMachine.ClientRunner do
 
   alias AgentMachine.{JSON, Orchestrator, RunSpec}
   alias AgentMachine.Secrets.Redactor
+  alias AgentMachine.Skills.{Manifest, Prompt, Selector}
   alias AgentMachine.Workflows.{Agentic, Basic}
 
   def run!(attrs, opts \\ []) when is_list(opts) do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
+    skill_selection = Selector.select!(spec)
     {agents, run_opts} = workflow_module(spec).build!(spec)
+    run_opts = put_skill_opts(run_opts, spec, skill_selection)
     run_opts = put_event_sink(run_opts, opts)
 
     case Orchestrator.run(agents, run_opts) do
@@ -75,6 +78,24 @@ defmodule AgentMachine.ClientRunner do
     end
   end
 
+  defp put_skill_opts(run_opts, spec, selection) do
+    selected = Enum.map(selection.selected, & &1.skill)
+
+    run_opts
+    |> Keyword.put(:skills_mode, selection.mode)
+    |> Keyword.put(:skills_dir, spec.skills_dir)
+    |> Keyword.put(:skills_loaded, Enum.map(selection.loaded, &Manifest.catalog_entry/1))
+    |> Keyword.put(
+      :skills_selected,
+      Enum.map(selection.selected, fn %{skill: skill, reason: reason} ->
+        %{name: skill.name, description: skill.description, reason: reason}
+      end)
+    )
+    |> Keyword.put(:selected_skills, selected)
+    |> Keyword.put(:skills_context, Prompt.context(selection.selected))
+    |> Keyword.put(:allow_skill_scripts, spec.allow_skill_scripts)
+  end
+
   defp summarize_run(run) do
     failed_results = failed_results(run.results)
 
@@ -85,6 +106,7 @@ defmodule AgentMachine.ClientRunner do
       final_output: final_output(run),
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
+      skills: summarize_skills(run),
       usage: run.usage || empty_usage(),
       events: Enum.map(run.events, &summarize_event/1)
     }
@@ -161,6 +183,19 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp stringify_map(map) when is_map(map), do: map
+
+  defp summarize_skills(run) do
+    run
+    |> Map.get(:opts, [])
+    |> Keyword.get(:skills_selected, [])
+    |> Enum.map(fn skill ->
+      %{
+        name: Map.fetch!(skill, :name),
+        description: Map.fetch!(skill, :description),
+        reason: Map.fetch!(skill, :reason)
+      }
+    end)
+  end
 
   defp empty_usage do
     %{
