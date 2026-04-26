@@ -517,12 +517,43 @@ defmodule AgentMachine.ClientRunnerTest do
       "100",
       "--tool-max-rounds",
       "2",
+      "--tool-approval-mode",
+      "full-access",
       "--json",
       "summarize"
     ])
 
     assert_receive {:mix_shell, :info, [line]}
     assert %{"status" => "completed"} = JSON.decode!(line)
+  end
+
+  test "mix agent_machine.run rejects invalid tool approval mode" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--tool-approval-mode/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "demo",
+        "--tool-timeout-ms",
+        "100",
+        "--tool-max-rounds",
+        "2",
+        "--tool-approval-mode",
+        "maybe",
+        "--json",
+        "what time is it?"
+      ])
+    end
   end
 
   test "mix agent_machine.run writes JSONL run log file" do

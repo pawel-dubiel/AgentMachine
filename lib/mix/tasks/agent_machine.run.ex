@@ -19,6 +19,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     tool_timeout_ms: :integer,
     tool_max_rounds: :integer,
     tool_root: :string,
+    tool_approval_mode: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
@@ -137,7 +138,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
       tool_harness: tool_harness_from_opts!(opts),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       tool_max_rounds: Keyword.get(opts, :tool_max_rounds),
-      tool_root: Keyword.get(opts, :tool_root)
+      tool_root: Keyword.get(opts, :tool_root),
+      tool_approval_mode: tool_approval_mode_from_opts!(opts)
     }
   end
 
@@ -196,6 +198,30 @@ defmodule Mix.Tasks.AgentMachine.Run do
       {:ok, harness} ->
         Mix.raise(
           "--tool-harness must be demo, local-files, or code-edit, got: #{inspect(harness)}"
+        )
+
+      :error ->
+        nil
+    end
+  end
+
+  defp tool_approval_mode_from_opts!(opts) do
+    case Keyword.fetch(opts, :tool_approval_mode) do
+      {:ok, "read-only"} ->
+        :read_only
+
+      {:ok, "ask-before-write"} ->
+        :ask_before_write
+
+      {:ok, "auto-approved-safe"} ->
+        :auto_approved_safe
+
+      {:ok, "full-access"} ->
+        :full_access
+
+      {:ok, mode} ->
+        Mix.raise(
+          "--tool-approval-mode must be read-only, ask-before-write, auto-approved-safe, or full-access, got: #{inspect(mode)}"
         )
 
       :error ->

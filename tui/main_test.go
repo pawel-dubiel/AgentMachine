@@ -89,6 +89,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		ToolRoot:      "/Users/pawel/mywiki",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
 	})
 
 	expected := []string{
@@ -106,6 +107,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		"--tool-harness", "local-files",
 		"--tool-timeout-ms", "1000",
 		"--tool-max-rounds", "2",
+		"--tool-approval-mode", "auto-approved-safe",
 		"--tool-root", "/Users/pawel/mywiki",
 		"create hello",
 	}
@@ -133,6 +135,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		ToolRoot:      "/Users/pawel/project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
+		ToolApproval:  "full-access",
 	})
 
 	expected := []string{
@@ -150,6 +153,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		"--tool-harness", "code-edit",
 		"--tool-timeout-ms", "1000",
 		"--tool-max-rounds", "2",
+		"--tool-approval-mode", "full-access",
 		"--tool-root", "/Users/pawel/project",
 		"edit code",
 	}
@@ -206,6 +210,7 @@ func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
 		ToolHarness:   "local-files",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "tool root") {
@@ -237,10 +242,27 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 		ToolRoot:      "/Users/pawel/project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
+		ToolApproval:  "full-access",
 	})
 
 	if err != nil {
 		t.Fatalf("expected valid code-edit config, got %v", err)
+	}
+}
+
+func TestValidateConfigRequiresToolApprovalMode(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "edit code",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "approval mode") {
+		t.Fatalf("expected approval mode error, got %v", err)
 	}
 }
 
@@ -539,7 +561,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000 2")
+	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000 2 auto-approved-safe")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "local-files" {
@@ -550,7 +572,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" {
+	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
 	}
 }
@@ -564,7 +586,7 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2")
+	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2 full-access")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "code-edit" {
@@ -575,8 +597,28 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/Users/pawel/project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" {
+	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/Users/pawel/project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "full-access" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestToolsCommandRejectsInvalidApprovalMode(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2 maybe")
+	result := updated.(model)
+
+	if result.savedConfig.ToolHarness != "" {
+		t.Fatalf("expected invalid approval mode not to save tools, got %#v", result.savedConfig)
+	}
+	if len(result.messages) == 0 || !strings.Contains(result.messages[len(result.messages)-1].Text, "unsupported tool approval mode") {
+		t.Fatalf("expected approval mode error, got %#v", result.messages)
 	}
 }
 
@@ -589,6 +631,7 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 		ToolRoot:      "/Users/pawel/mywiki",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
 	}); err != nil {
 		t.Fatalf("expected saved config write to succeed, got %v", err)
 	}
@@ -601,7 +644,7 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 	updated, _ := m.handleCommand("/tools off")
 	result := updated.(model)
 
-	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" || result.savedConfig.ToolTimeout != "" || result.savedConfig.ToolMaxRounds != "" {
+	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" || result.savedConfig.ToolTimeout != "" || result.savedConfig.ToolMaxRounds != "" || result.savedConfig.ToolApproval != "" {
 		t.Fatalf("expected cleared tool config, got %#v", result.savedConfig)
 	}
 }
@@ -646,6 +689,7 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 		ToolRoot:        "/Users/pawel/mywiki",
 		ToolTimeout:     "1000",
 		ToolMaxRounds:   "2",
+		ToolApproval:    "auto-approved-safe",
 	}); err != nil {
 		t.Fatalf("expected saved config write to succeed, got %v", err)
 	}
@@ -1056,6 +1100,7 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 		ToolRoot:         "/Users/pawel/mywiki",
 		ToolTimeout:      "1000",
 		ToolMaxRounds:    "2",
+		ToolApproval:     "auto-approved-safe",
 	})
 	if err != nil {
 		t.Fatalf("expected save to succeed, got %v", err)
@@ -1096,6 +1141,9 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 	}
 	if loaded.ToolMaxRounds != "2" {
 		t.Fatalf("unexpected tool max rounds: %q", loaded.ToolMaxRounds)
+	}
+	if loaded.ToolApproval != "auto-approved-safe" {
+		t.Fatalf("unexpected tool approval mode: %q", loaded.ToolApproval)
 	}
 
 	info, err := os.Stat(path)
