@@ -629,9 +629,9 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolRoot = ""
 		m.savedConfig.ToolTimeout = ""
 		m.savedConfig.ToolMaxRounds = ""
-	case "local-files":
+	case "local-files", "code-edit":
 		if len(args) != 4 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools local-files <root> <timeout-ms> <max-rounds>"})
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools " + args[0] + " <root> <timeout-ms> <max-rounds>"})
 			return m, nil
 		}
 		if strings.TrimSpace(args[1]) == "" {
@@ -646,12 +646,12 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 			return m, nil
 		}
-		m.savedConfig.ToolHarness = "local-files"
+		m.savedConfig.ToolHarness = args[0]
 		m.savedConfig.ToolRoot = args[1]
 		m.savedConfig.ToolTimeout = args[2]
 		m.savedConfig.ToolMaxRounds = args[3]
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files <root> <timeout-ms> <max-rounds>"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files|code-edit <root> <timeout-ms> <max-rounds>"})
 		return m, nil
 	}
 
@@ -1046,9 +1046,9 @@ func validateToolConfig(config runConfig) error {
 			return errors.New("tool root, timeout, and max rounds require a selected tool harness")
 		}
 		return nil
-	case "local-files":
+	case "local-files", "code-edit":
 		if strings.TrimSpace(config.ToolRoot) == "" {
-			return errors.New("tool root must not be empty for local-files")
+			return errors.New("tool root must not be empty for " + config.ToolHarness)
 		}
 		if err := validatePositiveInt(config.ToolTimeout, "tool timeout ms"); err != nil {
 			return err
@@ -1179,8 +1179,8 @@ func (m model) toolsStatus() string {
 	switch m.savedConfig.ToolHarness {
 	case "":
 		return "tools: off"
-	case "local-files":
-		return "tools: local-files root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds)
+	case "local-files", "code-edit":
+		return "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds)
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
 	}

@@ -120,6 +120,50 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "edit code",
+		Workflow:      workflowBasic,
+		Provider:      providerOpenRouter,
+		Model:         "qwen/qwen3.5-flash-02-23",
+		InputPrice:    "0.01",
+		OutputPrice:   "0.01",
+		HTTPTimeout:   "25000",
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+	})
+
+	expected := []string{
+		"agent_machine.run",
+		"--workflow", "basic",
+		"--provider", "openrouter",
+		"--timeout-ms", defaultRunTimeoutMS,
+		"--max-steps", defaultBasicSteps,
+		"--max-attempts", "1",
+		"--jsonl",
+		"--model", "qwen/qwen3.5-flash-02-23",
+		"--http-timeout-ms", "25000",
+		"--input-price-per-million", "0.01",
+		"--output-price-per-million", "0.01",
+		"--tool-harness", "code-edit",
+		"--tool-timeout-ms", "1000",
+		"--tool-max-rounds", "2",
+		"--tool-root", "/Users/pawel/project",
+		"edit code",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
 func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
@@ -181,6 +225,22 @@ func TestValidateConfigRequiresToolMaxRoundsForLocalFiles(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "tool max rounds") {
 		t.Fatalf("expected tool max rounds error, got %v", err)
+	}
+}
+
+func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "edit code",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+	})
+
+	if err != nil {
+		t.Fatalf("expected valid code-edit config, got %v", err)
 	}
 }
 
@@ -491,6 +551,31 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
 	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" {
+		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2")
+	result := updated.(model)
+
+	if result.savedConfig.ToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit harness, got %q", result.savedConfig.ToolHarness)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/Users/pawel/project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
 	}
 }
