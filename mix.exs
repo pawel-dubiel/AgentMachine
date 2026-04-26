@@ -29,6 +29,7 @@ defmodule AgentMachine.MixProject do
 
   defp deps do
     [
+      {:yamerl, "~> 0.10"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
