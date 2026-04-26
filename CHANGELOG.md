@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Increased the TUI remote-provider HTTP timeout and tightened agentic filesystem planning to avoid fragile parallel read/write workers.
+- Improved TUI timeout reporting, run banners, and default tool-run budget for multi-step file tasks.
+- Added an explicit `run_test_command` capability for `code-edit` with allowlisted commands and thin TUI pass-through.
 - Added centralized secrets redaction for read/search tool output, summaries, JSONL events, and run logs.
 - Added per-run TUI JSONL log files and a fallback display for completed runs without final output.
 - Preserved tool availability context for agentic planner/finalizer prompts and included recent TUI chat context in runs.

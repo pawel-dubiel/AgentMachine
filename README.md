@@ -290,7 +290,9 @@ The `code-edit` harness is a separate opt-in harness for code changes under an
 explicit existing root. It can inspect, list, read, and search files, then apply
 structured edits or unified diff patches. Patch application is implemented in
 Elixir and does not shell out. Every successful code-edit mutation creates a
-root-local checkpoint before writing.
+root-local checkpoint before writing. When explicit `--test-command` values are
+provided with `full-access`, code-edit agents can also run those exact commands
+through `run_test_command`.
 
 ```sh
 mix agent_machine.run \
@@ -308,6 +310,7 @@ mix agent_machine.run \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
   --tool-approval-mode full-access \
+  --test-command "mix test" \
   --json \
   "Update the README using a minimal patch"
 ```
@@ -335,6 +338,10 @@ Local file tool rules:
   checkpoint.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` are required when a harness is enabled.
 - Approval modes are `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
+- `--test-command <command>` may be repeated only with `code-edit` and
+  `full-access`; the model must use the exact allowlisted command string.
+- Test commands run without a shell, under `--tool-root`, with `MIX_ENV=test`,
+  the existing tool timeout, bounded output, and redaction on returned output.
 
 Read-style tools redact sensitive-looking text before returning file contents or
 search match lines to the provider. Mutation tools still apply the exact
@@ -418,6 +425,9 @@ Useful commands:
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools off
+/test-command add <command>
+/test-command list
+/test-command clear
 /allow-tools [auto-approved-safe|full-access]
 /yolo-tools
 /deny-tools
@@ -466,6 +476,7 @@ values are:
 - `--model`, `--http-timeout-ms`, pricing, and API key for remote providers.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` when tools are enabled.
 - `--tool-root` for `local-files` and `code-edit`.
+- `--test-command` values require `code-edit` and `full-access`.
 
 ## Development
 

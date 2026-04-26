@@ -157,6 +157,10 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   --tool-timeout-ms <ms> --tool-max-rounds <n> --tool-approval-mode <mode>`
   exposes constrained code edit tools for structured edits and unified patches.
   Patch application must stay in Elixir and must not shell out.
+- Repeated `--test-command <command>` values may extend `code-edit` with
+  `run_test_command` only under `full-access`. Command execution must stay in
+  Elixir, use exact allowlist matching, avoid shells, keep cwd inside
+  `tool_root`, and return bounded redacted output.
 - Code-edit checkpoint and rollback logic belongs in Elixir tools/helpers.
   The TUI may display checkpoint IDs or call CLI commands, but it must not
   create, inspect, apply, or roll back checkpoints itself.
