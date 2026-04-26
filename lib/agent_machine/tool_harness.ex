@@ -3,7 +3,7 @@ defmodule AgentMachine.ToolHarness do
   Small adapter between AgentMachine tools and provider-native tool calling.
   """
 
-  alias AgentMachine.JSON
+  alias AgentMachine.{JSON, ToolPolicy}
 
   @builtin_harnesses %{
     demo: [AgentMachine.Tools.Now],
@@ -16,12 +16,32 @@ defmodule AgentMachine.ToolHarness do
     ]
   }
 
+  @builtin_policies %{
+    demo: [:demo_time],
+    local_files: [
+      :local_files_create_dir,
+      :local_files_list,
+      :local_files_read,
+      :local_files_search,
+      :local_files_write
+    ]
+  }
+
   def builtin!(nil), do: []
 
   def builtin!(name) when is_atom(name) do
     case Map.fetch(@builtin_harnesses, name) do
       {:ok, tools} -> tools
       :error -> raise ArgumentError, "unknown tool harness: #{inspect(name)}"
+    end
+  end
+
+  def builtin_policy!(nil), do: nil
+
+  def builtin_policy!(name) when is_atom(name) do
+    case Map.fetch(@builtin_policies, name) do
+      {:ok, permissions} -> ToolPolicy.new!(harness: name, permissions: permissions)
+      :error -> raise ArgumentError, "unknown tool harness policy: #{inspect(name)}"
     end
   end
 

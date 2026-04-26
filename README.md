@@ -685,10 +685,10 @@ be exposed to OpenAI Responses or OpenRouter Chat must also implement
 `definition/0` with a JSON-schema-compatible `:input_schema`. The provider sends
 those definitions using the provider's standard function/tool calling shape, then
 `AgentMachine.ToolHarness` converts returned provider tool calls into runtime
-`tool_calls`. When a provider requests a tool, `AgentMachine.AgentRunner`
-executes the tool, sends the JSON-encoded result back to the same provider
-conversation, and repeats until the provider returns a final response or
-`:tool_max_rounds` is exceeded.
+`tool_calls`. `AgentMachine.AgentRunner` executes only tools that are present in
+`:allowed_tools` and permitted by the explicit `:tool_policy`, sends the
+JSON-encoded result back to the same provider conversation, and repeats until
+the provider returns a final response or `:tool_max_rounds` is exceeded.
 
 Built-in harnesses:
 
@@ -702,16 +702,21 @@ Runs that execute tools must explicitly allow them:
   AgentMachine.Orchestrator.run(agents,
     timeout: 5_000,
     allowed_tools: [UppercaseTool],
+    tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:uppercase]),
     tool_timeout_ms: 1_000,
     tool_max_rounds: 2
   )
 ```
 
 If a provider requests a tool that is not in `:allowed_tools`, that agent attempt
-fails with an explicit error. If a tool does not finish within
-`:tool_timeout_ms`, that agent attempt also fails with an explicit error. If a
-provider continues requesting tools after `:tool_max_rounds`, the agent attempt
-fails explicitly.
+fails with an explicit error. If the tool's `permission/0` is not present in
+`:tool_policy`, the attempt also fails. If a tool does not finish within
+`:tool_timeout_ms`, that agent attempt fails explicitly. If a provider continues
+requesting tools after `:tool_max_rounds`, the agent attempt fails explicitly.
+
+Local file tools use a security-first policy: the configured tool root must
+exist, paths are resolved before use, symlink escapes are rejected, directory
+listing reports symlinks without following them, and writes are bounded.
 
 ## Run Events
 

@@ -22,6 +22,9 @@ Prefer small changes that move the architecture forward without turning the proj
   run the relevant focused tests before the full quality gate.
 - Do not merge behavior changes without automated coverage unless the change is
   documentation-only or explicitly not testable; say so clearly.
+- Use a security-first approach for all tool/runtime changes: deny by default,
+  require explicit permissions, log security-relevant decisions, and prefer
+  narrow capability over broad convenience.
 
 ## Responsibility Boundaries
 
@@ -123,12 +126,14 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
-- Tool calls require `allowed_tools`, `tool_timeout_ms`, and
+- Tool calls require `allowed_tools`, `tool_policy`, `tool_timeout_ms`, and
   `tool_max_rounds`.
 - Provider-native tool calls continue within the same agent attempt: the runtime
   executes allowed tools, sends JSON-encoded results back to the provider, and
   stops only when the provider returns a final response or `tool_max_rounds` is
   exceeded.
+- Every executable tool must expose a narrow `permission/0`; execution must
+  check that permission through `AgentMachine.ToolPolicy`.
 - `mix agent_machine.run --tool-harness demo --tool-timeout-ms <ms>
   --tool-max-rounds <n>` exposes the safe built-in demo harness through the
   high-level client boundary.
