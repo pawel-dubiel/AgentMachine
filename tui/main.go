@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -194,6 +195,8 @@ type model struct {
 	agentOrder         []string
 	raw                string
 	stream             *streamSession
+	pendingToolTask    string
+	pendingToolRoot    string
 }
 
 var (
@@ -439,6 +442,14 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if prompt, root, needsPermission := m.toolPermissionPrompt(task); needsPermission {
+		m.pendingToolTask = task
+		m.pendingToolRoot = root
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: prompt})
+		m.view = viewChat
+		return m, nil
+	}
+
 	config, err := resolveConfig(m.runConfig(task))
 	if err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
@@ -494,6 +505,12 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleKeyCommand(args)
 	case "tools":
 		return m.handleToolsCommand(args)
+	case "allow-tools":
+		return m.handleAllowToolsCommand(args, "auto-approved-safe")
+	case "yolo-tools":
+		return m.handleAllowToolsCommand(args, "full-access")
+	case "deny-tools":
+		return m.handleDenyToolsCommand(args)
 	case "models":
 		return m.handleModelsCommand(args)
 	case "model":
@@ -515,6 +532,64 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown command: /" + name})
 	}
 
+	return m, nil
+}
+
+func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (tea.Model, tea.Cmd) {
+	if m.pendingToolTask == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no pending tool request"})
+		return m, nil
+	}
+	if len(args) > 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /allow-tools [auto-approved-safe|full-access]"})
+		return m, nil
+	}
+
+	approval := fallbackApproval
+	if len(args) == 1 {
+		approval = args[0]
+	}
+	if approval != "auto-approved-safe" && approval != "full-access" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "write tool approval must be auto-approved-safe or full-access"})
+		return m, nil
+	}
+
+	root := m.pendingToolRoot
+	if root == "" {
+		var err error
+		root, err = os.UserHomeDir()
+		if err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "could not resolve home directory: " + err.Error()})
+			return m, nil
+		}
+	}
+
+	m.savedConfig.ToolHarness = "local-files"
+	m.savedConfig.ToolRoot = root
+	m.savedConfig.ToolTimeout = "1000"
+	m.savedConfig.ToolMaxRounds = "4"
+	m.savedConfig.ToolApproval = approval
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	task := m.pendingToolTask
+	m.pendingToolTask = ""
+	m.pendingToolRoot = ""
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed local-files tools root=" + root + " approval=" + approval})
+	return m.startRun(task)
+}
+
+func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /deny-tools"})
+		return m, nil
+	}
+	m.pendingToolTask = ""
+	m.pendingToolRoot = ""
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool request denied; no run started"})
 	return m, nil
 }
 
@@ -1083,6 +1158,123 @@ func validateToolApprovalMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported tool approval mode: %s", mode)
 	}
+}
+
+func (m model) toolPermissionPrompt(task string) (string, string, bool) {
+	if !filesystemWriteIntent(task) {
+		return "", "", false
+	}
+
+	root := inferredToolRoot(task)
+	if root == "" {
+		return "", "", false
+	}
+
+	switch m.savedConfig.ToolHarness {
+	case "local-files":
+		if !pathInsideRoot(root, m.savedConfig.ToolRoot) {
+			return toolPermissionText(
+				"requested filesystem location is outside the active tool root",
+				root,
+				m.savedConfig.ToolRoot,
+			), root, true
+		}
+		if m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access" {
+			return toolPermissionText(
+				"active tool approval mode cannot perform writes without an interactive approval bridge",
+				root,
+				m.savedConfig.ToolRoot,
+			), root, true
+		}
+		return "", "", false
+	case "":
+		return toolPermissionText("filesystem tools are off", root, ""), root, true
+	default:
+		return toolPermissionText("active tool harness cannot perform this filesystem action", root, m.savedConfig.ToolRoot), root, true
+	}
+}
+
+func toolPermissionText(reason string, root string, activeRoot string) string {
+	lines := []string{
+		"filesystem permission required: " + reason,
+		"requested root: " + root,
+	}
+	if strings.TrimSpace(activeRoot) != "" {
+		lines = append(lines, "active root: "+activeRoot)
+	}
+	lines = append(lines,
+		"Run /allow-tools to enable local-files for this root and retry now.",
+		"Run /yolo-tools to enable full-access for this root and retry now.",
+		"Run /deny-tools to decline.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func filesystemWriteIntent(task string) bool {
+	text := strings.ToLower(task)
+	writeVerb := containsAny(text, []string{
+		"create", "make", "write", "append", "replace", "edit", "update", "delete", "remove", "rename",
+	})
+	fileNoun := containsAny(text, []string{
+		"file", "folder", "directory", "dir", "path", "home", "~/", "/users/", "/tmp/",
+	})
+	return writeVerb && fileNoun
+}
+
+func inferredToolRoot(task string) string {
+	text := strings.ToLower(task)
+	if strings.Contains(text, "home folder") ||
+		strings.Contains(text, "home directory") ||
+		strings.Contains(text, "my home") ||
+		strings.Contains(text, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
+		}
+	}
+
+	if path := firstAbsolutePath(task); path != "" {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return path
+		}
+		if parent := filepath.Dir(path); parent != "." && parent != "/" {
+			return parent
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+func firstAbsolutePath(text string) string {
+	for _, field := range strings.Fields(text) {
+		candidate := strings.Trim(field, ".,;:()[]{}\"'")
+		if strings.HasPrefix(candidate, "/") {
+			return filepath.Clean(candidate)
+		}
+	}
+	return ""
+}
+
+func containsAny(text string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathInsideRoot(path string, root string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	root = filepath.Clean(strings.TrimSpace(root))
+	if path == "" || root == "" {
+		return false
+	}
+	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
 func resolveConfig(config runConfig) (runConfig, error) {

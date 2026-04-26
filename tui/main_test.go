@@ -671,6 +671,145 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 	}
 }
 
+func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  configPath,
+	}
+
+	updated, cmd := m.startRun("create directory testmme in my home folder")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command before tool permission")
+	}
+	if result.running {
+		t.Fatal("expected run to remain stopped")
+	}
+	if result.pendingToolTask == "" {
+		t.Fatal("expected pending tool task")
+	}
+	last := result.messages[len(result.messages)-1].Text
+	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
+		t.Fatalf("expected permission prompt, got %q", last)
+	}
+}
+
+func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("expected home directory, got %v", err)
+	}
+
+	m := model{
+		workflow:        workflowBasic,
+		workflowSet:     true,
+		provider:        providerEcho,
+		providerSet:     true,
+		configPath:      configPath,
+		pendingToolTask: "create directory testmme in my home folder",
+		pendingToolRoot: home,
+	}
+
+	updated, cmd := m.handleCommand("/allow-tools")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command after allowing tools")
+	}
+	if !result.running {
+		t.Fatal("expected run to start after allowing tools")
+	}
+	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
+		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
+	}
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected pending tool request to be cleared, got task=%q root=%q", result.pendingToolTask, result.pendingToolRoot)
+	}
+}
+
+func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("expected home directory, got %v", err)
+	}
+
+	m := model{
+		workflow:        workflowBasic,
+		workflowSet:     true,
+		provider:        providerEcho,
+		providerSet:     true,
+		configPath:      configPath,
+		pendingToolTask: "create directory testmme in my home folder",
+		pendingToolRoot: home,
+	}
+
+	updated, cmd := m.handleCommand("/yolo-tools")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command after yolo tools")
+	}
+	if result.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("expected full-access, got %#v", result.savedConfig)
+	}
+}
+
+func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
+	m := model{
+		pendingToolTask: "create directory testmme in my home folder",
+		pendingToolRoot: "/Users/pawel",
+	}
+
+	updated, cmd := m.handleCommand("/deny-tools")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no command after denying tools")
+	}
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected pending request to clear, got task=%q root=%q", result.pendingToolTask, result.pendingToolRoot)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "denied") {
+		t.Fatalf("expected denied message, got %#v", result.messages)
+	}
+}
+
+func TestFilesystemWritePromptWhenActiveRootDoesNotCoverRequest(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  configPath,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/Users/pawel/mywiki",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "2",
+			ToolApproval:  "auto-approved-safe",
+		},
+	}
+
+	updated, cmd := m.startRun("create directory testmme in my home folder")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command when root does not cover request")
+	}
+	last := result.messages[len(result.messages)-1].Text
+	if !strings.Contains(last, "outside the active tool root") {
+		t.Fatalf("expected active root warning, got %q", last)
+	}
+}
+
 func TestModelCommandSelectsLoadedModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
