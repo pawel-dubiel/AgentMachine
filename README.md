@@ -466,9 +466,10 @@ go run .
 In the UI, set a provider, model, and optional tools before sending normal
 messages. The TUI always uses planner-managed `agentic` runs: the planner chooses
 a direct answer for simple requests or delegates worker agents when tools or
-separate execution are needed. Normal messages include a short recent
-user/assistant conversation context so follow-up wording like "inside this dir"
-can resolve from chat history.
+separate execution are needed. Direct planner decisions skip the finalizer and
+use the planner output as the final answer. Normal messages include a short
+recent user/assistant conversation context so follow-up wording like "inside this
+dir" can resolve from chat history.
 Each TUI run writes an Elixir JSONL log next to the config file under
 `logs/*.jsonl`; the run banner shows the exact log path. Open `/agents` or
 `/agent planner` to read the planner decision.

@@ -405,8 +405,9 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.final_output =~ "finalizer"
-    assert Map.keys(summary.results) |> Enum.sort() == ["finalizer", "planner"]
+    assert summary.final_output =~ "agent planner: summarize the project"
+    assert Map.keys(summary.results) == ["planner"]
+    assert summary.usage.agents == 1
 
     assert summary.results["planner"].decision == %{
              mode: "direct",

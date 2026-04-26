@@ -120,10 +120,21 @@ defmodule AgentMachine.ClientRunner do
   defp final_output(run) do
     case Map.fetch(run.results, "finalizer") do
       {:ok, %{status: :ok, output: output}} -> output
-      :error -> nil
-      _other -> nil
+      :error -> direct_planner_output(run.results)
+      _other -> direct_planner_output(run.results)
     end
   end
+
+  defp direct_planner_output(%{"planner" => %{status: :ok, decision: decision, output: output}})
+       when is_binary(output) do
+    if direct_decision?(decision), do: output
+  end
+
+  defp direct_planner_output(_results), do: nil
+
+  defp direct_decision?(%{mode: "direct"}), do: true
+  defp direct_decision?(%{"mode" => "direct"}), do: true
+  defp direct_decision?(_decision), do: false
 
   defp summarize_results(results) do
     Map.new(results, fn {agent_id, result} ->

@@ -473,7 +473,17 @@ defmodule AgentMachine.Orchestrator do
 
   defp should_start_finalizer?(%{finalizer: nil}), do: false
   defp should_start_finalizer?(%{finalizer_started: true}), do: false
-  defp should_start_finalizer?(_run), do: true
+  defp should_start_finalizer?(run), do: not direct_planner_result?(run)
+
+  defp direct_planner_result?(%{results: %{"planner" => %{status: :ok, decision: decision}}}) do
+    direct_decision?(decision)
+  end
+
+  defp direct_planner_result?(_run), do: false
+
+  defp direct_decision?(%{mode: "direct"}), do: true
+  defp direct_decision?(%{"mode" => "direct"}), do: true
+  defp direct_decision?(_decision), do: false
 
   defp finalizer_result?(%{finalizer: nil}, _result), do: false
   defp finalizer_result?(%{finalizer: finalizer}, result), do: result.agent_id == finalizer.id

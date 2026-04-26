@@ -237,6 +237,37 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.usage.agents == 4
   end
 
+  test "skips finalizer after a direct planner decision" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.StructuredDirectPlanner,
+        model: "test",
+        input: "answer directly",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_response: "delegation"}
+      }
+    ]
+
+    finalizer = %{
+      id: "finalizer",
+      provider: AgentMachine.TestProviders.Finalizing,
+      model: "test",
+      input: "combine outputs",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+
+    assert {:ok, run} =
+             Orchestrator.run(agents, timeout: 1_000, max_steps: 2, finalizer: finalizer)
+
+    assert run.status == :completed
+    assert run.agent_order == ["planner"]
+    refute Map.has_key?(run.results, "finalizer")
+    assert run.results["planner"].output == "Direct answer."
+    assert run.results["planner"].decision.mode == "direct"
+    assert run.usage.agents == 1
+  end
+
   test "fails fast when finalizer id duplicates an agent id" do
     agents = [
       %{
@@ -1148,6 +1179,44 @@ defmodule AgentMachine.TestProviders.StructuredDelegating do
 
   def complete(%Agent{} = agent, _opts) do
     output = "finished #{agent.id}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.StructuredDirectPlanner do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.{Agent, JSON}
+
+  @impl true
+  def complete(%Agent{} = agent, _opts) do
+    output =
+      JSON.encode!(%{
+        decision: %{
+          mode: "direct",
+          reason: "No worker is needed."
+        },
+        output: "Direct answer.",
+        next_agents: []
+      })
+
     {:ok, %{output: output, usage: usage(agent, output)}}
   end
 
