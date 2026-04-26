@@ -105,7 +105,9 @@ mix agent_machine.run \
   "Review this project and summarize the next step"
 ```
 
-Use JSONL output for streaming progress:
+Use JSONL output for streaming progress. Add `--stream-response` when the client
+should receive model text deltas as `assistant_delta` events before the final
+summary:
 
 ```sh
 mix agent_machine.run \
@@ -115,8 +117,13 @@ mix agent_machine.run \
   --max-steps 2 \
   --max-attempts 1 \
   --jsonl \
+  --stream-response \
   "Review this project and summarize the next step"
 ```
+
+JSONL event envelopes include deterministic runtime summaries and bounded
+structured details from Elixir. The TUI renders those summaries in its live
+activity feed; it does not ask the model to describe runtime actions.
 
 Write the run log to a file:
 
@@ -198,7 +205,20 @@ mix agent_machine.skills show docs-helper --skills-dir ~/.agent_machine/skills
 mix agent_machine.skills validate ~/.agent_machine/skills/docs-helper
 mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills
 mix agent_machine.skills remove docs-helper --skills-dir ~/.agent_machine/skills
+
+mix agent_machine.skills search docs --source clawhub --sort downloads --limit 20
+mix agent_machine.skills show clawhub:docs-helper
+mix agent_machine.skills install clawhub:docs-helper \
+  --skills-dir ~/.agent_machine/skills \
+  --version latest
+mix agent_machine.skills update --all --skills-dir ~/.agent_machine/skills
 ```
+
+ClawHub installs use the public `https://clawhub.ai/api/v1` HTTP API directly,
+download a resolved version zip, validate `SKILL.md`, and record registry,
+slug, version, bundle hash, and metadata provenance in the skills lockfile.
+Use `--clawhub-registry <url>` or `AGENT_MACHINE_CLAWHUB_REGISTRY` for local or
+self-hosted registries.
 
 Use skills in a run either by exact name or by deterministic auto-selection:
 
@@ -259,6 +279,9 @@ mix agent_machine.run \
 Skill scripts are not executable by default. `run_skill_script` appears only
 when `--allow-skill-scripts` is provided with `--tool-harness skills`, and it is
 still governed by normal tool approval policy.
+
+For the full command map and the planned ClawHub autodiscovery integration, see
+[docs/skills.md](docs/skills.md).
 
 ## Providers
 

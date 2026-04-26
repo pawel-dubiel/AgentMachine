@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added opt-in response streaming over JSONL with deterministic event summaries/details, provider request and assistant delta events, and a live scrollable TUI activity feed.
+- Added ClawHub skill autodiscovery, show, install, update, zip validation, lockfile provenance, and thin TUI `/skills search/show/install/update` pass-through commands.
+- Documented the skills command model, runtime flags, TUI commands, registry format, and ClawHub autodiscovery integration in `docs/skills.md`.
 - Added Codex-compatible skills with strict `SKILL.md` manifests, registry install/create/list/show/remove commands, run-time auto or explicit skill selection, summary/events visibility, fixed skill resource tools, and TUI `/skills` commands.
 - Skipped the finalizer for direct planner decisions so simple TUI requests complete after the planner answer.
 - Changed the TUI to use planner-managed `agentic` runs, expose planner direct/delegate decisions, and ignore legacy saved workflow values.
