@@ -281,7 +281,8 @@ mix agent_machine.run \
 The `code-edit` harness is a separate opt-in harness for code changes under an
 explicit existing root. It can inspect, list, read, and search files, then apply
 structured edits or unified diff patches. Patch application is implemented in
-Elixir and does not shell out.
+Elixir and does not shell out. Every successful code-edit mutation creates a
+root-local checkpoint before writing.
 
 ```sh
 mix agent_machine.run \
@@ -312,8 +313,23 @@ Local file tool rules:
 - Append and replace require existing regular files.
 - Symlink write targets are rejected.
 - Code edit tools validate all requested changes before writing.
+- Code edit checkpoints are stored under
+  `<tool-root>/.agent_machine/checkpoints/<checkpoint-id>/`.
+- Code edit operations cannot modify `.agent_machine/checkpoints/**`.
+- Rollback fails without writing if any affected file changed after the
+  checkpoint.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` are required when a harness is enabled.
 - Approval modes are `read-only`, `ask-before-write`, `auto-approved-safe`, and `full-access`.
+
+Rollback a checkpoint directly from the CLI without running a provider:
+
+```sh
+mix agent_machine.rollback \
+  --tool-root /Users/pawel/project \
+  --checkpoint-id 20260426T120000Z-1
+```
+
+Use `--json` for script-friendly rollback output.
 
 ## Terminal UI
 

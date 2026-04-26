@@ -25,10 +25,19 @@ defmodule AgentMachine.ToolPolicyTest do
     end
   end
 
+  test "rejects rollback without rollback permission" do
+    policy = ToolPolicy.new!(permissions: [:code_edit_apply_edits])
+
+    assert_raise ArgumentError, ~r/requires permission :code_edit_rollback_checkpoint/, fn ->
+      ToolPolicy.permit!(policy, AgentMachine.Tools.RollbackCheckpoint)
+    end
+  end
+
   test "reads tool approval risks" do
     assert ToolPolicy.approval_risk!(AgentMachine.Tools.Now) == :read
     assert ToolPolicy.approval_risk!(AgentMachine.Tools.ReadFile) == :read
     assert ToolPolicy.approval_risk!(AgentMachine.Tools.WriteFile) == :write
     assert ToolPolicy.approval_risk!(AgentMachine.Tools.ApplyPatch) == :write
+    assert ToolPolicy.approval_risk!(AgentMachine.Tools.RollbackCheckpoint) == :write
   end
 end

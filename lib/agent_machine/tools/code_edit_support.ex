@@ -79,14 +79,29 @@ defmodule AgentMachine.Tools.CodeEditSupport do
 
   def resolve_new_or_existing_file!(root, path, label) do
     target = PathGuard.writable_target!(root, path)
+    reject_checkpoint_path!(root, target, label)
     reject_directory!(target, label)
     target
   end
 
   def resolve_existing_file!(root, path, label) do
     target = PathGuard.existing_writable_target!(root, path, label)
+    reject_checkpoint_path!(root, target, label)
     require_regular_file!(target, label)
     target
+  end
+
+  def reject_checkpoint_path!(root, target, label) do
+    relative = Path.relative_to(target, root)
+
+    case Path.split(relative) do
+      [".agent_machine", "checkpoints" | _rest] ->
+        raise ArgumentError,
+              "#{label} must not target AgentMachine checkpoint storage: #{inspect(target)}"
+
+      _other ->
+        :ok
+    end
   end
 
   def read_text_file!(path, label) do

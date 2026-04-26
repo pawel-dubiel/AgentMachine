@@ -3,8 +3,9 @@ defmodule AgentMachine.ClientRunnerTest do
   import ExUnit.CaptureIO
 
   alias AgentMachine.{AgentResult, ClientRunner, JSON, RunSpec, UsageLedger}
+  alias AgentMachine.Tools.ApplyEdits
   alias AgentMachine.Workflows.{Agentic, Basic}
-  alias Mix.Tasks.AgentMachine.Run
+  alias Mix.Tasks.AgentMachine.{Rollback, Run}
 
   setup do
     UsageLedger.reset!()
@@ -230,6 +231,7 @@ defmodule AgentMachine.ClientRunnerTest do
              AgentMachine.Tools.ApplyPatch,
              AgentMachine.Tools.FileInfo,
              AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.RollbackCheckpoint,
              AgentMachine.Tools.ReadFile,
              AgentMachine.Tools.SearchFiles
            ]
@@ -242,6 +244,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert MapSet.member?(permissions, :code_edit_apply_edits)
     assert MapSet.member?(permissions, :code_edit_apply_patch)
+    assert MapSet.member?(permissions, :code_edit_rollback_checkpoint)
   end
 
   test "requires tool root for code edit harness" do
@@ -597,5 +600,69 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert %{"type" => "event", "event" => %{"type" => "run_started"}} = hd(decoded)
     assert %{"type" => "summary", "summary" => %{"status" => "completed"}} = List.last(decoded)
+  end
+
+  test "mix agent_machine.rollback restores files and prints JSON" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+    root = Path.join(System.tmp_dir!(), "agent-machine-rollback-cli-#{System.unique_integer()}")
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "source.txt"), "old")
+
+    {:ok, edit} =
+      ApplyEdits.run(
+        %{
+          "changes" => [
+            %{
+              "op" => "replace",
+              "path" => "source.txt",
+              "old_text" => "old",
+              "new_text" => "new",
+              "expected_replacements" => 1
+            }
+          ]
+        },
+        tool_root: root
+      )
+
+    Mix.Task.reenable("agent_machine.rollback")
+
+    Rollback.run([
+      "--tool-root",
+      root,
+      "--checkpoint-id",
+      edit.checkpoint_id,
+      "--json"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+    assert %{"rolled_back_checkpoint_id" => rolled_back} = JSON.decode!(json)
+    assert rolled_back == edit.checkpoint_id
+    assert File.read!(Path.join(root, "source.txt")) == "old"
+  end
+
+  test "mix agent_machine.rollback fails fast on missing options" do
+    Mix.Task.reenable("agent_machine.rollback")
+
+    assert_raise Mix.Error, ~r/missing required --tool-root option/, fn ->
+      Rollback.run(["--checkpoint-id", "20260426T000000Z-1"])
+    end
+
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-rollback-missing-#{System.unique_integer()}")
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+    Mix.Task.reenable("agent_machine.rollback")
+
+    assert_raise Mix.Error, ~r/missing required --checkpoint-id option/, fn ->
+      Rollback.run(["--tool-root", root])
+    end
   end
 end

@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.ApplyPatch do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.{CodeEditSupport, PathGuard}
+  alias AgentMachine.Tools.{CodeEditCheckpoint, CodeEditSupport, PathGuard}
 
   @impl true
   def permission, do: :code_edit_apply_patch
@@ -45,13 +45,14 @@ defmodule AgentMachine.Tools.ApplyPatch do
     files = parse_patch!(patch)
     plan = files |> Enum.map(&stage_file!(root, &1)) |> Map.new()
 
-    CodeEditSupport.write_plan!(plan)
+    checkpoint = CodeEditCheckpoint.apply_plan!(root, "apply_patch", plan)
 
     {:ok,
-     %{
+     Map.merge(checkpoint, %{
        changed: Enum.map(files, &%{path: &1.path, action: Atom.to_string(&1.action)}),
+       changed_paths: checkpoint.changed,
        count: length(files)
-     }}
+     })}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end

@@ -4,6 +4,7 @@
 /doc/
 /tui/agent-machine-tui
 /.elixir_ls/
+/.agent_machine/
 .fetch
 *.app
 *.ez

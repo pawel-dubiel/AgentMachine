@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.ApplyEdits do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.{CodeEditSupport, PathGuard}
+  alias AgentMachine.Tools.{CodeEditCheckpoint, CodeEditSupport, PathGuard}
 
   @impl true
   def permission, do: :code_edit_apply_edits
@@ -73,8 +73,13 @@ defmodule AgentMachine.Tools.ApplyEdits do
     changes = input |> fetch!("changes") |> CodeEditSupport.require_changes!()
     {plan, touched} = Enum.reduce(changes, {%{}, []}, &stage_change(root, &1, &2))
 
-    CodeEditSupport.write_plan!(plan)
-    {:ok, %{changed: Enum.reverse(touched), count: length(touched)}}
+    checkpoint = CodeEditCheckpoint.apply_plan!(root, "apply_edits", plan)
+
+    {:ok,
+     checkpoint
+     |> Map.put(:changed_paths, checkpoint.changed)
+     |> Map.put(:requested_changes, Enum.reverse(touched))
+     |> Map.put(:count, length(touched))}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
   end

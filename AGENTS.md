@@ -156,6 +156,12 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   --tool-timeout-ms <ms> --tool-max-rounds <n> --tool-approval-mode <mode>`
   exposes constrained code edit tools for structured edits and unified patches.
   Patch application must stay in Elixir and must not shell out.
+- Code-edit checkpoint and rollback logic belongs in Elixir tools/helpers.
+  The TUI may display checkpoint IDs or call CLI commands, but it must not
+  create, inspect, apply, or roll back checkpoints itself.
+- `mix agent_machine.rollback --tool-root <path> --checkpoint-id <id>` restores
+  a code-edit checkpoint through the same Elixir rollback helper used by the
+  `rollback_checkpoint` tool.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
   plus the final summary to an explicit file path.

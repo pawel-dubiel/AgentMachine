@@ -12,6 +12,7 @@ defmodule AgentMachine.ToolHarness do
       AgentMachine.Tools.ApplyPatch,
       AgentMachine.Tools.FileInfo,
       AgentMachine.Tools.ListFiles,
+      AgentMachine.Tools.RollbackCheckpoint,
       AgentMachine.Tools.ReadFile,
       AgentMachine.Tools.SearchFiles
     ],
@@ -32,6 +33,7 @@ defmodule AgentMachine.ToolHarness do
     code_edit: [
       :code_edit_apply_edits,
       :code_edit_apply_patch,
+      :code_edit_rollback_checkpoint,
       :local_files_info,
       :local_files_list,
       :local_files_read,
