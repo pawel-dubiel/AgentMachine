@@ -62,6 +62,9 @@ func (m model) statusLine() string {
 	if m.running {
 		parts = append(parts, "run=running")
 	}
+	if m.skillsEnabled() {
+		parts = append(parts, "skills="+m.skillsModeLabel())
+	}
 	if m.modelStatus != "" {
 		parts = append(parts, "models="+m.modelStatus)
 	}
@@ -105,6 +108,7 @@ func (m model) setupView() string {
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
 		m.toolsStatus(),
+		m.skillsStatus(),
 		"config: " + m.configPath,
 		"run timeout ms: " + defaultRunTimeoutMS,
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
@@ -115,6 +119,13 @@ func (m model) setupView() string {
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools off",
+		"/skills auto <skills-dir>",
+		"/skills dir <skills-dir>",
+		"/skills add <name>",
+		"/skills list",
+		"/skills show <name>",
+		"/skills install <name>",
+		"/skills off",
 		"/test-command add <command>",
 		"/test-command list",
 		"/test-command clear",
@@ -213,6 +224,9 @@ func (m model) agentsView() string {
 	}
 
 	lines := []string{labelStyle.Render("Agents")}
+	if len(m.lastSummary.Skills) > 0 {
+		lines = append(lines, "Skills: "+skillSummaryLine(m.lastSummary.Skills), "")
+	}
 	visible := m.visibleAgentIDs()
 	for index, id := range visible {
 		agent := m.agents[id]
@@ -224,6 +238,19 @@ func (m model) agentsView() string {
 	}
 	lines = append(lines, "", "Enter opens selected agent. Use /agent <id>, Tab, Esc, or /back.")
 	return strings.Join(lines, "\n")
+}
+
+func skillSummaryLine(skills []skillSummary) string {
+	names := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		if strings.TrimSpace(skill.Name) != "" {
+			names = append(names, skill.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "(none)"
+	}
+	return strings.Join(names, ", ")
 }
 
 func (m model) agentDetailView() string {
@@ -346,6 +373,9 @@ func helpText() string {
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools off",
+		"/skills auto <skills-dir>",
+		"/skills add <name>",
+		"/skills list|show <name>|install <name>|off",
 		"/test-command add <command>",
 		"/test-command list",
 		"/test-command clear",

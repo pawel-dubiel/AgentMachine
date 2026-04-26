@@ -58,6 +58,23 @@ func readStreamCommand(session *streamSession) tea.Cmd {
 	}
 }
 
+func runSkillsCLICommand(args []string) tea.Cmd {
+	return func() tea.Msg {
+		cmdArgs := append([]string{"agent_machine.skills"}, args...)
+		cmd := exec.Command("mix", cmdArgs...)
+		cmd.Dir = projectRoot()
+		output, err := cmd.CombinedOutput()
+		raw := strings.TrimSpace(string(output))
+		if err != nil {
+			if raw != "" {
+				return skillsCommandMsg{Output: raw, Err: fmt.Errorf("mix command failed: %w\n%s", err, raw)}
+			}
+			return skillsCommandMsg{Err: fmt.Errorf("mix command failed: %w", err)}
+		}
+		return skillsCommandMsg{Output: raw}
+	}
+}
+
 func startAgentMachineStream(config runConfig) (*streamSession, error) {
 	if err := prepareRunLog(config); err != nil {
 		return nil, err
@@ -164,6 +181,19 @@ func buildRunArgs(config runConfig) []string {
 		for _, command := range config.TestCommands {
 			args = append(args, "--test-command", command)
 		}
+	}
+
+	if config.SkillsMode == "auto" {
+		args = append(args, "--skills", "auto", "--skills-dir", config.SkillsDir)
+	}
+	if len(config.SkillNames) > 0 {
+		args = append(args, "--skills-dir", config.SkillsDir)
+		for _, name := range config.SkillNames {
+			args = append(args, "--skill", name)
+		}
+	}
+	if config.AllowSkillScripts {
+		args = append(args, "--allow-skill-scripts")
 	}
 
 	if config.LogFile != "" {

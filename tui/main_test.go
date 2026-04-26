@@ -186,6 +186,30 @@ func TestBuildRunArgsIncludesRepeatedTestCommands(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesAutoSkills(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:       "write docs",
+		Workflow:   workflowAgentic,
+		Provider:   providerEcho,
+		SkillsMode: "auto",
+		SkillsDir:  "/tmp/agent-machine-skills",
+	})
+
+	assertContainsSequence(t, args, []string{"--skills", "auto", "--skills-dir", "/tmp/agent-machine-skills"})
+}
+
+func TestBuildRunArgsIncludesExplicitSkills(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:       "write docs",
+		Workflow:   workflowAgentic,
+		Provider:   providerEcho,
+		SkillsDir:  "/tmp/agent-machine-skills",
+		SkillNames: []string{"docs-helper", "review-helper"},
+	})
+
+	assertContainsSequence(t, args, []string{"--skills-dir", "/tmp/agent-machine-skills", "--skill", "docs-helper", "--skill", "review-helper"})
+}
+
 func TestBuildRunArgsIncludesMCPConfigAsRepeatedHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "search docs",
@@ -389,6 +413,34 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRequiresSkillsDirForAutoSkills(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:       "write docs",
+		Workflow:   workflowAgentic,
+		Provider:   providerEcho,
+		SkillsMode: "auto",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "skills dir") {
+		t.Fatalf("expected skills dir error, got %v", err)
+	}
+}
+
+func TestValidateConfigRejectsAutoSkillsWithExplicitNames(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:       "write docs",
+		Workflow:   workflowAgentic,
+		Provider:   providerEcho,
+		SkillsMode: "auto",
+		SkillsDir:  "/tmp/skills",
+		SkillNames: []string{"docs-helper"},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("expected skills mode error, got %v", err)
+	}
+}
+
 func TestValidateConfigRequiresToolApprovalMode(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "edit code",
@@ -440,6 +492,23 @@ func TestAgentDetailRendersPlannerDecision(t *testing.T) {
 	view := m.agentDetailView()
 	if !strings.Contains(view, "mode: delegate") || !strings.Contains(view, "delegated: worker") {
 		t.Fatalf("expected planner decision in detail view, got %q", view)
+	}
+}
+
+func TestAgentsViewRendersSelectedSkills(t *testing.T) {
+	m := model{
+		lastSummary: summary{
+			Skills: []skillSummary{{Name: "docs-helper"}},
+		},
+		agents: map[string]agentState{
+			"planner": {ID: "planner", Status: "ok"},
+		},
+		agentOrder: []string{"planner"},
+	}
+
+	view := m.agentsView()
+	if !strings.Contains(view, "Skills: docs-helper") {
+		t.Fatalf("expected selected skills in agents view, got %q", view)
 	}
 }
 
@@ -872,6 +941,53 @@ func TestMCPConfigCommandPersistsAndClearsPath(t *testing.T) {
 	}
 }
 
+func TestSkillsCommandPersistsAutoMode(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/skills auto /tmp/agent-machine-skills")
+	result := updated.(model)
+
+	if result.savedConfig.SkillsMode != "auto" || result.savedConfig.SkillsDir != "/tmp/agent-machine-skills" {
+		t.Fatalf("unexpected skills config: %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SkillsMode != "auto" || loaded.SkillsDir != "/tmp/agent-machine-skills" {
+		t.Fatalf("expected persisted skills config, got %#v", loaded)
+	}
+}
+
+func TestSkillsCommandPersistsExplicitSkill(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/skills dir /tmp/agent-machine-skills")
+	result := updated.(model)
+	updated, _ = result.handleCommand("/skills add docs-helper")
+	result = updated.(model)
+
+	if len(result.savedConfig.SkillNames) != 1 || result.savedConfig.SkillNames[0] != "docs-helper" {
+		t.Fatalf("expected selected skill, got %#v", result.savedConfig.SkillNames)
+	}
+	if result.savedConfig.SkillsMode != "" {
+		t.Fatalf("expected explicit skills to clear auto mode, got %#v", result.savedConfig)
+	}
+}
+
 func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
 	err := validateToolConfig(runConfig{MCPConfig: "/tmp/agent-machine.mcp.json"})
 	if err == nil {
@@ -1184,6 +1300,19 @@ func TestSummaryDisplayTextIncludesPlannerDecision(t *testing.T) {
 
 	if !strings.Contains(text, "planner decision: delegate - Filesystem edits require tools.") {
 		t.Fatalf("expected planner decision, got %q", text)
+	}
+}
+
+func TestRunningStatusIncludesSkillsState(t *testing.T) {
+	status := runningStatus(runConfig{
+		Provider:   providerEcho,
+		Model:      "echo",
+		SkillsMode: "auto",
+		SkillsDir:  "/tmp/skills",
+	})
+
+	if !strings.Contains(status, "skills auto dir=/tmp/skills") {
+		t.Fatalf("expected skills status, got %q", status)
 	}
 }
 

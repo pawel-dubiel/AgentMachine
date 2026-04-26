@@ -21,8 +21,15 @@ type summary struct {
 	Error       string                      `json:"error"`
 	FinalOutput string                      `json:"final_output"`
 	Results     map[string]runResultSummary `json:"results"`
+	Skills      []skillSummary              `json:"skills"`
 	Usage       usageSummary                `json:"usage"`
 	Events      []eventSummary              `json:"events"`
+}
+
+type skillSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Reason      string `json:"reason"`
 }
 
 type runResultSummary struct {
@@ -83,6 +90,11 @@ type streamDoneMsg struct {
 	Err     error
 }
 
+type skillsCommandMsg struct {
+	Output string
+	Err    error
+}
+
 type jsonlEnvelope struct {
 	Type    string          `json:"type"`
 	Event   eventSummary    `json:"event"`
@@ -129,39 +141,47 @@ const (
 )
 
 type runConfig struct {
-	Task          string
-	Workflow      runWorkflow
-	Provider      provider
-	APIKey        string
-	Model         string
-	InputPrice    string
-	OutputPrice   string
-	HTTPTimeout   string
-	RunTimeout    string
-	ToolHarness   string
-	ToolRoot      string
-	ToolTimeout   string
-	ToolMaxRounds string
-	ToolApproval  string
-	TestCommands  []string
-	MCPConfig     string
-	LogFile       string
+	Task              string
+	Workflow          runWorkflow
+	Provider          provider
+	APIKey            string
+	Model             string
+	InputPrice        string
+	OutputPrice       string
+	HTTPTimeout       string
+	RunTimeout        string
+	ToolHarness       string
+	ToolRoot          string
+	ToolTimeout       string
+	ToolMaxRounds     string
+	ToolApproval      string
+	TestCommands      []string
+	MCPConfig         string
+	SkillsMode        string
+	SkillsDir         string
+	SkillNames        []string
+	AllowSkillScripts bool
+	LogFile           string
 }
 
 type savedConfig struct {
-	OpenAIAPIKey     string   `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey string   `json:"openrouter_api_key,omitempty"`
-	Workflow         string   `json:"workflow,omitempty"`
-	Provider         string   `json:"provider,omitempty"`
-	OpenAIModel      string   `json:"openai_model,omitempty"`
-	OpenRouterModel  string   `json:"openrouter_model,omitempty"`
-	ToolHarness      string   `json:"tool_harness,omitempty"`
-	ToolRoot         string   `json:"tool_root,omitempty"`
-	ToolTimeout      string   `json:"tool_timeout_ms,omitempty"`
-	ToolMaxRounds    string   `json:"tool_max_rounds,omitempty"`
-	ToolApproval     string   `json:"tool_approval_mode,omitempty"`
-	TestCommands     []string `json:"test_commands,omitempty"`
-	MCPConfig        string   `json:"mcp_config,omitempty"`
+	OpenAIAPIKey      string   `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey  string   `json:"openrouter_api_key,omitempty"`
+	Workflow          string   `json:"workflow,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	OpenAIModel       string   `json:"openai_model,omitempty"`
+	OpenRouterModel   string   `json:"openrouter_model,omitempty"`
+	ToolHarness       string   `json:"tool_harness,omitempty"`
+	ToolRoot          string   `json:"tool_root,omitempty"`
+	ToolTimeout       string   `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds     string   `json:"tool_max_rounds,omitempty"`
+	ToolApproval      string   `json:"tool_approval_mode,omitempty"`
+	TestCommands      []string `json:"test_commands,omitempty"`
+	MCPConfig         string   `json:"mcp_config,omitempty"`
+	SkillsMode        string   `json:"skills_mode,omitempty"`
+	SkillsDir         string   `json:"skills_dir,omitempty"`
+	SkillNames        []string `json:"skill_names,omitempty"`
+	AllowSkillScripts bool     `json:"allow_skill_scripts,omitempty"`
 }
 
 type chatMessage struct {
@@ -382,6 +402,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
+		}
+		return m, nil
+
+	case skillsCommandMsg:
+		if msg.Err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "skills command failed:\n" + msg.Err.Error()})
+		} else {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: strings.TrimSpace(msg.Output)})
 		}
 		return m, nil
 
@@ -618,6 +646,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleKeyCommand(args)
 	case "tools":
 		return m.handleToolsCommand(args)
+	case "skills":
+		return m.handleSkillsCommand(args)
 	case "test-command":
 		return m.handleTestCommand(args)
 	case "mcp-config":
@@ -919,6 +949,140 @@ func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.skillsStatus()})
+		return m, nil
+	}
+
+	previousConfig := m.savedConfig
+
+	switch args[0] {
+	case "off":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off"})
+			return m, nil
+		}
+		m.savedConfig.SkillsMode = ""
+		m.savedConfig.SkillsDir = ""
+		m.savedConfig.SkillNames = nil
+		m.savedConfig.AllowSkillScripts = false
+	case "auto":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills auto <skills-dir>"})
+			return m, nil
+		}
+		if strings.TrimSpace(args[1]) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "skills dir must not be empty"})
+			return m, nil
+		}
+		m.savedConfig.SkillsMode = "auto"
+		m.savedConfig.SkillsDir = args[1]
+		m.savedConfig.SkillNames = nil
+	case "dir":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills dir <skills-dir>"})
+			return m, nil
+		}
+		m.savedConfig.SkillsDir = args[1]
+	case "add":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills add <name>"})
+			return m, nil
+		}
+		if strings.TrimSpace(m.savedConfig.SkillsDir) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "set /skills dir <skills-dir> before adding explicit skills"})
+			return m, nil
+		}
+		if !validSkillName(args[1]) {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "invalid skill name: " + args[1]})
+			return m, nil
+		}
+		for _, existing := range m.savedConfig.SkillNames {
+			if existing == args[1] {
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "skill already selected: " + args[1]})
+				return m, nil
+			}
+		}
+		m.savedConfig.SkillsMode = ""
+		m.savedConfig.SkillNames = append(m.savedConfig.SkillNames, args[1])
+	case "remove":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills remove <name>"})
+			return m, nil
+		}
+		m.savedConfig.SkillNames = removeString(m.savedConfig.SkillNames, args[1])
+	case "clear":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills clear"})
+			return m, nil
+		}
+		m.savedConfig.SkillNames = nil
+	case "scripts":
+		if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills scripts on|off"})
+			return m, nil
+		}
+		m.savedConfig.AllowSkillScripts = args[1] == "on"
+	case "list":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills list"})
+			return m, nil
+		}
+		return m, m.skillsCLICommand("list")
+	case "show":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills show <name>"})
+			return m, nil
+		}
+		return m, m.skillsCLICommand("show", args[1])
+	case "install":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills install <name>"})
+			return m, nil
+		}
+		return m, m.skillsCLICommand("install", args[1])
+	case "create":
+		if len(args) < 3 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills create <name> <description>"})
+			return m, nil
+		}
+		return m, m.skillsCLICommand("create", args[1], "--description", strings.Join(args[2:], " "))
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off|auto|dir|add|remove|clear|scripts|list|show|install|create"})
+		return m, nil
+	}
+
+	if err := validateSkillsConfig(runConfig{
+		SkillsMode:        m.savedConfig.SkillsMode,
+		SkillsDir:         m.savedConfig.SkillsDir,
+		SkillNames:        m.savedConfig.SkillNames,
+		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
+	}); err != nil {
+		m.savedConfig = previousConfig
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.skillsStatus()})
+	return m, nil
+}
+
+func (m model) skillsCLICommand(args ...string) tea.Cmd {
+	if strings.TrimSpace(m.savedConfig.SkillsDir) == "" {
+		return func() tea.Msg {
+			return skillsCommandMsg{Err: errors.New("set /skills dir <skills-dir> before running skills commands")}
+		}
+	}
+	cliArgs := append([]string{}, args...)
+	cliArgs = append(cliArgs, "--skills-dir", m.savedConfig.SkillsDir, "--json")
+	return runSkillsCLICommand(cliArgs)
+}
+
 func (m model) handleModelsCommand(args []string) (tea.Model, tea.Cmd) {
 	if !m.providerSet {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before loading models"})
@@ -1123,18 +1287,22 @@ func (m *model) applySummaryResults(summary summary) {
 
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
-		Task:          task,
-		Workflow:      workflowAgentic,
-		Provider:      m.provider,
-		APIKey:        m.apiKey(),
-		Model:         m.modelID(),
-		ToolHarness:   m.savedConfig.ToolHarness,
-		ToolRoot:      m.savedConfig.ToolRoot,
-		ToolTimeout:   m.savedConfig.ToolTimeout,
-		ToolMaxRounds: m.savedConfig.ToolMaxRounds,
-		ToolApproval:  m.savedConfig.ToolApproval,
-		TestCommands:  append([]string(nil), m.savedConfig.TestCommands...),
-		MCPConfig:     m.savedConfig.MCPConfig,
+		Task:              task,
+		Workflow:          workflowAgentic,
+		Provider:          m.provider,
+		APIKey:            m.apiKey(),
+		Model:             m.modelID(),
+		ToolHarness:       m.savedConfig.ToolHarness,
+		ToolRoot:          m.savedConfig.ToolRoot,
+		ToolTimeout:       m.savedConfig.ToolTimeout,
+		ToolMaxRounds:     m.savedConfig.ToolMaxRounds,
+		ToolApproval:      m.savedConfig.ToolApproval,
+		TestCommands:      append([]string(nil), m.savedConfig.TestCommands...),
+		MCPConfig:         m.savedConfig.MCPConfig,
+		SkillsMode:        m.savedConfig.SkillsMode,
+		SkillsDir:         m.savedConfig.SkillsDir,
+		SkillNames:        append([]string(nil), m.savedConfig.SkillNames...),
+		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -1264,6 +1432,9 @@ func validateConfig(config runConfig) error {
 	if err := validateToolConfig(config); err != nil {
 		return err
 	}
+	if err := validateSkillsConfig(config); err != nil {
+		return err
+	}
 
 	switch config.Provider {
 	case providerEcho:
@@ -1297,6 +1468,66 @@ func validateConfig(config runConfig) error {
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+func validateSkillsConfig(config runConfig) error {
+	mode := strings.TrimSpace(config.SkillsMode)
+	if mode == "" {
+		mode = "off"
+	}
+	switch mode {
+	case "off":
+		if len(config.SkillNames) > 0 {
+			if strings.TrimSpace(config.SkillsDir) == "" {
+				return errors.New("skills dir must not be empty when explicit skills are selected")
+			}
+			return validateSkillNames(config.SkillNames)
+		}
+		if config.AllowSkillScripts {
+			return errors.New("skill scripts require enabled skills")
+		}
+		return nil
+	case "auto":
+		if strings.TrimSpace(config.SkillsDir) == "" {
+			return errors.New("skills dir must not be empty for auto skills")
+		}
+		if len(config.SkillNames) > 0 {
+			return errors.New("skills auto cannot be combined with explicit skill names")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported skills mode: %s", config.SkillsMode)
+	}
+}
+
+func validateSkillNames(names []string) error {
+	seen := map[string]bool{}
+	for _, name := range names {
+		if !validSkillName(name) {
+			return fmt.Errorf("invalid skill name: %s", name)
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate skill name: %s", name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func validSkillName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+		if !ok {
+			return false
+		}
+		if i == 0 && !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateToolConfig(config runConfig) error {
@@ -1629,7 +1860,7 @@ func (m model) toolsStatus() string {
 }
 
 func runningStatus(config runConfig) string {
-	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func runToolsStatus(config runConfig) string {
@@ -1647,6 +1878,45 @@ func runToolsStatus(config runConfig) string {
 		return status
 	default:
 		return "tools unsupported " + config.ToolHarness
+	}
+}
+
+func (m model) skillsEnabled() bool {
+	return strings.TrimSpace(m.savedConfig.SkillsMode) == "auto" || len(m.savedConfig.SkillNames) > 0
+}
+
+func (m model) skillsModeLabel() string {
+	if strings.TrimSpace(m.savedConfig.SkillsMode) == "auto" {
+		return "auto"
+	}
+	if len(m.savedConfig.SkillNames) > 0 {
+		return fmt.Sprintf("%d explicit", len(m.savedConfig.SkillNames))
+	}
+	return "off"
+}
+
+func (m model) skillsStatus() string {
+	status := "skills: " + m.skillsModeLabel()
+	if strings.TrimSpace(m.savedConfig.SkillsDir) != "" {
+		status += " dir=" + m.savedConfig.SkillsDir
+	}
+	if len(m.savedConfig.SkillNames) > 0 {
+		status += " selected=" + strings.Join(m.savedConfig.SkillNames, ",")
+	}
+	if m.savedConfig.AllowSkillScripts {
+		status += " scripts=on"
+	}
+	return status
+}
+
+func runSkillsStatus(config runConfig) string {
+	switch {
+	case config.SkillsMode == "auto":
+		return "skills auto dir=" + emptyAsNone(config.SkillsDir)
+	case len(config.SkillNames) > 0:
+		return "skills selected=" + strings.Join(config.SkillNames, ",") + " dir=" + emptyAsNone(config.SkillsDir)
+	default:
+		return "skills off"
 	}
 }
 
@@ -1690,6 +1960,15 @@ func (m *model) applySavedSettings() error {
 		}
 	}
 
+	if err := validateSkillsConfig(runConfig{
+		SkillsMode:        m.savedConfig.SkillsMode,
+		SkillsDir:         m.savedConfig.SkillsDir,
+		SkillNames:        m.savedConfig.SkillNames,
+		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
+	}); err != nil {
+		return fmt.Errorf("invalid saved skills in TUI config: %w", err)
+	}
+
 	if m.providerSet {
 		m.view = viewChat
 		m.messages = []chatMessage{
@@ -1698,6 +1977,16 @@ func (m *model) applySavedSettings() error {
 	}
 
 	return nil
+}
+
+func removeString(values []string, value string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, current := range values {
+		if current != value {
+			filtered = append(filtered, current)
+		}
+	}
+	return filtered
 }
 
 func (config savedConfig) apiKeyFor(provider provider) string {
