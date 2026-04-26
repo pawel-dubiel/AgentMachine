@@ -6,7 +6,7 @@ defmodule AgentMachine.ToolPolicy do
   @enforce_keys [:permissions]
   defstruct [:harness, :permissions]
 
-  @type t :: %__MODULE__{harness: atom() | nil, permissions: MapSet.t(atom())}
+  @type t :: %__MODULE__{harness: atom() | [atom()] | nil, permissions: MapSet.t(atom())}
 
   def new!(attrs) when is_map(attrs) do
     permissions =

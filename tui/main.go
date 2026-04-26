@@ -135,6 +135,7 @@ type runConfig struct {
 	ToolMaxRounds string
 	ToolApproval  string
 	TestCommands  []string
+	MCPConfig     string
 	LogFile       string
 }
 
@@ -151,6 +152,7 @@ type savedConfig struct {
 	ToolMaxRounds    string   `json:"tool_max_rounds,omitempty"`
 	ToolApproval     string   `json:"tool_approval_mode,omitempty"`
 	TestCommands     []string `json:"test_commands,omitempty"`
+	MCPConfig        string   `json:"mcp_config,omitempty"`
 }
 
 type chatMessage struct {
@@ -604,6 +606,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleToolsCommand(args)
 	case "test-command":
 		return m.handleTestCommand(args)
+	case "mcp-config":
+		return m.handleMCPConfigCommand(args)
 	case "allow-tools":
 		return m.handleAllowToolsCommand(args, "auto-approved-safe")
 	case "yolo-tools":
@@ -807,6 +811,7 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolMaxRounds = ""
 		m.savedConfig.ToolApproval = ""
 		m.savedConfig.TestCommands = nil
+		m.savedConfig.MCPConfig = ""
 	case "local-files", "code-edit":
 		if len(args) != 5 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools " + args[0] + " <root> <timeout-ms> <max-rounds> <approval-mode>"})
@@ -890,6 +895,31 @@ func (m model) handleTestCommand(args []string) (tea.Model, tea.Cmd) {
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /test-command add <command>|list|clear"})
 		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.toolsStatus()})
+	return m, nil
+}
+
+func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config <path>|off"})
+		return m, nil
+	}
+
+	if args[0] == "off" {
+		m.savedConfig.MCPConfig = ""
+	} else {
+		path := strings.TrimSpace(args[0])
+		if path == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP config path must not be empty"})
+			return m, nil
+		}
+		m.savedConfig.MCPConfig = path
 	}
 
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
@@ -1114,6 +1144,7 @@ func (m model) runConfig(task string) runConfig {
 		ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 		ToolApproval:  m.savedConfig.ToolApproval,
 		TestCommands:  append([]string(nil), m.savedConfig.TestCommands...),
+		MCPConfig:     m.savedConfig.MCPConfig,
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -1281,11 +1312,29 @@ func validateConfig(config runConfig) error {
 func validateToolConfig(config runConfig) error {
 	switch config.ToolHarness {
 	case "":
-		if config.ToolRoot != "" || config.ToolTimeout != "" || config.ToolMaxRounds != "" || config.ToolApproval != "" || len(config.TestCommands) != 0 {
-			return errors.New("tool root, timeout, max rounds, approval mode, and test commands require a selected tool harness")
+		if config.ToolRoot != "" || len(config.TestCommands) != 0 {
+			return errors.New("tool root and test commands require a selected filesystem tool harness")
+		}
+		if strings.TrimSpace(config.MCPConfig) == "" {
+			if config.ToolTimeout != "" || config.ToolMaxRounds != "" || config.ToolApproval != "" {
+				return errors.New("tool timeout, max rounds, and approval mode require a selected tool harness or MCP config")
+			}
+			return nil
+		}
+		if err := validatePositiveInt(config.ToolTimeout, "tool timeout ms"); err != nil {
+			return err
+		}
+		if err := validatePositiveInt(config.ToolMaxRounds, "tool max rounds"); err != nil {
+			return err
+		}
+		if err := validateToolApprovalMode(config.ToolApproval); err != nil {
+			return err
 		}
 		return nil
 	case "local-files", "code-edit":
+		if strings.TrimSpace(config.MCPConfig) == "" && config.MCPConfig != "" {
+			return errors.New("MCP config path must not be empty")
+		}
 		if strings.TrimSpace(config.ToolRoot) == "" {
 			return errors.New("tool root must not be empty for " + config.ToolHarness)
 		}
@@ -1574,9 +1623,16 @@ func keyStatus(apiKey string) string {
 func (m model) toolsStatus() string {
 	switch m.savedConfig.ToolHarness {
 	case "":
+		if strings.TrimSpace(m.savedConfig.MCPConfig) != "" {
+			return "tools: mcp config=" + m.savedConfig.MCPConfig
+		}
 		return "tools: off"
 	case "local-files", "code-edit":
-		return "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval) + " test_commands=" + fmt.Sprintf("%d", len(m.savedConfig.TestCommands))
+		status := "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval) + " test_commands=" + fmt.Sprintf("%d", len(m.savedConfig.TestCommands))
+		if strings.TrimSpace(m.savedConfig.MCPConfig) != "" {
+			status += " mcp_config=" + m.savedConfig.MCPConfig
+		}
+		return status
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
 	}
@@ -1589,9 +1645,16 @@ func runningStatus(config runConfig) string {
 func runToolsStatus(config runConfig) string {
 	switch config.ToolHarness {
 	case "":
+		if strings.TrimSpace(config.MCPConfig) != "" {
+			return "tools mcp config=" + config.MCPConfig
+		}
 		return "tools off"
 	case "local-files", "code-edit":
-		return "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot) + " timeout_ms=" + emptyAsNone(config.ToolTimeout) + " max_rounds=" + emptyAsNone(config.ToolMaxRounds)
+		status := "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot) + " timeout_ms=" + emptyAsNone(config.ToolTimeout) + " max_rounds=" + emptyAsNone(config.ToolMaxRounds)
+		if strings.TrimSpace(config.MCPConfig) != "" {
+			status += " mcp_config=" + config.MCPConfig
+		}
+		return status
 	default:
 		return "tools unsupported " + config.ToolHarness
 	}
@@ -1627,8 +1690,22 @@ func (m *model) applySavedSettings() error {
 			ToolMaxRounds: m.savedConfig.ToolMaxRounds,
 			ToolApproval:  m.savedConfig.ToolApproval,
 			TestCommands:  m.savedConfig.TestCommands,
+			MCPConfig:     m.savedConfig.MCPConfig,
 		}); err != nil {
 			return fmt.Errorf("invalid saved tools in TUI config: %w", err)
+		}
+	}
+
+	if strings.TrimSpace(m.savedConfig.MCPConfig) != "" && strings.TrimSpace(m.savedConfig.ToolHarness) == "" {
+		if err := validateToolConfig(runConfig{
+			Workflow:      workflowBasic,
+			Provider:      providerEcho,
+			ToolTimeout:   m.savedConfig.ToolTimeout,
+			ToolMaxRounds: m.savedConfig.ToolMaxRounds,
+			ToolApproval:  m.savedConfig.ToolApproval,
+			MCPConfig:     m.savedConfig.MCPConfig,
+		}); err != nil {
+			return fmt.Errorf("invalid saved MCP config in TUI config: %w", err)
 		}
 	}
 

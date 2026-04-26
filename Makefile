@@ -1,4 +1,4 @@
-.PHONY: help deps test quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
+.PHONY: help deps test test-openrouter-paid quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
 
 .DEFAULT_GOAL := run
 
@@ -9,6 +9,7 @@ help:
 	@printf '%s\n' 'AgentMachine targets:'
 	@printf '%s\n' '  make deps                         Fetch Elixir and Go dependencies'
 	@printf '%s\n' '  make test                         Run Elixir tests'
+	@printf '%s\n' '  make test-openrouter-paid         Run paid OpenRouter Step 3.5 Flash tests'
 	@printf '%s\n' '  make quality                      Run full Elixir quality gate'
 	@printf '%s\n' '  make format                       Format Elixir and Go code'
 	@printf '%s\n' '  make format-check                 Check Elixir formatting'
@@ -32,6 +33,10 @@ deps:
 
 test:
 	mix test
+
+test-openrouter-paid:
+	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
+	mix test --only paid_openrouter
 
 quality:
 	mix quality

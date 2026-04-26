@@ -188,6 +188,10 @@ defmodule AgentMachine.AgentRunner do
   defp disabled_tool_harness!(%ToolPolicy{harness: harness}) when is_atom(harness),
     do: Atom.to_string(harness)
 
+  defp disabled_tool_harness!(%ToolPolicy{harness: harnesses}) when is_list(harnesses) do
+    Enum.map(harnesses, &Atom.to_string/1)
+  end
+
   defp disabled_tool_harness!(policy) do
     raise ArgumentError, ":tool_policy must include a harness, got: #{inspect(policy)}"
   end

@@ -146,9 +146,14 @@ func buildRunArgs(config runConfig) []string {
 		)
 	}
 
-	if config.ToolHarness != "" {
+	if config.ToolHarness != "" || strings.TrimSpace(config.MCPConfig) != "" {
+		if config.ToolHarness != "" {
+			args = append(args, "--tool-harness", config.ToolHarness)
+		}
+		if strings.TrimSpace(config.MCPConfig) != "" {
+			args = append(args, "--tool-harness", "mcp", "--mcp-config", config.MCPConfig)
+		}
 		args = append(args,
-			"--tool-harness", config.ToolHarness,
 			"--tool-timeout-ms", config.ToolTimeout,
 			"--tool-max-rounds", config.ToolMaxRounds,
 			"--tool-approval-mode", config.ToolApproval,

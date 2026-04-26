@@ -7,7 +7,6 @@ Keep postponed work here. Add new items at the top of the list and include the d
 - [2026-04-26] Add OS-level sandbox and execution policy for future process-capable or network-capable tools.
 - [2026-04-26] Add reusable subagent definitions with per-agent prompts, tool allowlists, and permission inheritance.
 - [2026-04-26] Add resumable subagent and run context after durable run state exists.
-- [2026-04-26] Add MCP integration behind explicit server allowlists and per-server permissions.
 - [2026-04-26] Add TUI rendering for approvals, checkpoints, changed-file summaries, and rollback status while keeping the TUI thin.
 - [2026-04-19] Add cancellation and retry commands to the TUI after event streaming exists.
 - [2026-04-19] Replace plaintext TUI API key config with OS keychain integration.

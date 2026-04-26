@@ -156,6 +156,23 @@ func TestBuildRunArgsIncludesRepeatedTestCommands(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesMCPConfigAsRepeatedHarness(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "search docs",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "local-files",
+		ToolRoot:      "/tmp/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "read-only",
+		MCPConfig:     "/tmp/agent-machine.mcp.json",
+	})
+
+	assertContainsSequence(t, args, []string{"--tool-harness", "local-files"})
+	assertContainsSequence(t, args, []string{"--tool-harness", "mcp", "--mcp-config", "/tmp/agent-machine.mcp.json"})
+}
+
 func TestPrepareRunLogCreatesPrivateDirectory(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "agent-machine", "logs", "run.jsonl")
 
@@ -711,6 +728,53 @@ func TestTestCommandAddListAndClear(t *testing.T) {
 	result = updated.(model)
 	if len(result.savedConfig.TestCommands) != 0 {
 		t.Fatalf("expected cleared test commands, got %#v", result.savedConfig.TestCommands)
+	}
+}
+
+func TestMCPConfigCommandPersistsAndClearsPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/mcp-config /tmp/agent-machine.mcp.json")
+	result := modelAfter.(model)
+	if result.savedConfig.MCPConfig != "/tmp/agent-machine.mcp.json" {
+		t.Fatalf("expected MCP config path, got %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MCPConfig != "/tmp/agent-machine.mcp.json" {
+		t.Fatalf("expected persisted MCP config path, got %#v", loaded)
+	}
+
+	modelAfter, _ = result.handleCommand("/mcp-config off")
+	result = modelAfter.(model)
+	if result.savedConfig.MCPConfig != "" {
+		t.Fatalf("expected cleared MCP config path, got %#v", result.savedConfig)
+	}
+}
+
+func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
+	err := validateToolConfig(runConfig{MCPConfig: "/tmp/agent-machine.mcp.json"})
+	if err == nil {
+		t.Fatal("expected MCP config without tool budget to fail")
+	}
+
+	err = validateToolConfig(runConfig{
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "read-only",
+		MCPConfig:     "/tmp/agent-machine.mcp.json",
+	})
+	if err != nil {
+		t.Fatalf("expected MCP config with explicit budget to pass: %v", err)
 	}
 }
 
@@ -1596,6 +1660,25 @@ func countEnv(env []string, name string) int {
 	}
 
 	return count
+}
+
+func assertContainsSequence(t *testing.T, values []string, sequence []string) {
+	t.Helper()
+
+	for i := 0; i <= len(values)-len(sequence); i++ {
+		matched := true
+		for j := range sequence {
+			if values[i+j] != sequence[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+	}
+
+	t.Fatalf("expected %#v to contain sequence %#v", values, sequence)
 }
 
 func textInputForTest() textinput.Model {

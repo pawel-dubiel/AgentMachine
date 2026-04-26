@@ -3,6 +3,7 @@ defmodule AgentMachine.RunSpec do
   High-level run request used by clients.
   """
 
+  alias AgentMachine.MCP.Config
   alias AgentMachine.Tools.RunTestCommand
 
   @enforce_keys [:task, :workflow, :provider, :timeout_ms, :max_steps, :max_attempts]
@@ -17,11 +18,14 @@ defmodule AgentMachine.RunSpec do
     :http_timeout_ms,
     :pricing,
     :tool_harness,
+    :tool_harnesses,
     :tool_timeout_ms,
     :tool_max_rounds,
     :tool_root,
     :tool_approval_mode,
-    :test_commands
+    :test_commands,
+    :mcp_config_path,
+    :mcp_config
   ]
 
   @type t :: %__MODULE__{
@@ -34,18 +38,22 @@ defmodule AgentMachine.RunSpec do
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
           pricing: map() | nil,
-          tool_harness: :demo | :local_files | :code_edit | nil,
+          tool_harness: :demo | :local_files | :code_edit | :mcp | nil,
+          tool_harnesses: [:demo | :local_files | :code_edit | :mcp] | nil,
           tool_timeout_ms: pos_integer() | nil,
           tool_max_rounds: pos_integer() | nil,
           tool_root: binary() | nil,
           tool_approval_mode:
             :read_only | :ask_before_write | :auto_approved_safe | :full_access | nil,
-          test_commands: [binary()] | nil
+          test_commands: [binary()] | nil,
+          mcp_config_path: binary() | nil,
+          mcp_config: AgentMachine.MCP.Config.t() | nil
         }
 
   def new!(attrs) when is_map(attrs) do
     attrs
     |> atomize_keys!()
+    |> normalize_tool_harnesses!()
     |> then(&struct!(__MODULE__, &1))
     |> validate!()
   end
@@ -106,22 +114,24 @@ defmodule AgentMachine.RunSpec do
   end
 
   defp validate_tool_options!(%__MODULE__{
-         tool_harness: nil,
+         tool_harnesses: nil,
          tool_timeout_ms: nil,
          tool_max_rounds: nil,
          tool_root: nil,
          tool_approval_mode: nil,
-         test_commands: nil
+         test_commands: nil,
+         mcp_config_path: nil,
+         mcp_config: nil
        }),
        do: :ok
 
-  defp validate_tool_options!(%__MODULE__{tool_harness: nil} = spec) do
+  defp validate_tool_options!(%__MODULE__{tool_harnesses: nil} = spec) do
     raise ArgumentError,
-          "run spec tool options require :tool_harness, got :tool_timeout_ms #{inspect(spec.tool_timeout_ms)}, :tool_max_rounds #{inspect(spec.tool_max_rounds)}, :tool_root #{inspect(spec.tool_root)}, and :test_commands #{inspect(spec.test_commands)}"
+          "run spec tool options require :tool_harness or :tool_harnesses, got :tool_timeout_ms #{inspect(spec.tool_timeout_ms)}, :tool_max_rounds #{inspect(spec.tool_max_rounds)}, :tool_root #{inspect(spec.tool_root)}, :test_commands #{inspect(spec.test_commands)}, and :mcp_config_path #{inspect(spec.mcp_config_path)}"
   end
 
   defp validate_tool_options!(%__MODULE__{
-         tool_harness: :demo,
+         tool_harnesses: [:demo],
          tool_timeout_ms: timeout_ms,
          tool_max_rounds: max_rounds,
          tool_approval_mode: approval_mode,
@@ -134,24 +144,116 @@ defmodule AgentMachine.RunSpec do
   end
 
   defp validate_tool_options!(%__MODULE__{
-         tool_harness: harness,
+         tool_harnesses: harnesses,
          tool_timeout_ms: timeout_ms,
          tool_max_rounds: max_rounds,
          tool_root: root,
          tool_approval_mode: approval_mode,
-         test_commands: test_commands
+         test_commands: test_commands,
+         mcp_config_path: mcp_config_path,
+         mcp_config: mcp_config
        })
-       when harness in [:local_files, :code_edit] do
+       when is_list(harnesses) do
+    validate_harnesses!(harnesses)
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
     require_positive_integer!(max_rounds, :tool_max_rounds)
-    require_non_empty_binary!(root, :tool_root)
     require_tool_approval_mode!(approval_mode)
-    validate_test_commands!(harness, approval_mode, test_commands)
+    maybe_require_tool_root!(harnesses, root)
+    validate_test_commands!(harnesses, approval_mode, test_commands)
+    validate_mcp_config!(harnesses, mcp_config_path, mcp_config)
   end
 
-  defp validate_tool_options!(%__MODULE__{tool_harness: harness}) do
+  defp validate_tool_options!(%__MODULE__{tool_harnesses: harness}) do
     raise ArgumentError,
-          "run spec :tool_harness must be :demo, :local_files, or :code_edit, got: #{inspect(harness)}"
+          "run spec :tool_harnesses must be a non-empty list of :demo, :local_files, :code_edit, or :mcp, got: #{inspect(harness)}"
+  end
+
+  defp normalize_tool_harnesses!(attrs) do
+    harness = Map.get(attrs, :tool_harness)
+    harnesses = Map.get(attrs, :tool_harnesses)
+
+    normalized =
+      cond do
+        is_nil(harnesses) and is_nil(harness) ->
+          nil
+
+        is_nil(harnesses) ->
+          [harness]
+
+        is_list(harnesses) ->
+          harnesses
+
+        true ->
+          raise ArgumentError,
+                "run spec :tool_harnesses must be a list, got: #{inspect(harnesses)}"
+      end
+
+    attrs
+    |> Map.put(:tool_harnesses, normalize_harness_list!(normalized))
+    |> Map.put(:tool_harness, first_harness(normalized))
+    |> load_mcp_config_if_needed!()
+  end
+
+  defp normalize_harness_list!(nil), do: nil
+
+  defp normalize_harness_list!(harnesses) when is_list(harnesses) and harnesses != [] do
+    reject_duplicates!(harnesses, "run spec :tool_harnesses")
+    harnesses
+  end
+
+  defp normalize_harness_list!(harnesses) do
+    raise ArgumentError,
+          "run spec :tool_harnesses must be a non-empty list when provided, got: #{inspect(harnesses)}"
+  end
+
+  defp first_harness(nil), do: nil
+  defp first_harness([harness | _rest]), do: harness
+
+  defp load_mcp_config_if_needed!(%{tool_harnesses: harnesses} = attrs) when is_list(harnesses) do
+    if :mcp in harnesses and is_nil(Map.get(attrs, :mcp_config)) do
+      Map.put(attrs, :mcp_config, Config.load!(Map.get(attrs, :mcp_config_path)))
+    else
+      attrs
+    end
+  end
+
+  defp load_mcp_config_if_needed!(attrs), do: attrs
+
+  defp validate_harnesses!(harnesses) when is_list(harnesses) and harnesses != [] do
+    Enum.each(harnesses, fn
+      harness when harness in [:demo, :local_files, :code_edit, :mcp] ->
+        :ok
+
+      harness ->
+        raise ArgumentError,
+              "run spec :tool_harness must be :demo, :local_files, :code_edit, or :mcp, got: #{inspect(harness)}"
+    end)
+  end
+
+  defp validate_harnesses!(harnesses) do
+    raise ArgumentError,
+          "run spec :tool_harnesses must be a non-empty list, got: #{inspect(harnesses)}"
+  end
+
+  defp maybe_require_tool_root!(harnesses, root) do
+    if Enum.any?(harnesses, &(&1 in [:local_files, :code_edit])) do
+      require_non_empty_binary!(root, :tool_root)
+    end
+  end
+
+  defp validate_mcp_config!(harnesses, mcp_config_path, mcp_config) do
+    if :mcp in harnesses do
+      require_non_empty_binary!(mcp_config_path, :mcp_config_path)
+
+      unless match?(%Config{}, mcp_config) do
+        raise ArgumentError,
+              "run spec :mcp_config must be loaded when :tool_harnesses includes :mcp"
+      end
+    else
+      if not is_nil(mcp_config_path) or not is_nil(mcp_config) do
+        raise ArgumentError, "run spec :mcp_config_path requires :tool_harness :mcp"
+      end
+    end
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0 do
@@ -188,19 +290,36 @@ defmodule AgentMachine.RunSpec do
           "run spec :test_commands require :tool_harness :code_edit, got: #{inspect(test_commands)}"
   end
 
-  defp validate_test_commands!(_harness, _approval_mode, nil), do: :ok
+  defp validate_test_commands!(_harnesses, _approval_mode, nil), do: :ok
 
-  defp validate_test_commands!(:code_edit, :full_access, test_commands) do
+  defp validate_test_commands!(harnesses, :full_access, test_commands) do
+    unless :code_edit in harnesses do
+      raise ArgumentError,
+            "run spec :test_commands require :tool_harness :code_edit, got: #{inspect(harnesses)} with #{inspect(test_commands)}"
+    end
+
     RunTestCommand.validate_allowlist!(test_commands)
   end
 
-  defp validate_test_commands!(:code_edit, approval_mode, _test_commands) do
-    raise ArgumentError,
-          "run spec :test_commands require :tool_approval_mode :full_access, got: #{inspect(approval_mode)}"
+  defp validate_test_commands!(harnesses, _approval_mode, test_commands) do
+    if :code_edit in harnesses do
+      raise ArgumentError,
+            "run spec :test_commands require :tool_approval_mode :full_access"
+    else
+      raise ArgumentError,
+            "run spec :test_commands require :tool_harness :code_edit, got: #{inspect(harnesses)} with #{inspect(test_commands)}"
+    end
   end
 
-  defp validate_test_commands!(harness, _approval_mode, test_commands) do
-    raise ArgumentError,
-          "run spec :test_commands require :tool_harness :code_edit, got: #{inspect(harness)} with #{inspect(test_commands)}"
+  defp reject_duplicates!(values, label) do
+    duplicates =
+      values
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_value, count} -> count > 1 end)
+      |> Enum.map(&elem(&1, 0))
+
+    if duplicates != [] do
+      raise ArgumentError, "#{label} must not contain duplicates: #{inspect(duplicates)}"
+    end
   end
 end

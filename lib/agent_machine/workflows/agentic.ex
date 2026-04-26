@@ -73,12 +73,12 @@ defmodule AgentMachine.Workflows.Agentic do
     Keyword.put(opts, :http_timeout_ms, http_timeout_ms)
   end
 
-  defp put_tool_opts(opts, %RunSpec{tool_harness: nil}), do: opts
+  defp put_tool_opts(opts, %RunSpec{tool_harnesses: nil}), do: opts
 
   defp put_tool_opts(
          opts,
          %RunSpec{
-           tool_harness: harness,
+           tool_harnesses: harnesses,
            tool_timeout_ms: tool_timeout_ms,
            tool_max_rounds: tool_max_rounds,
            tool_approval_mode: tool_approval_mode
@@ -87,33 +87,43 @@ defmodule AgentMachine.Workflows.Agentic do
     opts
     |> Keyword.put(
       :allowed_tools,
-      AgentMachine.ToolHarness.builtin!(harness, tool_harness_opts(spec))
+      AgentMachine.ToolHarness.builtin_many!(harnesses, tool_harness_opts(spec))
     )
     |> Keyword.put(
       :tool_policy,
-      AgentMachine.ToolHarness.builtin_policy!(harness, tool_harness_opts(spec))
+      AgentMachine.ToolHarness.builtin_policy_many!(harnesses, tool_harness_opts(spec))
     )
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
     |> Keyword.put(:tool_max_rounds, tool_max_rounds)
     |> Keyword.put(:tool_approval_mode, tool_approval_mode)
-    |> maybe_put_tool_root(harness, spec)
+    |> maybe_put_tool_root(harnesses, spec)
     |> maybe_put_test_commands(spec)
+    |> maybe_put_mcp_config(spec)
   end
 
-  defp tool_harness_opts(%RunSpec{test_commands: test_commands}),
-    do: [test_commands: test_commands]
+  defp tool_harness_opts(%RunSpec{test_commands: test_commands, mcp_config: mcp_config}),
+    do: [test_commands: test_commands, mcp_config: mcp_config]
 
-  defp maybe_put_tool_root(opts, harness, %RunSpec{tool_root: root})
-       when harness in [:local_files, :code_edit] do
-    Keyword.put(opts, :tool_root, root)
+  defp maybe_put_tool_root(opts, harnesses, %RunSpec{tool_root: root})
+       when is_list(harnesses) do
+    if Enum.any?(harnesses, &(&1 in [:local_files, :code_edit])) do
+      Keyword.put(opts, :tool_root, root)
+    else
+      opts
+    end
   end
 
-  defp maybe_put_tool_root(opts, _harness, _spec), do: opts
+  defp maybe_put_tool_root(opts, _harnesses, _spec), do: opts
 
   defp maybe_put_test_commands(opts, %RunSpec{test_commands: nil}), do: opts
 
   defp maybe_put_test_commands(opts, %RunSpec{test_commands: commands}),
     do: Keyword.put(opts, :test_commands, commands)
+
+  defp maybe_put_mcp_config(opts, %RunSpec{mcp_config: nil}), do: opts
+
+  defp maybe_put_mcp_config(opts, %RunSpec{mcp_config: config}),
+    do: Keyword.put(opts, :mcp_config, config)
 
   defp planner_instructions do
     """

@@ -3,7 +3,7 @@ defmodule AgentMachine.ToolHarness do
   Small adapter between AgentMachine tools and provider-native tool calling.
   """
 
-  alias AgentMachine.{JSON, ToolPolicy}
+  alias AgentMachine.{JSON, MCP.ToolFactory, ToolPolicy}
 
   @builtin_harnesses %{
     demo: [AgentMachine.Tools.Now],
@@ -57,9 +57,27 @@ defmodule AgentMachine.ToolHarness do
 
   def builtin!(name, opts) when is_atom(name) do
     case Map.fetch(@builtin_harnesses, name) do
-      {:ok, tools} -> maybe_put_test_command_tool(name, tools, opts)
-      :error -> raise ArgumentError, "unknown tool harness: #{inspect(name)}"
+      {:ok, tools} ->
+        maybe_put_test_command_tool(name, tools, opts)
+
+      :error when name == :mcp ->
+        ToolFactory.tools!(Keyword.fetch!(opts, :mcp_config))
+
+      :error ->
+        raise ArgumentError, "unknown tool harness: #{inspect(name)}"
     end
+  end
+
+  def builtin_many!(nil, _opts), do: []
+
+  def builtin_many!(harnesses, opts) when is_list(harnesses) do
+    harnesses
+    |> Enum.flat_map(&builtin!(&1, opts))
+    |> ensure_unique_definition_names!()
+  end
+
+  def builtin_many!(harnesses, _opts) do
+    raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
   end
 
   def builtin_policy!(name, opts \\ [])
@@ -72,9 +90,37 @@ defmodule AgentMachine.ToolHarness do
         permissions = maybe_put_test_command_permission(name, permissions, opts)
         ToolPolicy.new!(harness: name, permissions: permissions)
 
+      :error when name == :mcp ->
+        permissions =
+          opts
+          |> Keyword.fetch!(:mcp_config)
+          |> Map.fetch!(:tools)
+          |> Enum.map(& &1.permission)
+
+        ToolPolicy.new!(harness: name, permissions: permissions)
+
       :error ->
         raise ArgumentError, "unknown tool harness policy: #{inspect(name)}"
     end
+  end
+
+  def builtin_policy_many!(nil, _opts), do: nil
+
+  def builtin_policy_many!(harnesses, opts) when is_list(harnesses) do
+    permissions =
+      harnesses
+      |> Enum.flat_map(fn harness ->
+        harness
+        |> builtin_policy!(opts)
+        |> Map.fetch!(:permissions)
+        |> MapSet.to_list()
+      end)
+
+    ToolPolicy.new!(harness: policy_harness_name(harnesses), permissions: Enum.uniq(permissions))
+  end
+
+  def builtin_policy_many!(harnesses, _opts) do
+    raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
   end
 
   def definitions!(tools) when is_list(tools) do
@@ -217,6 +263,7 @@ defmodule AgentMachine.ToolHarness do
     opts
     |> allowed_tools()
     |> definitions!()
+    |> ensure_unique_definitions!()
     |> Map.new(fn definition -> {definition.name, definition.module} end)
   end
 
@@ -228,6 +275,32 @@ defmodule AgentMachine.ToolHarness do
   end
 
   defp allowed_tools(opts), do: Keyword.get(opts, :allowed_tools, [])
+
+  defp policy_harness_name([harness]), do: harness
+  defp policy_harness_name(harnesses), do: harnesses
+
+  defp ensure_unique_definition_names!(tools) do
+    tools
+    |> definitions!()
+    |> ensure_unique_definitions!()
+
+    tools
+  end
+
+  defp ensure_unique_definitions!(definitions) do
+    duplicates =
+      definitions
+      |> Enum.map(& &1.name)
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(&elem(&1, 0))
+
+    if duplicates != [] do
+      raise ArgumentError, "duplicate provider-visible tool names: #{inspect(duplicates)}"
+    end
+
+    definitions
+  end
 
   defp require_non_empty_binary!(value, _label) when is_binary(value) and byte_size(value) > 0,
     do: :ok

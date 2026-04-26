@@ -21,6 +21,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     tool_root: :string,
     tool_approval_mode: :string,
     test_command: :string,
+    mcp_config: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
@@ -136,12 +137,13 @@ defmodule Mix.Tasks.AgentMachine.Run do
       max_attempts: fetch_required_option!(opts, :max_attempts),
       http_timeout_ms: Keyword.get(opts, :http_timeout_ms),
       pricing: pricing_from_opts(opts),
-      tool_harness: tool_harness_from_opts!(opts),
+      tool_harnesses: tool_harnesses_from_opts!(opts),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       tool_max_rounds: Keyword.get(opts, :tool_max_rounds),
       tool_root: Keyword.get(opts, :tool_root),
       tool_approval_mode: tool_approval_mode_from_opts!(opts),
-      test_commands: test_commands_from_opts(opts)
+      test_commands: test_commands_from_opts(opts),
+      mcp_config_path: Keyword.get(opts, :mcp_config)
     }
   end
 
@@ -186,25 +188,22 @@ defmodule Mix.Tasks.AgentMachine.Run do
     end
   end
 
-  defp tool_harness_from_opts!(opts) do
-    case Keyword.fetch(opts, :tool_harness) do
-      {:ok, "demo"} ->
-        :demo
-
-      {:ok, "local-files"} ->
-        :local_files
-
-      {:ok, "code-edit"} ->
-        :code_edit
-
-      {:ok, harness} ->
-        Mix.raise(
-          "--tool-harness must be demo, local-files, or code-edit, got: #{inspect(harness)}"
-        )
-
-      :error ->
-        nil
+  defp tool_harnesses_from_opts!(opts) do
+    case Keyword.get_values(opts, :tool_harness) do
+      [] -> nil
+      harnesses -> Enum.map(harnesses, &tool_harness_from_string!/1)
     end
+  end
+
+  defp tool_harness_from_string!("demo"), do: :demo
+  defp tool_harness_from_string!("local-files"), do: :local_files
+  defp tool_harness_from_string!("code-edit"), do: :code_edit
+  defp tool_harness_from_string!("mcp"), do: :mcp
+
+  defp tool_harness_from_string!(harness) do
+    Mix.raise(
+      "--tool-harness must be demo, local-files, code-edit, or mcp, got: #{inspect(harness)}"
+    )
   end
 
   defp tool_approval_mode_from_opts!(opts) do

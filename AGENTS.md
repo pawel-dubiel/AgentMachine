@@ -58,6 +58,9 @@ boundaries, pause and simplify the design before adding code.
 - Tool schema and provider tool-call adapters belong in `AgentMachine.ToolHarness`.
   Providers may use that adapter at the model/API boundary, but tool execution
   remains in `AgentMachine.AgentRunner`.
+- MCP config parsing, protocol clients, namespacing, permissions, transport
+  security, and result normalization belong in Elixir runtime modules. The TUI
+  may only persist/pass an MCP config path and render events/results.
 - Prompt/context formatting belongs in small helpers such as
   `AgentMachine.RunContextPrompt` when shared by providers.
 - CLI code in `mix agent_machine.run` is the stable client boundary: parse flags,
@@ -157,6 +160,13 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   --tool-timeout-ms <ms> --tool-max-rounds <n> --tool-approval-mode <mode>`
   exposes constrained code edit tools for structured edits and unified patches.
   Patch application must stay in Elixir and must not shell out.
+- `mix agent_machine.run` may receive repeated `--tool-harness` flags. The
+  runtime merges allowed tools and policies, and fails fast on duplicate
+  provider-visible tool names.
+- `mix agent_machine.run --tool-harness mcp --mcp-config <path>` exposes
+  explicitly allowlisted MCP tools through namespaced provider-visible names.
+  MCP stdio and Streamable HTTP protocol, env-secret resolution, permissions,
+  transport calls, redaction, and result bounding belong in Elixir.
 - Repeated `--test-command <command>` values may extend `code-edit` with
   `run_test_command` only under `full-access`. Command execution must stay in
   Elixir, use exact allowlist matching, avoid shells, keep cwd inside

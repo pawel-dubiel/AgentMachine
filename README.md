@@ -315,6 +315,52 @@ mix agent_machine.run \
   "Update the README using a minimal patch"
 ```
 
+Harnesses may be repeated. The runtime merges their allowed tools and policies,
+then fails fast if two tools expose the same provider-visible name.
+
+MCP tools are enabled with the `mcp` harness and an explicit config file. Tool
+names exposed to the model are namespaced as `mcp_<server_id>_<tool_name>`.
+MCP credentials must be environment-variable references; inline secret values
+are rejected.
+
+```json
+{
+  "servers": [
+    {
+      "id": "docs",
+      "transport": "streamable_http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "env:DOCS_MCP_AUTH"},
+      "tools": [
+        {"name": "search", "permission": "mcp_docs_search", "risk": "network"}
+      ]
+    }
+  ]
+}
+```
+
+```sh
+mix agent_machine.run \
+  --workflow basic \
+  --provider openrouter \
+  --model "YOUR_OPENROUTER_MODEL" \
+  --timeout-ms 30000 \
+  --http-timeout-ms 120000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --tool-harness local-files \
+  --tool-harness mcp \
+  --tool-root /Users/pawel/mywiki \
+  --tool-timeout-ms 1000 \
+  --tool-max-rounds 4 \
+  --tool-approval-mode full-access \
+  --mcp-config ./agent-machine.mcp.json \
+  --json \
+  "Search docs and update a local note"
+```
+
 Local file tool rules:
 
 - `--tool-root` must already exist.
@@ -342,6 +388,13 @@ Local file tool rules:
   `full-access`; the model must use the exact allowlisted command string.
 - Test commands run without a shell, under `--tool-root`, with `MIX_ENV=test`,
   the existing tool timeout, bounded output, and redaction on returned output.
+- `--mcp-config <path>` requires `--tool-harness mcp`.
+- MCP v1 supports stdio and Streamable HTTP only. It does not support legacy
+  HTTP+SSE, resources, prompts, sampling, subscriptions, or server-initiated
+  requests.
+- MCP stdio servers are launched without a shell from the configured executable
+  and args. MCP Streamable HTTP calls use JSON-RPC POST requests with the
+  explicit tool timeout.
 
 Read-style tools redact sensitive-looking text before returning file contents or
 search match lines to the provider. Mutation tools still apply the exact
@@ -428,6 +481,8 @@ Useful commands:
 /test-command add <command>
 /test-command list
 /test-command clear
+/mcp-config <path>
+/mcp-config off
 /allow-tools [auto-approved-safe|full-access]
 /yolo-tools
 /deny-tools
@@ -477,6 +532,8 @@ values are:
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` when tools are enabled.
 - `--tool-root` for `local-files` and `code-edit`.
 - `--test-command` values require `code-edit` and `full-access`.
+- `--mcp-config` requires repeated `--tool-harness mcp`; the TUI only passes the
+  path through and Elixir owns MCP validation/execution.
 
 ## Development
 
@@ -485,6 +542,16 @@ Run focused tests while working:
 ```sh
 mix test
 ```
+
+Paid OpenRouter integration tests are excluded from normal test and quality
+runs. They use the real `stepfun/step-3.5-flash` model and require an API key:
+
+```sh
+OPENROUTER_API_KEY="..." make test-openrouter-paid
+```
+
+The GitHub workflow `OpenRouter Paid Integration` is manual-only
+(`workflow_dispatch`) and expects the `OPENROUTER_API_KEY` repository secret.
 
 Run the full local gate before merging code changes:
 
