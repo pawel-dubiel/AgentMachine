@@ -49,7 +49,7 @@ defmodule AgentMachine.Tools.ApplyPatch do
 
     {:ok,
      Map.merge(checkpoint, %{
-       changed: Enum.map(files, &%{path: &1.path, action: Atom.to_string(&1.action)}),
+       patch_files: Enum.map(files, &%{path: &1.path, action: Atom.to_string(&1.action)}),
        changed_paths: checkpoint.changed,
        count: length(files)
      })}

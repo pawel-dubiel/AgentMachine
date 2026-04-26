@@ -2,7 +2,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   @moduledoc false
 
   alias AgentMachine.JSON
-  alias AgentMachine.Tools.CodeEditSupport
+  alias AgentMachine.Tools.{CodeEditSupport, ToolResultSummary}
 
   @checkpoint_parent [".agent_machine", "checkpoints"]
   @checkpoint_id_pattern ~r/\A\d{8}T\d{6}Z-\d+\z/
@@ -277,32 +277,23 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   end
 
   defp result_from_manifest(manifest) do
+    summary =
+      ToolResultSummary.from_checkpoint(
+        manifest["tool"],
+        manifest["checkpoint_path"],
+        manifest["entries"]
+      )
+
     %{
       checkpoint_id: manifest["id"],
       checkpoint_path: manifest["checkpoint_path"],
-      changed: Enum.map(manifest["entries"], &changed_summary/1),
+      checkpoint: %{id: manifest["id"], path: manifest["checkpoint_path"]},
+      changed: summary.changed_files,
+      changed_files: summary.changed_files,
+      summary: summary.summary,
       count: length(manifest["entries"])
     }
   end
-
-  defp changed_summary(entry) do
-    before_state = entry["before"]["state"]
-    after_state = entry["after"]["state"]
-
-    %{
-      path: entry["path"],
-      action: action_from_states(before_state, after_state),
-      before_state: before_state,
-      before_sha256: entry["before"]["sha256"],
-      after_state: after_state,
-      after_sha256: entry["after"]["sha256"]
-    }
-  end
-
-  defp action_from_states("missing", "file"), do: "created"
-  defp action_from_states("file", "missing"), do: "deleted"
-  defp action_from_states("file", "file"), do: "updated"
-  defp action_from_states(before_state, after_state), do: before_state <> "_to_" <> after_state
 
   defp read_manifest!(root, checkpoint_id) do
     path = manifest_path(root, checkpoint_id)

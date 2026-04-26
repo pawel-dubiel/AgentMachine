@@ -5,7 +5,7 @@ defmodule AgentMachine.Tools.ApplyEdits do
 
   @behaviour AgentMachine.Tool
 
-  alias AgentMachine.Tools.{CodeEditCheckpoint, CodeEditSupport, PathGuard}
+  alias AgentMachine.Tools.{CodeEditCheckpoint, CodeEditSupport, PathGuard, ToolResultSummary}
 
   @impl true
   def permission, do: :code_edit_apply_edits
@@ -79,6 +79,7 @@ defmodule AgentMachine.Tools.ApplyEdits do
      checkpoint
      |> Map.put(:changed_paths, checkpoint.changed)
      |> Map.put(:requested_changes, Enum.reverse(touched))
+     |> put_operation_summary(Enum.reverse(touched))
      |> Map.put(:count, length(touched))}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}
@@ -270,4 +271,14 @@ defmodule AgentMachine.Tools.ApplyEdits do
   end
 
   defp raise_exists!(path), do: raise(ArgumentError, "path already exists: #{inspect(path)}")
+
+  defp put_operation_summary(result, touched) do
+    stats = ToolResultSummary.operation_stats(touched)
+
+    update_in(result.summary, fn summary ->
+      summary
+      |> Map.put(:requested_count, stats.requested_count)
+      |> Map.put(:renamed_count, stats.renamed_count)
+    end)
+  end
 end

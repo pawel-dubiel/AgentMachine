@@ -45,6 +45,23 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
                tool_root: root
              )
 
+    assert result.summary.tool == "apply_edits"
+    assert result.summary.status == "changed"
+    assert result.summary.requested_count == 4
+    assert result.summary.renamed_count == 1
+    assert result.summary.created_count == 2
+    assert result.summary.updated_count == 1
+    assert result.summary.deleted_count == 2
+    assert result.checkpoint.id == result.checkpoint_id
+    assert result.checkpoint.path == result.checkpoint_path
+    assert Enum.all?(result.changed_files, &(not String.starts_with?(&1.path, root)))
+    assert Enum.all?(result.changed_files, &(not Map.has_key?(&1, :content)))
+
+    source_summary = Enum.find(result.changed_files, &(&1.path == "source.txt"))
+    assert source_summary.before_bytes == 4
+    assert source_summary.after_bytes == 4
+    assert source_summary.diff_summary == %{added_lines: 1, removed_lines: 1}
+
     manifest = read_manifest!(result)
     assert manifest["tool"] == "apply_edits"
     assert manifest["status"] == "applied"
@@ -96,6 +113,23 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
     """
 
     assert {:ok, result} = ApplyPatch.run(%{"patch" => patch}, tool_root: root)
+
+    assert result.summary.tool == "apply_patch"
+    assert result.summary.created_count == 1
+    assert result.summary.updated_count == 1
+    assert result.summary.deleted_count == 1
+
+    assert Enum.find(result.changed_files, &(&1.path == "source.txt")).diff_summary ==
+             %{added_lines: 1, removed_lines: 1}
+
+    assert Enum.find(result.changed_files, &(&1.path == "created.txt")).diff_summary ==
+             %{added_lines: 1, removed_lines: 0}
+
+    assert result.patch_files == [
+             %{path: "source.txt", action: "update"},
+             %{path: "created.txt", action: "create"},
+             %{path: "delete.txt", action: "delete"}
+           ]
 
     manifest = read_manifest!(result)
     assert manifest["tool"] == "apply_patch"
@@ -191,6 +225,8 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
     assert File.read!(Path.join(root, "source.txt")) == "old"
     assert rollback.rolled_back_checkpoint_id == edit.checkpoint_id
     assert rollback.checkpoint_id != edit.checkpoint_id
+    assert rollback.summary.tool == "rollback_checkpoint"
+    assert rollback.summary.updated_count == 1
     assert read_manifest!(rollback)["tool"] == "rollback_checkpoint"
   end
 
