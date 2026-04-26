@@ -85,13 +85,23 @@ defmodule AgentMachine.Workflows.Agentic do
          } = spec
        ) do
     opts
-    |> Keyword.put(:allowed_tools, AgentMachine.ToolHarness.builtin!(harness))
-    |> Keyword.put(:tool_policy, AgentMachine.ToolHarness.builtin_policy!(harness))
+    |> Keyword.put(
+      :allowed_tools,
+      AgentMachine.ToolHarness.builtin!(harness, tool_harness_opts(spec))
+    )
+    |> Keyword.put(
+      :tool_policy,
+      AgentMachine.ToolHarness.builtin_policy!(harness, tool_harness_opts(spec))
+    )
     |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
     |> Keyword.put(:tool_max_rounds, tool_max_rounds)
     |> Keyword.put(:tool_approval_mode, tool_approval_mode)
     |> maybe_put_tool_root(harness, spec)
+    |> maybe_put_test_commands(spec)
   end
+
+  defp tool_harness_opts(%RunSpec{test_commands: test_commands}),
+    do: [test_commands: test_commands]
 
   defp maybe_put_tool_root(opts, harness, %RunSpec{tool_root: root})
        when harness in [:local_files, :code_edit] do
@@ -99,6 +109,11 @@ defmodule AgentMachine.Workflows.Agentic do
   end
 
   defp maybe_put_tool_root(opts, _harness, _spec), do: opts
+
+  defp maybe_put_test_commands(opts, %RunSpec{test_commands: nil}), do: opts
+
+  defp maybe_put_test_commands(opts, %RunSpec{test_commands: commands}),
+    do: Keyword.put(opts, :test_commands, commands)
 
   defp planner_instructions do
     """

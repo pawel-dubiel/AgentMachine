@@ -179,6 +179,7 @@ defmodule AgentMachine.AgentRunner do
       root: Keyword.get(opts, :tool_root),
       approval_mode: Keyword.fetch!(opts, :tool_approval_mode),
       available_tools: disabled_tool_names!(tools),
+      test_commands: Keyword.get(opts, :test_commands, []),
       instruction:
         "Tools are available to worker agents only. You cannot call tools in this agent. If the task needs filesystem side effects, delegate the exact action to a worker and require the worker to use tools. Do not claim file or directory changes unless worker tool_results confirm them."
     })

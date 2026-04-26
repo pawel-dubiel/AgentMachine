@@ -20,6 +20,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     tool_max_rounds: :integer,
     tool_root: :string,
     tool_approval_mode: :string,
+    test_command: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
@@ -139,7 +140,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       tool_max_rounds: Keyword.get(opts, :tool_max_rounds),
       tool_root: Keyword.get(opts, :tool_root),
-      tool_approval_mode: tool_approval_mode_from_opts!(opts)
+      tool_approval_mode: tool_approval_mode_from_opts!(opts),
+      test_commands: test_commands_from_opts(opts)
     }
   end
 
@@ -226,6 +228,13 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
       :error ->
         nil
+    end
+  end
+
+  defp test_commands_from_opts(opts) do
+    case Keyword.get_values(opts, :test_command) do
+      [] -> nil
+      commands -> commands
     end
   end
 

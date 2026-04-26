@@ -32,6 +32,31 @@ defmodule AgentMachine.RunContextPromptTest do
     assert instruction =~ "Do not claim file or directory changes unless tool_results confirm"
   end
 
+  test "includes exact allowed test commands in tool context" do
+    text =
+      RunContextPrompt.text(
+        run_context: %{results: %{}, artifacts: %{}},
+        allowed_tools: [AgentMachine.Tools.RunTestCommand],
+        tool_policy:
+          AgentMachine.ToolHarness.builtin_policy!(:code_edit,
+            test_commands: ["mix test"]
+          ),
+        tool_root: "/Users/pawel/project",
+        tool_approval_mode: :full_access,
+        test_commands: ["mix test"]
+      )
+
+    assert %{
+             "tools" => %{
+               "available_tools" => ["run_test_command"],
+               "test_commands" => ["mix test"],
+               "instruction" => instruction
+             }
+           } = JSON.decode!(text)
+
+    assert instruction =~ "exact command from test_commands"
+  end
+
   test "includes explicit disabled tool context" do
     text =
       RunContextPrompt.text(

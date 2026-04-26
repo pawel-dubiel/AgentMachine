@@ -616,6 +616,114 @@ defmodule AgentMachine.ClientRunnerTest do
     assert %{"status" => "completed"} = JSON.decode!(line)
   end
 
+  test "mix agent_machine.run accepts repeated test commands with code-edit full-access" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+    root = Path.join(System.tmp_dir!(), "agent-machine-code-edit-cli-#{System.unique_integer()}")
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+      File.rm_rf(root)
+    end)
+
+    File.mkdir_p!(root)
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "basic",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "2",
+      "--max-attempts",
+      "1",
+      "--tool-harness",
+      "code-edit",
+      "--tool-root",
+      root,
+      "--tool-timeout-ms",
+      "100",
+      "--tool-max-rounds",
+      "2",
+      "--tool-approval-mode",
+      "full-access",
+      "--test-command",
+      "mix test",
+      "--test-command",
+      "go test ./...",
+      "--json",
+      "summarize"
+    ])
+
+    assert_receive {:mix_shell, :info, [line]}
+    assert %{"status" => "completed"} = JSON.decode!(line)
+  end
+
+  test "mix agent_machine.run rejects test commands without code-edit full-access" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/test_commands require :tool_harness :code_edit/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "demo",
+        "--tool-timeout-ms",
+        "100",
+        "--tool-max-rounds",
+        "2",
+        "--tool-approval-mode",
+        "full-access",
+        "--test-command",
+        "mix test",
+        "--json",
+        "what time is it?"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/test_commands require :tool_approval_mode :full_access/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "code-edit",
+        "--tool-root",
+        System.tmp_dir!(),
+        "--tool-timeout-ms",
+        "100",
+        "--tool-max-rounds",
+        "2",
+        "--tool-approval-mode",
+        "auto-approved-safe",
+        "--test-command",
+        "mix test",
+        "--json",
+        "edit"
+      ])
+    end
+  end
+
   test "mix agent_machine.run rejects invalid tool approval mode" do
     Mix.Task.reenable("agent_machine.run")
 

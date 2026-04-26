@@ -41,8 +41,9 @@ defmodule AgentMachine.RunContextPrompt do
           root: Keyword.get(opts, :tool_root),
           approval_mode: Keyword.fetch!(opts, :tool_approval_mode),
           available_tools: tool_names!(tools),
+          test_commands: Keyword.get(opts, :test_commands, []),
           instruction:
-            "Use tools for external side effects. For filesystem tools, use paths relative to tool_root unless an absolute path is inside tool_root. Do not claim file or directory changes unless tool_results confirm them."
+            "Use tools for external side effects. For filesystem tools, use paths relative to tool_root unless an absolute path is inside tool_root. If run_test_command is available, use only an exact command from test_commands. Do not claim file or directory changes unless tool_results confirm them."
         }
 
       {:ok, []} ->
