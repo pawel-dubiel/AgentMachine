@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added a separate `code-edit` harness with structured edit and unified patch tools.
+- Reworked `README.md` into a usage-first quick start without implementation details.
+- Added `file_info`, `append_file`, and `replace_in_file` to the constrained `local-files` harness with explicit permissions.
 - Added explicit tool execution policies, per-tool permissions, safer failed-tool events, bounded writes, and symlink-aware file listing.
 - Added provider-native tool continuation loops with explicit `tool_max_rounds`, provider continuation payloads, and TUI pass-through.
 - Added an explicit `create_dir` tool to the constrained `local-files` harness.

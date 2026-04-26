@@ -139,8 +139,13 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   high-level client boundary.
 - `mix agent_machine.run --tool-harness local-files --tool-root <path>
   --tool-timeout-ms <ms> --tool-max-rounds <n>` exposes constrained local
-  directory creation, file listing, reading, search, and writing under the
-  explicit root. File search uses `rg`.
+  directory creation, file metadata, listing, reading, search, writing,
+  appending, and exact text replacement under the explicit root. File search
+  uses `rg`.
+- `mix agent_machine.run --tool-harness code-edit --tool-root <path>
+  --tool-timeout-ms <ms> --tool-max-rounds <n>` exposes constrained code edit
+  tools for structured edits and unified patches. Patch application must stay
+  in Elixir and must not shell out.
 - `mix agent_machine.run` is the stable CLI boundary for clients.
 - `mix agent_machine.run --log-file <path>` writes Elixir-side JSONL run events
   plus the final summary to an explicit file path.
