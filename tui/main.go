@@ -55,19 +55,22 @@ type usageSummary struct {
 }
 
 type eventSummary struct {
-	Type          string `json:"type"`
-	RunID         string `json:"run_id"`
-	AgentID       string `json:"agent_id"`
-	ParentAgentID string `json:"parent_agent_id"`
-	Status        string `json:"status"`
-	Attempt       int    `json:"attempt"`
-	NextAttempt   int    `json:"next_attempt"`
-	Round         int    `json:"round"`
-	ToolCallID    string `json:"tool_call_id"`
-	Tool          string `json:"tool"`
-	DurationMS    *int   `json:"duration_ms"`
-	Reason        string `json:"reason"`
-	At            string `json:"at"`
+	Type          string         `json:"type"`
+	RunID         string         `json:"run_id"`
+	AgentID       string         `json:"agent_id"`
+	ParentAgentID string         `json:"parent_agent_id"`
+	Status        string         `json:"status"`
+	Attempt       int            `json:"attempt"`
+	NextAttempt   int            `json:"next_attempt"`
+	Round         int            `json:"round"`
+	ToolCallID    string         `json:"tool_call_id"`
+	Tool          string         `json:"tool"`
+	DurationMS    *int           `json:"duration_ms"`
+	Reason        string         `json:"reason"`
+	Summary       string         `json:"summary"`
+	Delta         string         `json:"delta"`
+	Details       map[string]any `json:"details"`
+	At            string         `json:"at"`
 }
 
 type runResultMsg struct {
@@ -89,6 +92,8 @@ type streamDoneMsg struct {
 	Session *streamSession
 	Err     error
 }
+
+type streamTickMsg struct{}
 
 type skillsCommandMsg struct {
 	Output string
@@ -138,6 +143,7 @@ const (
 	defaultBasicSteps    = "2"
 	defaultAgenticSteps  = "6"
 	defaultHTTPTimeoutMS = "120000"
+	liveEventWindowSize  = 8
 )
 
 type runConfig struct {
@@ -228,6 +234,11 @@ type model struct {
 	lastSummary        summary
 	agents             map[string]agentState
 	agentOrder         []string
+	eventLog           []eventSummary
+	eventScroll        int
+	eventAutoScroll    bool
+	streamFrame        int
+	liveAssistant      string
 	raw                string
 	stream             *streamSession
 	pendingToolTask    string
@@ -280,6 +291,12 @@ func (m model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+func streamTickCommand() tea.Cmd {
+	return tea.Tick(180*time.Millisecond, func(time.Time) tea.Msg {
+		return streamTickMsg{}
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -326,6 +343,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.back()
 			return m, nil
 		case "up", "k":
+			if m.running && m.view == viewChat {
+				m.scrollEvents(-1)
+				return m, nil
+			}
 			if m.view == viewAgents {
 				m.moveAgentSelection(-1)
 				return m, nil
@@ -335,6 +356,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "down", "j":
+			if m.running && m.view == viewChat {
+				m.scrollEvents(1)
+				return m, nil
+			}
 			if m.view == viewAgents {
 				m.moveAgentSelection(1)
 				return m, nil
@@ -355,6 +380,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.submitInput()
 			}
 			return m, nil
+		case "pgup":
+			if m.running && m.view == viewChat {
+				m.scrollEvents(-5)
+				return m, nil
+			}
+		case "pgdown":
+			if m.running && m.view == viewChat {
+				m.scrollEvents(5)
+				return m, nil
+			}
+		case "home":
+			if m.running && m.view == viewChat {
+				m.eventScroll = 0
+				m.eventAutoScroll = false
+				return m, nil
+			}
+		case "end":
+			if m.running && m.view == viewChat {
+				m.eventAutoScroll = true
+				m.clampEventScroll()
+				return m, nil
+			}
 		}
 
 	case runResultMsg:
@@ -372,7 +419,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamStartedMsg:
 		m.stream = msg.Session
-		return m, readStreamCommand(msg.Session)
+		return m, tea.Batch(readStreamCommand(msg.Session), streamTickCommand())
+
+	case streamTickMsg:
+		if !m.running {
+			return m, nil
+		}
+		m.streamFrame++
+		return m, streamTickCommand()
 
 	case streamLineMsg:
 		if msg.Session != m.stream {
@@ -521,6 +575,11 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	m.raw = ""
 	m.agents = map[string]agentState{}
 	m.agentOrder = nil
+	m.eventLog = nil
+	m.eventScroll = 0
+	m.eventAutoScroll = true
+	m.streamFrame = 0
+	m.liveAssistant = ""
 	m.selectedAgent = ""
 	m.selectedAgentIndex = 0
 	return m, startStreamingCommand(config)
@@ -1030,18 +1089,47 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.skillsCLICommand("list")
+	case "search":
+		if len(args) < 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills search <query> [downloads|trending|updated|stars]"})
+			return m, nil
+		}
+		sort := "downloads"
+		queryParts := args[1:]
+		if len(args) > 2 && validClawHubSort(args[len(args)-1]) {
+			sort = args[len(args)-1]
+			queryParts = args[1 : len(args)-1]
+		}
+		query := strings.Join(queryParts, " ")
+		return m, m.skillsCLINoDirCommand("search", query, "--source", "clawhub", "--sort", sort, "--limit", "20")
 	case "show":
 		if len(args) != 2 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills show <name>"})
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills show <name|clawhub:slug>"})
 			return m, nil
+		}
+		if strings.HasPrefix(args[1], "clawhub:") {
+			return m, m.skillsCLINoDirCommand("show", args[1])
 		}
 		return m, m.skillsCLICommand("show", args[1])
 	case "install":
 		if len(args) != 2 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills install <name>"})
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills install <name|clawhub:slug>"})
 			return m, nil
 		}
 		return m, m.skillsCLICommand("install", args[1])
+	case "update":
+		if len(args) > 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills update [clawhub:slug|slug|--all]"})
+			return m, nil
+		}
+		target := "--all"
+		if len(args) == 2 {
+			target = args[1]
+			if target != "--all" && !strings.HasPrefix(target, "clawhub:") {
+				target = "clawhub:" + target
+			}
+		}
+		return m, m.skillsCLICommand("update", target)
 	case "create":
 		if len(args) < 3 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills create <name> <description>"})
@@ -1049,7 +1137,7 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 		}
 		return m, m.skillsCLICommand("create", args[1], "--description", strings.Join(args[2:], " "))
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off|auto|dir|add|remove|clear|scripts|list|show|install|create"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off|auto|dir|add|remove|clear|scripts|list|search|show|install|update|create"})
 		return m, nil
 	}
 
@@ -1073,14 +1161,44 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) skillsCLICommand(args ...string) tea.Cmd {
-	if strings.TrimSpace(m.savedConfig.SkillsDir) == "" {
+	cliArgs, err := buildSkillsCLIArgs(args, m.savedConfig.SkillsDir, true)
+	if err != nil {
 		return func() tea.Msg {
-			return skillsCommandMsg{Err: errors.New("set /skills dir <skills-dir> before running skills commands")}
+			return skillsCommandMsg{Err: err}
 		}
 	}
-	cliArgs := append([]string{}, args...)
-	cliArgs = append(cliArgs, "--skills-dir", m.savedConfig.SkillsDir, "--json")
 	return runSkillsCLICommand(cliArgs)
+}
+
+func (m model) skillsCLINoDirCommand(args ...string) tea.Cmd {
+	cliArgs, err := buildSkillsCLIArgs(args, "", false)
+	if err != nil {
+		return func() tea.Msg {
+			return skillsCommandMsg{Err: err}
+		}
+	}
+	return runSkillsCLICommand(cliArgs)
+}
+
+func buildSkillsCLIArgs(args []string, skillsDir string, requireDir bool) ([]string, error) {
+	if requireDir && strings.TrimSpace(skillsDir) == "" {
+		return nil, errors.New("set /skills dir <skills-dir> before running skills commands")
+	}
+	cliArgs := append([]string{}, args...)
+	if requireDir {
+		cliArgs = append(cliArgs, "--skills-dir", skillsDir)
+	}
+	cliArgs = append(cliArgs, "--json")
+	return cliArgs, nil
+}
+
+func validClawHubSort(value string) bool {
+	switch value {
+	case "downloads", "trending", "updated", "stars":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m model) handleModelsCommand(args []string) (tea.Model, tea.Cmd) {
@@ -1232,6 +1350,17 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 }
 
 func (m *model) applyEvent(event eventSummary) {
+	m.eventLog = append(m.eventLog, event)
+	if event.Type == "assistant_delta" && event.Delta != "" {
+		m.appendAgentDelta(event)
+		if userFacingStreamAgent(event.AgentID) {
+			m.liveAssistant += event.Delta
+		}
+	}
+	if m.eventAutoScroll {
+		m.clampEventScroll()
+	}
+
 	if event.AgentID == "" {
 		return
 	}
@@ -1263,10 +1392,31 @@ func (m *model) applyEvent(event eventSummary) {
 	case "agent_retry_scheduled":
 		agent.Status = "retrying"
 		agent.Error = event.Reason
+	case "provider_request_started", "assistant_delta":
+		if agent.Status == "" {
+			agent.Status = "running"
+		}
 	}
 
 	agent.Events = append(agent.Events, event)
 	m.agents[event.AgentID] = agent
+}
+
+func (m *model) appendAgentDelta(event eventSummary) {
+	if event.AgentID == "" {
+		return
+	}
+	agent := m.agents[event.AgentID]
+	if agent.ID == "" {
+		agent.ID = event.AgentID
+		m.agentOrder = append(m.agentOrder, event.AgentID)
+	}
+	agent.Output += event.Delta
+	m.agents[event.AgentID] = agent
+}
+
+func userFacingStreamAgent(agentID string) bool {
+	return agentID == "assistant" || agentID == "finalizer"
 }
 
 func (m *model) applySummaryResults(summary summary) {
@@ -2099,6 +2249,33 @@ func (m *model) moveAgentSelection(delta int) {
 		return
 	}
 	m.selectedAgentIndex = (m.selectedAgentIndex + delta + len(visible)) % len(visible)
+}
+
+func (m *model) scrollEvents(delta int) {
+	m.eventAutoScroll = false
+	m.eventScroll += delta
+	m.clampEventScroll()
+}
+
+func (m *model) clampEventScroll() {
+	maxScroll := maxEventScroll(len(m.eventLog), liveEventWindowSize)
+	if m.eventAutoScroll {
+		m.eventScroll = maxScroll
+		return
+	}
+	if m.eventScroll < 0 {
+		m.eventScroll = 0
+	}
+	if m.eventScroll > maxScroll {
+		m.eventScroll = maxScroll
+	}
+}
+
+func maxEventScroll(total int, window int) int {
+	if total <= window {
+		return 0
+	}
+	return total - window
 }
 
 func (m model) canUseInputHistory() bool {

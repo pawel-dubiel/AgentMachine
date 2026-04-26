@@ -152,6 +152,7 @@ func buildRunArgs(config runConfig) []string {
 		"--max-steps", maxSteps(config.Workflow),
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 	}
 
 	if config.Provider != providerEcho {

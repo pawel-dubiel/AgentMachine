@@ -25,6 +25,7 @@ func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 		"--max-steps", "2",
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 		"review this project",
 	}
 
@@ -58,6 +59,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 		"--model", "openai/gpt-4o-mini",
 		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.15",
@@ -92,6 +94,7 @@ func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 		"review this project",
 	}
 
@@ -130,6 +133,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		"--max-steps", defaultBasicSteps,
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 		"--model", "qwen/qwen3.5-flash-02-23",
 		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.01",
@@ -292,6 +296,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		"--max-steps", defaultBasicSteps,
 		"--max-attempts", "1",
 		"--jsonl",
+		"--stream-response",
 		"--model", "qwen/qwen3.5-flash-02-23",
 		"--http-timeout-ms", "120000",
 		"--input-price-per-million", "0.01",
@@ -468,7 +473,7 @@ func TestAgentDetailRendersToolEvents(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(lines, "call-1 write_file round=1 ok") {
+	if !strings.Contains(lines, "tool=write_file call=call-1 status=ok round=1") {
 		t.Fatalf("expected rendered tool event, got %q", lines)
 	}
 }
@@ -986,6 +991,36 @@ func TestSkillsCommandPersistsExplicitSkill(t *testing.T) {
 	if result.savedConfig.SkillsMode != "" {
 		t.Fatalf("expected explicit skills to clear auto mode, got %#v", result.savedConfig)
 	}
+}
+
+func TestSkillsClawHubCLIArgsStayThin(t *testing.T) {
+	args, err := buildSkillsCLIArgs(
+		[]string{"search", "docs", "--source", "clawhub", "--sort", "downloads", "--limit", "20"},
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("expected ClawHub search args without skills dir, got %v", err)
+	}
+	assertContainsSequence(t, args, []string{"search", "docs", "--source", "clawhub"})
+	assertContainsSequence(t, args, []string{"--sort", "downloads"})
+	assertContainsSequence(t, args, []string{"--json"})
+
+	args, err = buildSkillsCLIArgs([]string{"install", "clawhub:docs-helper"}, "/tmp/skills", true)
+	if err != nil {
+		t.Fatalf("expected ClawHub install args, got %v", err)
+	}
+	assertContainsSequence(t, args, []string{"install", "clawhub:docs-helper", "--skills-dir", "/tmp/skills"})
+	assertContainsSequence(t, args, []string{"--json"})
+}
+
+func TestSkillsClawHubUpdateUsesSkillsDir(t *testing.T) {
+	args, err := buildSkillsCLIArgs([]string{"update", "--all"}, "/tmp/skills", true)
+	if err != nil {
+		t.Fatalf("expected ClawHub update args, got %v", err)
+	}
+	assertContainsSequence(t, args, []string{"update", "--all", "--skills-dir", "/tmp/skills"})
+	assertContainsSequence(t, args, []string{"--json"})
 }
 
 func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
@@ -1682,6 +1717,43 @@ func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	}
 	if updated.agents["assistant"].Output != "hello" {
 		t.Fatalf("expected assistant output, got %#v", updated.agents["assistant"])
+	}
+}
+
+func TestJSONLAssistantDeltaUpdatesLiveDraftAndEvents(t *testing.T) {
+	m := model{agents: map[string]agentState{}, eventAutoScroll: true}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"assistant_delta","run_id":"run-1","agent_id":"assistant","attempt":1,"delta":"hel","summary":"assistant streamed text","details":{"attempt":1},"at":"2026-04-25T10:00:00Z"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"assistant_delta","run_id":"run-1","agent_id":"assistant","attempt":1,"delta":"lo","summary":"assistant streamed text","details":{"attempt":1},"at":"2026-04-25T10:00:01Z"}}`)
+
+	if updated.liveAssistant != "hello" {
+		t.Fatalf("expected live assistant draft, got %q", updated.liveAssistant)
+	}
+	if updated.agents["assistant"].Output != "hello" {
+		t.Fatalf("expected agent output draft, got %#v", updated.agents["assistant"])
+	}
+	if len(updated.eventLog) != 2 {
+		t.Fatalf("expected event log entries, got %d", len(updated.eventLog))
+	}
+}
+
+func TestLiveActivityViewRendersSummariesAndScrollHint(t *testing.T) {
+	m := model{running: true, streamFrame: 1, eventAutoScroll: true}
+	for i := 0; i < liveEventWindowSize+1; i++ {
+		m.eventLog = append(m.eventLog, eventSummary{
+			Type:    "provider_request_started",
+			AgentID: "assistant",
+			Summary: "assistant sent provider request",
+		})
+	}
+	m.clampEventScroll()
+
+	view := m.liveActivityView()
+	if !strings.Contains(view, "assistant sent provider request") {
+		t.Fatalf("expected event summary in live view, got %q", view)
+	}
+	if !strings.Contains(view, "Up/Down scroll") {
+		t.Fatalf("expected scroll hint, got %q", view)
 	}
 }
 

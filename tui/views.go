@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+var streamFrames = []string{"|", "/", "-", "\\"}
 
 func (m model) View() string {
 	var b strings.Builder
@@ -92,7 +95,132 @@ func (m model) chatView() string {
 		}
 		b.WriteString("\n\n")
 	}
+	if m.running {
+		if strings.TrimSpace(m.liveAssistant) != "" {
+			b.WriteString(labelStyle.Render("assistant"))
+			b.WriteString(": ")
+			b.WriteString(m.liveAssistant)
+			b.WriteString("\n\n")
+		}
+		b.WriteString(m.liveActivityView())
+		b.WriteString("\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) liveActivityView() string {
+	if len(m.eventLog) == 0 {
+		return hintStyle.Render(liveActivityHeader(m) + "\nwaiting for events...")
+	}
+
+	start := m.eventScroll
+	if start < 0 {
+		start = 0
+	}
+	if start > maxEventScroll(len(m.eventLog), liveEventWindowSize) {
+		start = maxEventScroll(len(m.eventLog), liveEventWindowSize)
+	}
+	end := start + liveEventWindowSize
+	if end > len(m.eventLog) {
+		end = len(m.eventLog)
+	}
+
+	lines := []string{liveActivityHeader(m)}
+	for _, event := range m.eventLog[start:end] {
+		lines = append(lines, eventDisplayLine(event))
+	}
+	if len(m.eventLog) > liveEventWindowSize {
+		lines = append(lines, hintStyle.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(m.eventLog))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func liveActivityHeader(m model) string {
+	frame := streamFrames[m.streamFrame%len(streamFrames)]
+	if !m.running {
+		frame = " "
+	}
+	return labelStyle.Render(frame + " Live events")
+}
+
+func recentEventLine(event eventSummary) string {
+	return eventDisplayLine(event)
+}
+
+func eventDisplayLine(event eventSummary) string {
+	text := event.Summary
+	if strings.TrimSpace(text) == "" {
+		text = event.Type
+	}
+	if event.AgentID != "" && !strings.Contains(text, event.AgentID) {
+		text = event.AgentID + ": " + text
+	}
+	extras := eventDetailText(event)
+	if extras != "" {
+		text += "  " + hintStyle.Render(extras)
+	}
+	return text
+}
+
+func eventDetailText(event eventSummary) string {
+	parts := make([]string, 0, 6)
+	if event.Tool != "" {
+		parts = append(parts, "tool="+event.Tool)
+	}
+	if event.ToolCallID != "" {
+		parts = append(parts, "call="+event.ToolCallID)
+	}
+	if event.Status != "" {
+		parts = append(parts, "status="+event.Status)
+	}
+	if event.Round > 0 {
+		parts = append(parts, fmt.Sprintf("round=%d", event.Round))
+	}
+	if event.Attempt > 0 {
+		parts = append(parts, fmt.Sprintf("attempt=%d", event.Attempt))
+	}
+	if event.DurationMS != nil {
+		parts = append(parts, fmt.Sprintf("duration=%dms", *event.DurationMS))
+	}
+	if event.Reason != "" && !strings.Contains(event.Summary, event.Reason) {
+		parts = append(parts, "reason="+event.Reason)
+	}
+	parts = append(parts, compactDetails(event.Details)...)
+	return strings.Join(parts, " ")
+}
+
+func compactDetails(details map[string]any) []string {
+	if len(details) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(details))
+	for key := range details {
+		switch key {
+		case "agent_id", "attempt", "duration_ms", "reason", "round", "tool":
+			continue
+		default:
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	limit := len(keys)
+	if limit > 3 {
+		limit = 3
+	}
+	parts := make([]string, 0, limit)
+	for _, key := range keys[:limit] {
+		parts = append(parts, key+"="+compactDetailValue(details[key]))
+	}
+	return parts
+}
+
+func compactDetailValue(value any) string {
+	text := fmt.Sprintf("%v", value)
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > 48 {
+		return text[:48] + "..."
+	}
+	return text
 }
 
 func (m model) setupView() string {
@@ -224,6 +352,9 @@ func (m model) agentsView() string {
 	}
 
 	lines := []string{labelStyle.Render("Agents")}
+	if len(m.eventLog) > 0 {
+		lines = append(lines, liveActivityHeader(m), recentEventLine(m.eventLog[len(m.eventLog)-1]), "")
+	}
 	if len(m.lastSummary.Skills) > 0 {
 		lines = append(lines, "Skills: "+skillSummaryLine(m.lastSummary.Skills), "")
 	}
@@ -313,23 +444,7 @@ func agentEventLines(events []eventSummary) string {
 	}
 	lines := make([]string, 0, len(events))
 	for _, event := range events {
-		label := event.Type
-		if event.ToolCallID != "" {
-			label += " " + event.ToolCallID
-		}
-		if event.Tool != "" {
-			label += " " + event.Tool
-		}
-		if event.Round > 0 {
-			label += fmt.Sprintf(" round=%d", event.Round)
-		}
-		if event.Status != "" {
-			label += " " + event.Status
-		}
-		if event.Reason != "" {
-			label += " " + event.Reason
-		}
-		lines = append(lines, label)
+		lines = append(lines, eventDisplayLine(event))
 	}
 	return strings.Join(lines, "\n")
 }
