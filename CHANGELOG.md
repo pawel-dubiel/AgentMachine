@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Replaced the custom JSON parser/encoder with a Jason-backed
+  `AgentMachine.JSON` wrapper and documented when to prefer proven libraries.
 - Fixed JSON decoding for exponent-only numbers like `8e-7` returned by some
   OpenRouter models.
 - Tuned Gun SSE client options with explicit DNS/connect/TLS timeouts,

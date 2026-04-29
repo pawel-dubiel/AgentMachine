@@ -31,6 +31,7 @@ defmodule AgentMachine.MixProject do
     [
       {:nx, "~> 0.6"},
       {:gun, "~> 2.2"},
+      {:jason, "~> 1.4"},
       {:ortex, "~> 0.1.10"},
       {:telemetry, "~> 1.0"},
       {:tokenizers, "~> 0.5.1"},

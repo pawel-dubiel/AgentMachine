@@ -15,6 +15,10 @@ Prefer small changes that move the architecture forward without turning the proj
 - Keep provider and orchestrator contracts explicit.
 - Keep code simple before adding abstractions.
 - Prefer clear data structures over implicit behavior.
+- Prefer proven, maintained libraries for standard formats and protocols such
+  as JSON, HTTP, YAML, and tokenization. Keep custom implementations only when
+  there is a narrow, documented project reason, and prefer a local wrapper
+  boundary when it protects the rest of the codebase from dependency details.
 - Preserve OTP supervision and task isolation.
 - Avoid broad rewrites unless they are necessary for the requested change.
 - Treat tests as a first-class design tool. Prefer TDD for new behavior: write

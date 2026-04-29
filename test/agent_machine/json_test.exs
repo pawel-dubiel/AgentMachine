@@ -8,10 +8,17 @@ defmodule AgentMachine.JSONTest do
       "model" => "test",
       "input" => "hello\nworld",
       "usage" => %{"input_tokens" => 1, "output_tokens" => 2, "total_tokens" => 3},
-      "items" => [true, false, nil, 1.5]
+      "items" => [true, false, nil, 1.5],
+      atom_key: "ok"
     }
 
-    assert JSON.decode!(JSON.encode!(value)) == value
+    assert JSON.decode!(JSON.encode!(value)) == %{
+             "model" => "test",
+             "input" => "hello\nworld",
+             "usage" => %{"input_tokens" => 1, "output_tokens" => 2, "total_tokens" => 3},
+             "items" => [true, false, nil, 1.5],
+             "atom_key" => "ok"
+           }
   end
 
   test "decodes nested output text payload" do
@@ -52,12 +59,28 @@ defmodule AgentMachine.JSONTest do
   end
 
   test "rejects invalid escaped UTF-16 surrogates" do
-    assert_raise ArgumentError, ~r/high surrogate/, fn ->
+    assert_raise ArgumentError, ~r/invalid JSON/, fn ->
       JSON.decode!(~S({"emoji":"\uD83C"}))
     end
 
-    assert_raise ArgumentError, ~r/lone low surrogate/, fn ->
+    assert_raise ArgumentError, ~r/invalid JSON/, fn ->
       JSON.decode!(~S({"emoji":"\uDF26"}))
+    end
+  end
+
+  test "raises explicit argument errors for invalid JSON input" do
+    assert_raise ArgumentError, ~r/invalid JSON/, fn ->
+      JSON.decode!(~S({"broken":))
+    end
+
+    assert_raise ArgumentError, ~r/JSON input must be a binary/, fn ->
+      JSON.decode!(%{})
+    end
+  end
+
+  test "raises explicit argument errors for unsupported encoded values" do
+    assert_raise ArgumentError, ~r/unsupported JSON value/, fn ->
+      JSON.encode!(%{"pid" => self()})
     end
   end
 end
