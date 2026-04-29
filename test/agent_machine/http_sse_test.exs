@@ -57,6 +57,38 @@ defmodule AgentMachine.HTTPSSETest do
     end
   end
 
+  test "builds tuned Gun options for HTTPS streams" do
+    opts = HTTPSSE.gun_opts_for_test("https://example.com/stream", "http2")
+
+    assert opts.transport == :tls
+    assert opts.protocols == [:http2, :http]
+    assert opts.connect_timeout == 5_000
+    assert opts.domain_lookup_timeout == 2_000
+    assert opts.tls_handshake_timeout == 5_000
+    assert opts.retry == 0
+    assert opts.tcp_opts[:nodelay]
+    assert opts.tcp_opts[:keepalive]
+    assert opts.tcp_opts[:send_timeout] == 15_000
+    assert opts.tcp_opts[:send_timeout_close]
+    assert opts.http_opts.keepalive == 30_000
+    assert opts.http2_opts.keepalive == 30_000
+    assert opts.http2_opts.keepalive_tolerance == 2
+    assert Keyword.fetch!(opts.tls_opts, :server_name_indication) == ~c"example.com"
+  end
+
+  test "builds tuned Gun options for plain HTTP streams without TLS options" do
+    opts = HTTPSSE.gun_opts_for_test("http://127.0.0.1:4000/stream")
+
+    assert opts.transport == :tcp
+    assert opts.protocols == [:http]
+    assert opts.connect_timeout == 5_000
+    assert opts.domain_lookup_timeout == 2_000
+    assert opts.retry == 0
+    assert opts.tcp_opts[:nodelay]
+    refute Map.has_key?(opts, :tls_opts)
+    refute Map.has_key?(opts, :tls_handshake_timeout)
+  end
+
   defp start_sse_server(chunks) do
     with {:ok, listen} <- :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true]),
          {:ok, port} <- :inet.port(listen) do

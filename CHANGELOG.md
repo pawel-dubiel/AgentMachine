@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Tuned Gun SSE client options with explicit DNS/connect/TLS timeouts,
+  disabled hidden retries, TCP no-delay/keepalive, and HTTP/2 keepalive.
 - Switched provider SSE streaming from `:httpc` to Gun with HTTP/2 preferred
   by default, HTTP/1.1 fallback/configuration, and local SSE transport coverage.
 - Added paid OpenRouter direct streaming probe tests for the provider SSE path

@@ -4,9 +4,21 @@ defmodule AgentMachine.HTTPSSE do
   alias AgentMachine.SSE
 
   @http_protocol_env "AGENT_MACHINE_HTTP_PROTOCOL"
+  @connect_timeout_ms 5_000
+  @domain_lookup_timeout_ms 2_000
+  @tls_handshake_timeout_ms 5_000
+  @tcp_send_timeout_ms 15_000
+  @keepalive_ms 30_000
+  @http2_keepalive_tolerance 2
 
   if Mix.env() == :test do
     def https_protocols_for_test(value), do: https_protocols_from_env!(value)
+
+    def gun_opts_for_test(url, protocol_value \\ nil) do
+      url
+      |> parse_url!()
+      |> gun_opts(https_protocols_from_env!(protocol_value))
+    end
   end
 
   def post(url, headers, body, timeout_ms, on_data)
@@ -82,24 +94,49 @@ defmodule AgentMachine.HTTPSSE do
   defp default_port!("http"), do: 80
   defp default_port!("https"), do: 443
 
-  defp gun_opts(%URI{scheme: "http"}) do
-    %{transport: :tcp, protocols: [:http]}
+  defp gun_opts(uri), do: gun_opts(uri, https_protocols())
+
+  defp gun_opts(%URI{scheme: "http"}, _https_protocols) do
+    base_gun_opts(:tcp, [:http])
   end
 
-  defp gun_opts(%URI{scheme: "https", host: host}) do
+  defp gun_opts(%URI{scheme: "https", host: host}, protocols) do
     hostname = String.to_charlist(host)
 
-    %{
-      transport: :tls,
-      protocols: https_protocols(),
-      tls_opts: [
-        server_name_indication: hostname,
-        verify: :verify_peer,
-        cacerts: :public_key.cacerts_get(),
-        customize_hostname_check: [
-          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-        ]
+    :tls
+    |> base_gun_opts(protocols)
+    |> Map.put(:tls_handshake_timeout, @tls_handshake_timeout_ms)
+    |> Map.put(
+      :tls_opts,
+      server_name_indication: hostname,
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
       ]
+    )
+  end
+
+  defp base_gun_opts(transport, protocols) do
+    %{
+      connect_timeout: @connect_timeout_ms,
+      domain_lookup_timeout: @domain_lookup_timeout_ms,
+      retry: 0,
+      transport: transport,
+      protocols: protocols,
+      tcp_opts: [
+        nodelay: true,
+        keepalive: true,
+        send_timeout: @tcp_send_timeout_ms,
+        send_timeout_close: true
+      ],
+      http_opts: %{
+        keepalive: @keepalive_ms
+      },
+      http2_opts: %{
+        keepalive: @keepalive_ms,
+        keepalive_tolerance: @http2_keepalive_tolerance
+      }
     }
   end
 
