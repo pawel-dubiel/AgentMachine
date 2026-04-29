@@ -2461,6 +2461,51 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 	}
 }
 
+func TestInitialModelUsesInstalledZeroShotRouterByDefault(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent-machine", "tui-config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	modelDir := defaultRouterModelDir(configPath)
+	writeRouterModelFilesForTest(t, modelDir)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if m.savedConfig.RouterMode != "local" {
+		t.Fatalf("expected local router default, got %#v", m.savedConfig)
+	}
+	if m.savedConfig.RouterModelDir != modelDir {
+		t.Fatalf("unexpected router model dir: %q", m.savedConfig.RouterModelDir)
+	}
+	if m.savedConfig.RouterTimeout != defaultRouterTimeoutMS ||
+		m.savedConfig.RouterConfidence != defaultRouterConfidence {
+		t.Fatalf("unexpected router defaults: %#v", m.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected config load, got %v", err)
+	}
+	if loaded.RouterMode != "" {
+		t.Fatalf("expected auto-detected router not to persist until user changes settings, got %#v", loaded)
+	}
+}
+
+func TestInitialModelLeavesRouterUnsetWhenZeroShotModelMissing(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent-machine", "tui-config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if m.savedConfig.RouterMode != "" || m.savedConfig.RouterModelDir != "" {
+		t.Fatalf("expected router to stay unset without installed model, got %#v", m.savedConfig)
+	}
+}
+
 func TestModelCommandOpensModelPicker(t *testing.T) {
 	m := model{
 		provider:    providerOpenRouter,
@@ -3222,6 +3267,23 @@ func textInputForTest() textinput.Model {
 	input := textinput.New()
 	input.Focus()
 	return input
+}
+
+func writeRouterModelFilesForTest(t *testing.T, modelDir string) {
+	t.Helper()
+
+	for _, path := range []string{
+		filepath.Join(modelDir, "tokenizer.json"),
+		filepath.Join(modelDir, "config.json"),
+		filepath.Join(modelDir, "onnx", "model_quantized.onnx"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("expected router model directory creation to succeed, got %v", err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatalf("expected router model file write to succeed, got %v", err)
+		}
+	}
 }
 
 func TestParseSummary(t *testing.T) {

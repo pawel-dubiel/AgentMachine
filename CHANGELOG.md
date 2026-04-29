@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Kept router details out of the README and taught the TUI to use the installed
+  standard zero-shot router model automatically when its files are present.
 - Rewrote the README as a product-oriented overview with concise setup,
   feature, safety, tooling, MCP, skills, and observability sections.
 - Prevented local router false-positive web-browse classifications such as

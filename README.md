@@ -23,7 +23,7 @@ were available, which agents ran, and what changed.
 - Use MCP servers, including a managed Playwright preset for browser work.
 - Load reusable skills that add task-specific instructions and references.
 - Route simple requests through a fast path and larger tasks through agentic
-  planner/worker flows.
+  planner/worker flows, using a local zero-shot intent model when installed.
 - Write JSONL logs for runs and TUI sessions so behavior can be debugged later.
 - Redact sensitive-looking values from logs, summaries, and tool results.
 
@@ -58,17 +58,19 @@ for the run.
 
 ## Core Concepts
 
-**Progressive auto mode**
+**Smart auto mode**
 
-Normal TUI messages use `auto`. Auto is not a single workflow; it is a routing
-policy. It can select:
+Normal TUI messages use smart automatic routing. The app chooses a small,
+practical path for each request:
 
-- `chat` for normal conversation.
-- `tool` for fast read-only tool use.
-- `agentic` for delegated, write, code-edit, test, or browser work.
+- plain chat for normal conversation.
+- fast read-only tool use for inspection and lookup.
+- agentic planner/worker execution for delegated, write, code-edit, test, or
+  browser work.
 
-The public CLI also supports explicit `chat`, `basic`, `agentic`, and `auto`
-requests for testing and automation.
+When the local zero-shot classifier model is installed in the standard TUI
+model directory, the TUI uses it for intent detection. If it is not installed,
+the runtime still stays conservative and explicit.
 
 **Tools are capabilities, not defaults**
 
@@ -163,7 +165,6 @@ Useful first commands:
 /key <api-key>
 /models reload
 /model
-/router-status
 /tools off
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
@@ -188,7 +189,7 @@ Session logs are written under the same config area in `logs/*.jsonl`.
 
 AgentMachine currently supports:
 
-- `echo`: local provider for smoke tests and deterministic examples.
+- `echo`: local provider for smoke tests and examples.
 - `openai`: OpenAI Responses API.
 - `openrouter`: OpenRouter Chat Completions API.
 
@@ -345,30 +346,6 @@ mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skill
 ```
 
 More detail is in [docs/skills.md](docs/skills.md).
-
-## Local Router Classifier
-
-Auto routing can use a local multilingual zero-shot classifier. This is useful
-when prompts are not always in English or when deterministic keyword routing is
-too limited.
-
-Install the model files explicitly:
-
-```sh
-mix agent_machine.router_model.install --target ./router-model
-```
-
-Then enable it in the TUI:
-
-```text
-/router local ./router-model
-/router-timeout 5000
-/router-confidence 0.75
-```
-
-The classifier predicts intent only. It never grants permissions, never exposes
-tools by itself, and is guarded by deterministic capability checks for stricter
-read/write/test/browser cases.
 
 ## Reliability And Observability
 

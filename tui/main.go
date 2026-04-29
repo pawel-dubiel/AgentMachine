@@ -166,6 +166,7 @@ const (
 	defaultHTTPTimeoutMS       = "120000"
 	defaultRouterTimeoutMS     = "5000"
 	defaultRouterConfidence    = "0.75"
+	defaultRouterModelDirName  = "mdeberta-v3-base-xnli-multilingual-nli-2mil7"
 	liveEventWindowSize        = 8
 )
 
@@ -329,6 +330,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err != nil {
 		return model{}, err
 	}
+	applyInstalledRouterModelDefault(&savedConfig, configPath)
 	if err := applyStartupOptions(&savedConfig, startup); err != nil {
 		return model{}, err
 	}
