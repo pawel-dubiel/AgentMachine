@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed JSON decoding for exponent-only numbers like `8e-7` returned by some
+  OpenRouter models.
 - Tuned Gun SSE client options with explicit DNS/connect/TLS timeouts,
   disabled hidden retries, TCP no-delay/keepalive, and HTTP/2 keepalive.
 - Switched provider SSE streaming from `:httpc` to Gun with HTTP/2 preferred

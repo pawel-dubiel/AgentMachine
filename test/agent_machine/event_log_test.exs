@@ -17,6 +17,12 @@ defmodule AgentMachine.EventLogTest do
     path =
       Path.join(System.tmp_dir!(), "agent-machine-event-log-#{System.unique_integer()}.jsonl")
 
+    File.rm(path)
+
+    on_exit(fn ->
+      File.rm(path)
+    end)
+
     EventLog.configure!(path, %{session_id: "session-1"})
 
     EventLog.write_event(%{

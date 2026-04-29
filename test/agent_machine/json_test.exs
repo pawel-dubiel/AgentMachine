@@ -32,6 +32,21 @@ defmodule AgentMachine.JSONTest do
     assert %{"output" => [%{"content" => [%{"text" => "done"}]}]} = JSON.decode!(payload)
   end
 
+  test "decodes JSON numbers with exponent notation" do
+    assert JSON.decode!(~S({"small":8e-7,"large":1E6,"negative":-2e+3})) == %{
+             "small" => 8.0e-7,
+             "large" => 1.0e6,
+             "negative" => -2.0e3
+           }
+
+    assert JSON.decode!(~S([0e0,1e-7,-3E+2,1.25e2])) == [
+             0.0e0,
+             1.0e-7,
+             -3.0e2,
+             1.25e2
+           ]
+  end
+
   test "decodes escaped UTF-16 surrogate pairs" do
     assert JSON.decode!(~S({"emoji":"\uD83C\uDF26"})) == %{"emoji" => <<0x1F326::utf8>>}
   end

@@ -179,16 +179,28 @@ defmodule AgentMachine.JSON do
         rest = binary_part(binary, byte_size(number), byte_size(binary) - byte_size(number))
 
         value =
-          if String.contains?(number, [".", "e", "E"]) do
-            String.to_float(number)
-          else
-            String.to_integer(number)
+          cond do
+            String.contains?(number, ".") ->
+              String.to_float(number)
+
+            String.contains?(number, ["e", "E"]) ->
+              number |> exponent_number_to_float_string() |> String.to_float()
+
+            true ->
+              String.to_integer(number)
           end
 
         {value, rest}
 
       _ ->
         raise ArgumentError, "invalid JSON value: #{inspect(binary)}"
+    end
+  end
+
+  defp exponent_number_to_float_string(number) do
+    case Regex.run(~r/^(-?(?:0|[1-9]\d*))([eE][+-]?\d+)$/, number) do
+      [_, coefficient, exponent] -> coefficient <> ".0" <> exponent
+      _other -> number
     end
   end
 
