@@ -165,7 +165,7 @@ const (
 	defaultAgenticSteps        = "6"
 	defaultHTTPTimeoutMS       = "120000"
 	defaultRouterTimeoutMS     = "5000"
-	defaultRouterConfidence    = "0.55"
+	defaultRouterConfidence    = "0.75"
 	liveEventWindowSize        = 8
 )
 

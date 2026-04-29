@@ -259,13 +259,15 @@ mix agent_machine.run \
   --router-mode local \
   --router-model-dir ./router-model \
   --router-timeout-ms 5000 \
-  --router-confidence-threshold 0.55 \
+  --router-confidence-threshold 0.75 \
   "napraw ten skrypt"
 ```
 
 The classifier predicts only `classified_intent` and `confidence`. It never
 grants permissions or exposes tools directly; missing read/write/test
-capabilities still fail fast before any model workflow starts.
+capabilities still fail fast before any model workflow starts. Local classifier
+results are also guarded by deterministic capability rules when those rules
+recognize a stricter local read/write/test/web/time intent.
 
 Intent routing is intentionally conservative:
 
@@ -883,7 +885,8 @@ values are:
 - `--max-steps`.
 - `--max-attempts`.
 - `--router-mode local` requires `--router-model-dir`, `--router-timeout-ms`,
-  and `--router-confidence-threshold`; deterministic routing is the default.
+  and `--router-confidence-threshold`; deterministic routing remains the CLI
+  default unless a client such as the TUI passes explicit local router settings.
 - `--event-session-id` requires `--event-log-file`.
 - `--model`, `--http-timeout-ms`, pricing, and API key for remote providers.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` when tools are enabled.
