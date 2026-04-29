@@ -546,6 +546,9 @@ defmodule AgentMachine.ClientRunnerTest do
     assert "run_started" in event_types
     assert "agent_started" in event_types
 
+    route_event = Enum.find(decoded, &(get_in(&1, ["event", "type"]) == "workflow_routed"))
+    assert get_in(route_event, ["event", "tools_exposed"]) == false
+
     assert Enum.any?(
              decoded,
              &(&1["type"] == "summary" and &1["summary"]["run_id"] == summary.run_id)

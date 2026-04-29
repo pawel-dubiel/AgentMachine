@@ -50,6 +50,7 @@ defmodule AgentMachine.EventLogTest do
              "event" => %{
                "type" => "workflow_routed",
                "selected" => "basic",
+               "tools_exposed" => true,
                "summary" => "Workflow routed to basic"
              }
            } = JSON.decode!(Enum.at(lines, 1))

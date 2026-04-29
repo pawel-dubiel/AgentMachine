@@ -263,6 +263,8 @@ defmodule AgentMachine.ClientRunner do
 
   defp summarize_event_value(%DateTime{} = at), do: DateTime.to_iso8601(at)
 
+  defp summarize_event_value(value) when is_boolean(value), do: value
+
   defp summarize_event_value(value) when is_atom(value) and not is_nil(value) do
     Atom.to_string(value)
   end

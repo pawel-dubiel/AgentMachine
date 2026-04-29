@@ -121,7 +121,8 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 
 - For TUI debugging, inspect JSONL logs under
   `$HOME/Library/Application Support/agent-machine/logs/`.
-- TUI per-run stream logs use `run-*.jsonl`; session-level collector logs use
+- TUI per-run stream logs use timestamp-only names such as
+  `20260429T154940.063674000Z.jsonl`; session-level collector logs use
   `session-*.jsonl`.
 - The TUI setup screen shows the exact `session log` path for the active
   session.

@@ -133,6 +133,8 @@ defmodule AgentMachine.EventLog do
 
   defp normalize_json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
 
+  defp normalize_json_value(value) when is_boolean(value), do: value
+
   defp normalize_json_value(value) when is_atom(value) and not is_nil(value) do
     Atom.to_string(value)
   end
