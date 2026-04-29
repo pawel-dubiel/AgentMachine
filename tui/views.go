@@ -15,7 +15,7 @@ func (m model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("AgentMachine TUI"))
 	b.WriteString("\n")
-	b.WriteString(hintStyle.Render(m.statusLine()))
+	b.WriteString(hintStyle.Render(wrapText(m.statusLine(), m.viewWidth())))
 	b.WriteString("\n\n")
 
 	if m.modelPickerOpen {
@@ -95,13 +95,7 @@ func (m model) chatView() string {
 
 	var b strings.Builder
 	for _, message := range m.messages[start:] {
-		b.WriteString(labelStyle.Render(message.Role))
-		b.WriteString(": ")
-		if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
-			b.WriteString(errorStyle.Render(message.Text))
-		} else {
-			b.WriteString(message.Text)
-		}
+		b.WriteString(m.renderChatMessage(message))
 		b.WriteString("\n\n")
 	}
 	if m.running {
@@ -127,6 +121,108 @@ func (m model) chatView() string {
 		b.WriteString(m.queueView())
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) renderChatMessage(message chatMessage) string {
+	prefix := message.Role + ": "
+	width := m.viewWidth() - len([]rune(prefix))
+	if width < 20 {
+		width = 20
+	}
+
+	wrapped := wrapText(message.Text, width)
+	lines := strings.Split(wrapped, "\n")
+	indent := strings.Repeat(" ", len([]rune(prefix)))
+	renderText := func(text string) string {
+		if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
+			return errorStyle.Render(text)
+		}
+		return text
+	}
+
+	var b strings.Builder
+	b.WriteString(labelStyle.Render(message.Role))
+	b.WriteString(": ")
+	if len(lines) > 0 {
+		b.WriteString(renderText(lines[0]))
+	}
+	for _, line := range lines[1:] {
+		b.WriteString("\n")
+		b.WriteString(indent)
+		b.WriteString(renderText(line))
+	}
+	return b.String()
+}
+
+func (m model) viewWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
+func wrapText(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapLine(line, width)...)
+	}
+	return strings.Join(wrapped, "\n")
+}
+
+func wrapLine(line string, width int) []string {
+	if line == "" {
+		return []string{""}
+	}
+
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	lines := make([]string, 0, len(words))
+	current := ""
+	for _, word := range words {
+		for runeLen(word) > width {
+			head, tail := splitRunes(word, width)
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			lines = append(lines, head)
+			word = tail
+		}
+
+		if current == "" {
+			current = word
+			continue
+		}
+
+		if runeLen(current)+1+runeLen(word) <= width {
+			current += " " + word
+		} else {
+			lines = append(lines, current)
+			current = word
+		}
+	}
+
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+func runeLen(text string) int {
+	return len([]rune(text))
+}
+
+func splitRunes(text string, width int) (string, string) {
+	runes := []rune(text)
+	return string(runes[:width]), string(runes[width:])
 }
 
 func (m model) pendingToolPermissionView() string {

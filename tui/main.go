@@ -299,6 +299,8 @@ type model struct {
 	pendingToolChoice  int
 	eventSessionID     string
 	eventLogFile       string
+	width              int
+	height             int
 }
 
 var (
@@ -449,6 +451,14 @@ func streamTickCommand() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		if msg.Width > 4 {
+			m.input.Width = msg.Width - 4
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit

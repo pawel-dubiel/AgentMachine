@@ -772,6 +772,49 @@ func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
 	}
 }
 
+func TestChatViewWrapsLongSystemMessages(t *testing.T) {
+	m := model{
+		width: 44,
+		messages: []chatMessage{
+			{
+				Role: "system",
+				Text: "running OpenRouter / openai/gpt-5.1-codex-mini / router local dir=/Users/pawel/Library/Application Support/agent-machine/router-models/mdeberta-v3-base-xnli-multilingual-nli-2mil7",
+			},
+		},
+	}
+
+	view := m.chatView()
+
+	if !strings.Contains(view, "\n        ") {
+		t.Fatalf("expected wrapped continuation line with role indentation, got %q", view)
+	}
+	if strings.Contains(view, "mdeberta-v3-base-xnli-multilingual-nli-2mil7\n\n") {
+		t.Fatalf("expected long model path to wrap before the message ended, got %q", view)
+	}
+}
+
+func TestWrapTextBreaksLongWords(t *testing.T) {
+	wrapped := wrapText("abcdef ghijkl", 4)
+
+	if wrapped != "abcd\nef\nghij\nkl" {
+		t.Fatalf("unexpected wrapped text: %q", wrapped)
+	}
+}
+
+func TestWindowSizeUpdatesInputAndWrapWidth(t *testing.T) {
+	m := model{}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 72, Height: 20})
+	result := updated.(model)
+
+	if result.width != 72 || result.height != 20 {
+		t.Fatalf("expected window dimensions to be stored, got width=%d height=%d", result.width, result.height)
+	}
+	if result.input.Width != 68 {
+		t.Fatalf("expected input width to follow terminal width, got %d", result.input.Width)
+	}
+}
+
 func TestAgentDetailRendersPlannerDecision(t *testing.T) {
 	m := model{
 		selectedAgent: "planner",
