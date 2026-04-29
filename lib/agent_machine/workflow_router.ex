@@ -127,16 +127,27 @@ defmodule AgentMachine.WorkflowRouter do
   defp route_auto_intent(input, :time, classified), do: route_time_intent(input, classified)
 
   defp route_auto_intent(input, :web_browse, classified) do
-    require_browser_mcp_capability!(input)
+    if local_web_browse_without_target?(input, classified) do
+      route(
+        :auto,
+        :chat,
+        "local_classifier_web_browse_without_web_target",
+        :none,
+        false,
+        classifier_meta(classified)
+      )
+    else
+      require_browser_mcp_capability!(input)
 
-    route(
-      :auto,
-      :agentic,
-      "web_browse_intent_with_mcp_browser",
-      :web_browse,
-      true,
-      classifier_meta(classified)
-    )
+      route(
+        :auto,
+        :agentic,
+        "web_browse_intent_with_mcp_browser",
+        :web_browse,
+        true,
+        classifier_meta(classified)
+      )
+    end
   end
 
   defp route_auto_intent(input, :tool_use, classified) do
@@ -231,6 +242,7 @@ defmodule AgentMachine.WorkflowRouter do
       confidence_threshold: input.router_confidence_threshold
     })
     |> validate_classifier_result!()
+    |> maybe_apply_deterministic_guard(input)
   end
 
   defp classify_intent!(%__MODULE__{router_mode: mode}) do
@@ -299,6 +311,20 @@ defmodule AgentMachine.WorkflowRouter do
           "local router classifier must return a map, got: #{inspect(result)}"
   end
 
+  defp maybe_apply_deterministic_guard(classified, input) do
+    case deterministic_intent(input) do
+      :none ->
+        classified
+
+      intent ->
+        %{
+          classified
+          | intent: intent,
+            reason: "local_classifier_guarded_by_deterministic_#{intent}_intent"
+        }
+    end
+  end
+
   defp validate_classifier_intent!(intent, _field) when intent in @valid_intents, do: :ok
 
   defp validate_classifier_intent!(intent, field) do
@@ -341,6 +367,16 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp none_reason(%{classifier: "local", reason: reason}) when is_binary(reason), do: reason
   defp none_reason(_classified), do: "no_tool_or_mutation_intent_detected"
+
+  defp local_web_browse_without_target?(input, %{classifier: "local"}) do
+    input
+    |> effective_text()
+    |> normalize()
+    |> web_browse_target?()
+    |> Kernel.not()
+  end
+
+  defp local_web_browse_without_target?(_input, _classified), do: false
 
   defp effective_text(%__MODULE__{task: task, pending_action: pending_action})
        when is_binary(pending_action) do
@@ -482,19 +518,25 @@ defmodule AgentMachine.WorkflowRouter do
         "inspect web"
       ])
 
-    web_target? =
-      contains_any?(normalized, [
-        "website",
-        "webpage",
-        "web page",
-        "url",
-        "browser",
-        "playwright",
-        "http",
-        "www."
-      ]) or normalized =~ ~r/\b[a-z0-9-]+\.(com|org|net|io|dev|app|pl|co|ai)\b/
+    web_action? and web_browse_target?(normalized)
+  end
 
-    web_action? and web_target?
+  defp web_browse_target?(normalized) do
+    contains_any?(normalized, [
+      "website",
+      "webpage",
+      "web page",
+      "url",
+      "browser",
+      "playwright",
+      "http",
+      "www.",
+      "strona",
+      "strone",
+      "stronę",
+      "przegladarka",
+      "przeglądarka"
+    ]) or normalized =~ ~r/\b[a-z0-9-]+\.(com|org|net|io|dev|app|pl|co|ai)\b/
   end
 
   defp mutation_intent?(text) do

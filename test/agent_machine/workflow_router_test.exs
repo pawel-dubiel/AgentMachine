@@ -29,6 +29,32 @@ defmodule AgentMachine.WorkflowRouterTest do
     end
   end
 
+  defmodule LocalToolUseClassifier do
+    def classify!(_input) do
+      %{
+        intent: :tool_use,
+        classified_intent: :tool_use,
+        classifier: "local",
+        classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+        confidence: 0.58,
+        reason: "test_classifier"
+      }
+    end
+  end
+
+  defmodule LocalWebBrowseClassifier do
+    def classify!(_input) do
+      %{
+        intent: :web_browse,
+        classified_intent: :web_browse,
+        classifier: "local",
+        classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+        confidence: 0.92,
+        reason: "test_classifier"
+      }
+    end
+  end
+
   defmodule LocalMalformedClassifier do
     def classify!(_input), do: %{intent: :not_real}
   end
@@ -429,6 +455,99 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.classifier == "local"
     assert route.classified_intent == "code_mutation"
     assert route.reason == "local_classifier_below_confidence_threshold"
+  end
+
+  test "local router uses deterministic guard when classifier is low confidence" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "create hello.md",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:local_files],
+        approval_mode: :auto_approved_safe,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalLowConfidenceClassifier
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "file_mutation"
+    assert route.classifier == "local"
+    assert route.classified_intent == "code_mutation"
+  end
+
+  test "local router deterministic guard prevents mutation from becoming generic tool use" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "in home folder create tt100 dir and create nextjs project",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:code_edit],
+        approval_mode: :auto_approved_safe,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalToolUseClassifier
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "code_mutation"
+    assert route.classifier == "local"
+    assert route.classified_intent == "tool_use"
+  end
+
+  test "local router does not escalate web browse without a web target" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "hello",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :read_only,
+        test_commands: [],
+        mcp_config: playwright_mcp_config(),
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalWebBrowseClassifier
+      })
+
+    assert route.selected == "chat"
+    assert route.tool_intent == "none"
+    assert route.reason == "local_classifier_web_browse_without_web_target"
+    assert route.classifier == "local"
+    assert route.classified_intent == "web_browse"
+  end
+
+  test "local router allows web browse when a web target is present" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "sprawdz example.com",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :full_access,
+        test_commands: [],
+        mcp_config: playwright_mcp_config(),
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalWebBrowseClassifier
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "web_browse"
   end
 
   test "malformed local classifier output fails fast" do
