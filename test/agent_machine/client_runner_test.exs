@@ -4,7 +4,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
   alias AgentMachine.{AgentResult, ClientRunner, EventLog, JSON, RunSpec, UsageLedger}
   alias AgentMachine.Tools.ApplyEdits
-  alias AgentMachine.Workflows.{Agentic, Basic, Chat}
+  alias AgentMachine.Workflows.{Agentic, Basic, Chat, Tool}
   alias Mix.Tasks.AgentMachine.{Rollback, Run}
 
   setup do
@@ -123,6 +123,34 @@ defmodule AgentMachine.ClientRunnerTest do
     assert assistant.metadata == %{agent_machine_disable_tools: true}
     refute Keyword.has_key?(opts, :finalizer)
     refute Keyword.has_key?(opts, :allowed_tools)
+  end
+
+  test "builds the internal tool workflow with read-only time tools" do
+    spec =
+      RunSpec.new!(%{
+        task: "what time is it?",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        tool_harnesses: [:code_edit, :time],
+        tool_root: "/tmp/agent-machine",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    {[assistant], opts} = Tool.build!(spec, %{tool_intent: "time"})
+
+    assert assistant.id == "assistant"
+    refute Keyword.has_key?(opts, :finalizer)
+    assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.Now]
+
+    assert %AgentMachine.ToolPolicy{harness: [:code_edit, :time], permissions: permissions} =
+             Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.equal?(permissions, MapSet.new([:time_read]))
   end
 
   test "builds workflow tool options from an explicit harness" do
@@ -509,9 +537,36 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.workflow_route.selected == "basic"
-    assert summary.workflow_route.reason == "time_intent_with_auto_time_harness"
-    assert Map.keys(summary.results) |> Enum.sort() == ["assistant", "finalizer"]
+    assert summary.workflow_route.selected == "tool"
+    assert summary.workflow_route.reason == "time_intent_with_read_only_tool"
+    assert Map.keys(summary.results) == ["assistant"]
+    refute Map.has_key?(summary.results, "finalizer")
+    assert summary.final_output =~ "agent assistant: what time is it?"
+  end
+
+  test "runs auto read-only file intent through tool workflow without finalizer" do
+    root = Path.join(System.tmp_dir!(), "agent-machine-auto-read-#{System.unique_integer()}")
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "read README.md",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        tool_harness: :local_files,
+        tool_root: root,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert summary.status == "completed"
+    assert summary.workflow_route.selected == "tool"
+    assert summary.workflow_route.tool_intent == "file_read"
+    assert Map.keys(summary.results) == ["assistant"]
   end
 
   test "collector records workflow route, runtime events, and final summary" do
@@ -1096,8 +1151,9 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_receive {:mix_shell, :info, [json]}
 
     decoded = JSON.decode!(json)
-    assert decoded["workflow_route"]["selected"] == "basic"
-    assert decoded["workflow_route"]["reason"] == "time_intent_with_time_harness"
+    assert decoded["workflow_route"]["selected"] == "tool"
+    assert decoded["workflow_route"]["reason"] == "time_intent_with_read_only_tool"
+    assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
   test "mix agent_machine.run accepts code-edit tool harness with explicit root budget and timeout" do

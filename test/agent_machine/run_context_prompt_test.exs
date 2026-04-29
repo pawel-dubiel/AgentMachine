@@ -3,8 +3,63 @@ defmodule AgentMachine.RunContextPromptTest do
 
   alias AgentMachine.{JSON, RunContextPrompt}
 
-  test "returns empty text for empty run context" do
-    assert RunContextPrompt.text(run_context: %{results: %{}, artifacts: %{}}) == ""
+  test "includes runtime facts for empty run context" do
+    now = ~U[2026-04-29 16:27:30Z]
+
+    text =
+      RunContextPrompt.text(
+        run_context: %{results: %{}, artifacts: %{}},
+        runtime_facts: RunContextPrompt.runtime_facts(now: now)
+      )
+
+    assert %{
+             "runtime" => %{
+               "current_utc" => "2026-04-29T16:27:30Z",
+               "utc_date" => "2026-04-29",
+               "local_timezone" => timezone,
+               "instruction" => instruction
+             },
+             "results" => %{},
+             "artifacts" => %{}
+           } = JSON.decode!(text)
+
+    assert is_binary(timezone)
+    assert instruction =~ "Do not invent dates or times"
+  end
+
+  test "can omit runtime facts for callers that need an empty context" do
+    assert RunContextPrompt.text(
+             run_context: %{results: %{}, artifacts: %{}},
+             runtime_facts: false
+           ) ==
+             ""
+  end
+
+  test "includes workflow route in runtime facts" do
+    text =
+      RunContextPrompt.text(
+        run_context: %{results: %{}, artifacts: %{}},
+        runtime_facts:
+          RunContextPrompt.runtime_facts(
+            now: ~U[2026-04-29 16:27:30Z],
+            workflow_route: %{
+              requested: "auto",
+              selected: "tool",
+              reason: "time_intent_with_read_only_tool",
+              tool_intent: "time"
+            }
+          )
+      )
+
+    assert %{
+             "runtime" => %{
+               "workflow_route" => %{
+                 "requested" => "auto",
+                 "selected" => "tool",
+                 "tool_intent" => "time"
+               }
+             }
+           } = JSON.decode!(text)
   end
 
   test "includes explicit tool context when tools are available" do

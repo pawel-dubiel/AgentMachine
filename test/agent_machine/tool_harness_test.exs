@@ -1,7 +1,7 @@
 defmodule AgentMachine.ToolHarnessTest do
   use ExUnit.Case, async: true
 
-  alias AgentMachine.ToolHarness
+  alias AgentMachine.{MCP.Config, ToolHarness}
 
   test "builds OpenAI tool definitions from allowed tools" do
     body =
@@ -118,6 +118,60 @@ defmodule AgentMachine.ToolHarnessTest do
                :network
              ]
     end
+  end
+
+  test "read-only time intent exposes only the clock tool" do
+    assert ToolHarness.read_only_many!([:code_edit, :time], [], :time) == [
+             AgentMachine.Tools.Now
+           ]
+
+    policy = ToolHarness.read_only_policy_many!([:code_edit, :time], [], :time)
+    assert MapSet.equal?(policy.permissions, MapSet.new([:time_read]))
+  end
+
+  test "read-only file intent exposes only filesystem read tools for local-files" do
+    assert ToolHarness.read_only_many!([:local_files], [], :file_read) == [
+             AgentMachine.Tools.FileInfo,
+             AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.SearchFiles
+           ]
+  end
+
+  test "read-only file intent exposes only filesystem read tools for code-edit" do
+    assert ToolHarness.read_only_many!([:code_edit], [], :file_read) == [
+             AgentMachine.Tools.FileInfo,
+             AgentMachine.Tools.ListFiles,
+             AgentMachine.Tools.ReadFile,
+             AgentMachine.Tools.SearchFiles
+           ]
+  end
+
+  test "read-only tool intent includes only read-risk MCP tools" do
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "docs",
+            "transport" => "stdio",
+            "command" => "mcp-docs",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"},
+              %{"name" => "write", "permission" => "mcp_docs_write", "risk" => "write"}
+            ]
+          }
+        ]
+      })
+
+    names =
+      [:mcp]
+      |> ToolHarness.read_only_many!([mcp_config: config], :tool_use)
+      |> ToolHarness.definitions!()
+      |> Enum.map(& &1.name)
+
+    assert names == ["mcp_docs_search"]
   end
 
   test "builds OpenRouter tool definitions from allowed tools" do

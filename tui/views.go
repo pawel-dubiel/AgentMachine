@@ -102,12 +102,8 @@ func (m model) chatView() string {
 		b.WriteString("\n\n")
 	}
 	if m.running {
-		if strings.TrimSpace(m.liveAssistant) != "" {
-			b.WriteString(labelStyle.Render("assistant"))
-			b.WriteString(": ")
-			b.WriteString(m.liveAssistant)
-			b.WriteString("\n\n")
-		}
+		b.WriteString(m.thinkingView())
+		b.WriteString("\n\n")
 		b.WriteString(m.liveActivityView())
 		b.WriteString("\n")
 	}
@@ -118,6 +114,11 @@ func (m model) chatView() string {
 		b.WriteString(m.queueView())
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) thinkingView() string {
+	frame := streamFrames[m.streamFrame%len(streamFrames)]
+	return hintStyle.Render("thinking " + frame)
 }
 
 func (m model) queueView() string {
@@ -251,7 +252,7 @@ func (m model) setupView() string {
 
 	return strings.Join([]string{
 		labelStyle.Render("Setup"),
-		"mode: progressive auto",
+		"mode: progressive auto (chat/tool/basic/agentic)",
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
@@ -536,6 +537,7 @@ func modelListText(models []modelOption, selected int) string {
 func helpText() string {
 	return strings.Join([]string{
 		labelStyle.Render("Help"),
+		"Progressive auto can select chat, read-only tool, basic, or agentic per run.",
 		"",
 		"Keys:",
 		"Tab / Shift+Tab: switch views",

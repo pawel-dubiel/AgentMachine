@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Hide `assistant_delta` event rows in the TUI activity feed and show a content-free thinking animation while responses stream.
+- Added compact runtime facts to provider prompts so models see current UTC date/time and selected workflow route without needing a tool call.
+- Added an internal read-only `tool` route for `auto` so time and read-only tool requests skip the `basic` finalizer while exposing only read-risk tools.
 - Documented the TUI run and session log locations in `AGENTS.md` for future debugging.
 - Added a single Elixir event log collector for session-level JSONL logs, including workflow routing, runtime events, tool calls, agent activity, skills, and final summaries.
 - Auto-add the safe `time` harness for `auto` time/date intent when another tool harness is already active, so time questions can use the clock tool without switching saved tools.

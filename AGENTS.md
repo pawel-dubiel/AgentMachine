@@ -138,6 +138,9 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - `AgentMachine.DelegationResponse` parses opt-in structured planner output into delegated worker specs.
 - `AgentMachine.RunContextPrompt` formats prior results and artifacts for remote provider prompts.
+- `AgentMachine.RunContextPrompt` also includes compact runtime facts such as
+  current UTC date/time, local timezone, and workflow route; keep these facts
+  factual and small.
 - `AgentMachine.ToolHarness` maps explicit tool harnesses to allowed tools and
   adapts tool definitions/calls for provider-native tool calling.
 - Providers implement `AgentMachine.Provider.complete/2`.
@@ -150,7 +153,10 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Agents may return `tool_calls` for explicit tool execution.
 - Initial agents may use `depends_on` for dependency-ordered execution.
 - Runs may use `finalizer` to synthesize a final result after all other work.
-- Runs choose an explicit client `workflow`; `basic` starts an assistant plus finalizer, and `agentic` starts a planner that may delegate workers plus finalizer.
+- Runs choose an explicit client `workflow`; `basic` starts an assistant plus
+  finalizer, `agentic` starts a planner that may delegate workers plus
+  finalizer, and `auto` may internally select a no-finalizer read-only `tool`
+  path that is not accepted as a public workflow value.
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.

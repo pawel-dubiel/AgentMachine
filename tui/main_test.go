@@ -693,6 +693,43 @@ func TestAgentDetailRendersToolEvents(t *testing.T) {
 	}
 }
 
+func TestEventDisplayLineDoesNotRenderAssistantDeltaContent(t *testing.T) {
+	line := eventDisplayLine(eventSummary{
+		Type:    "assistant_delta",
+		AgentID: "builder1",
+		Summary: "builder1 streamed text",
+		Delta:   "hello\nfrom the streamed answer",
+	})
+
+	if !strings.Contains(line, "builder1 streamed text") {
+		t.Fatalf("expected streamed text summary, got %q", line)
+	}
+	if strings.Contains(line, "hello") || strings.Contains(line, "streamed answer") {
+		t.Fatalf("expected streamed content to stay hidden, got %q", line)
+	}
+}
+
+func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
+	m := model{
+		running:       true,
+		streamFrame:   1,
+		liveAssistant: "hidden streamed content",
+		messages:      []chatMessage{{Role: "user", Text: "hello"}},
+		eventLog: []eventSummary{
+			{Type: "provider_request_started", Summary: "assistant sent provider request"},
+		},
+	}
+
+	view := m.chatView()
+
+	if !strings.Contains(view, "thinking /") {
+		t.Fatalf("expected thinking animation, got %q", view)
+	}
+	if strings.Contains(view, "hidden streamed content") {
+		t.Fatalf("expected streamed text to stay hidden, got %q", view)
+	}
+}
+
 func TestAgentDetailRendersPlannerDecision(t *testing.T) {
 	m := model{
 		selectedAgent: "planner",
@@ -723,10 +760,10 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 			Skills: []skillSummary{{Name: "docs-helper"}},
 			WorkflowRoute: workflowRoute{
 				Requested:    "auto",
-				Selected:     "chat",
-				Reason:       "no_tool_or_mutation_intent_detected",
-				ToolIntent:   "none",
-				ToolsExposed: false,
+				Selected:     "tool",
+				Reason:       "time_intent_with_read_only_tool",
+				ToolIntent:   "time",
+				ToolsExposed: true,
 			},
 		},
 		agents: map[string]agentState{
@@ -739,10 +776,10 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 	if !strings.Contains(view, "Skills: docs-helper") {
 		t.Fatalf("expected selected skills in agents view, got %q", view)
 	}
-	if !strings.Contains(view, "Workflow route: requested=auto selected=chat intent=none tools=false") {
+	if !strings.Contains(view, "Workflow route: requested=auto selected=tool intent=time tools=true") {
 		t.Fatalf("expected workflow route in agents view, got %q", view)
 	}
-	if !strings.Contains(m.statusLine(), "route=auto->chat") {
+	if !strings.Contains(m.statusLine(), "route=auto->tool") {
 		t.Fatalf("expected workflow route in status line, got %q", m.statusLine())
 	}
 }
@@ -1070,6 +1107,9 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	if !strings.Contains(setup, "mode: progressive auto") {
 		t.Fatalf("expected progressive auto mode in setup view, got %q", setup)
 	}
+	if !strings.Contains(setup, "chat/tool/basic/agentic") {
+		t.Fatalf("expected setup view to describe selected routes, got %q", setup)
+	}
 	if strings.Contains(setup, "/workflow") || strings.Contains(setup, "workflow:") {
 		t.Fatalf("expected setup view to omit workflow selection, got %q", setup)
 	}
@@ -1077,6 +1117,9 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	help := helpText()
 	if strings.Contains(help, "/workflow") {
 		t.Fatalf("expected help to omit workflow command, got %q", help)
+	}
+	if !strings.Contains(help, "read-only tool") {
+		t.Fatalf("expected help to mention read-only tool route, got %q", help)
 	}
 
 	status := m.statusLine()
@@ -2202,7 +2245,7 @@ func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	}
 }
 
-func TestJSONLAssistantDeltaUpdatesLiveDraftAndEvents(t *testing.T) {
+func TestJSONLAssistantDeltaUpdatesDraftWithoutEventLogNoise(t *testing.T) {
 	m := model{agents: map[string]agentState{}, eventAutoScroll: true}
 
 	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"assistant_delta","run_id":"run-1","agent_id":"assistant","attempt":1,"delta":"hel","summary":"assistant streamed text","details":{"attempt":1},"at":"2026-04-25T10:00:00Z"}}`)
@@ -2214,8 +2257,11 @@ func TestJSONLAssistantDeltaUpdatesLiveDraftAndEvents(t *testing.T) {
 	if updated.agents["assistant"].Output != "hello" {
 		t.Fatalf("expected agent output draft, got %#v", updated.agents["assistant"])
 	}
-	if len(updated.eventLog) != 2 {
-		t.Fatalf("expected event log entries, got %d", len(updated.eventLog))
+	if len(updated.eventLog) != 0 {
+		t.Fatalf("expected assistant deltas to stay out of event log, got %d", len(updated.eventLog))
+	}
+	if len(updated.agents["assistant"].Events) != 0 {
+		t.Fatalf("expected assistant delta events to stay out of agent event list, got %#v", updated.agents["assistant"].Events)
 	}
 }
 

@@ -9,16 +9,31 @@ defmodule AgentMachine.RunContextPrompt do
     artifacts = Map.fetch!(context, :artifacts)
     tools = tool_context(opts)
     skills = skills_context(opts)
+    runtime = runtime_context(opts)
 
-    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) and
+    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) and is_nil(runtime) and
          empty_skills?(skills) do
       ""
     else
       %{results: json_value(results), artifacts: json_value(artifacts)}
+      |> maybe_put_runtime(runtime)
       |> maybe_put_tools(tools)
       |> maybe_put_skills(skills)
       |> JSON.encode!()
     end
+  end
+
+  def runtime_facts(opts \\ []) when is_list(opts) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    route = Keyword.get(opts, :workflow_route)
+
+    %{
+      current_utc: DateTime.to_iso8601(now),
+      utc_date: Date.to_iso8601(DateTime.to_date(now)),
+      local_timezone: local_timezone(),
+      instruction: "Use these runtime facts when relevant. Do not invent dates or times."
+    }
+    |> maybe_put_workflow_route(route)
   end
 
   defp skills_context(opts) do
@@ -72,8 +87,44 @@ defmodule AgentMachine.RunContextPrompt do
 
   defp maybe_put_tools(context, nil), do: context
   defp maybe_put_tools(context, tools), do: Map.put(context, :tools, json_value(tools))
+  defp maybe_put_runtime(context, nil), do: context
+  defp maybe_put_runtime(context, runtime), do: Map.put(context, :runtime, json_value(runtime))
   defp maybe_put_skills(context, []), do: context
   defp maybe_put_skills(context, skills), do: Map.put(context, :skills, json_value(skills))
+
+  defp runtime_context(opts) do
+    case Keyword.get(opts, :runtime_facts, :auto) do
+      false ->
+        nil
+
+      nil ->
+        nil
+
+      facts when is_map(facts) ->
+        facts
+
+      :auto ->
+        runtime_facts(workflow_route: Keyword.get(opts, :workflow_route))
+
+      other ->
+        raise ArgumentError,
+              ":runtime_facts must be a map, false, nil, or :auto, got: #{inspect(other)}"
+    end
+  end
+
+  defp maybe_put_workflow_route(facts, nil), do: facts
+
+  defp maybe_put_workflow_route(facts, route) when is_map(route) do
+    Map.put(
+      facts,
+      :workflow_route,
+      Map.take(route, [:requested, :selected, :reason, :tool_intent])
+    )
+  end
+
+  defp local_timezone do
+    System.get_env("TZ") || "UTC"
+  end
 
   defp empty_skills?([]), do: true
   defp empty_skills?(_skills), do: false

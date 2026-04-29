@@ -85,9 +85,10 @@ partition "ClientRunner" {
     if (no tool or mutation intent?) then (chat)
       :selected = chat;
       :tools_exposed = false;
-    elseif (read/list/search/inspect intent?) then (basic)
+    elseif (read/list/search/inspect intent?) then (tool)
       if (local-files or code-edit read capability?) then (yes)
-        :selected = basic;
+        :selected = tool;
+        :Expose only read-risk filesystem tools;
         :tools_exposed = true;
       else (no)
         :Fail fast\nread capability missing;
@@ -95,22 +96,25 @@ partition "ClientRunner" {
       endif
     elseif (time intent?) then (time)
       if (time/demo harness?) then (yes)
-        :selected = basic;
+        :selected = tool;
+        :Expose only now;
         :tools_exposed = true;
       elseif (another tool harness active?) then (auto-add)
-        :selected = basic;
+        :selected = tool;
         :Auto-add time harness for this run;
+        :Expose only now;
         :tools_exposed = true;
       else (no)
         :selected = chat;
         :tools_exposed = false;
       endif
-    elseif (generic tool intent?) then (basic)
-      if (matching MCP/tool harness?) then (yes)
-        :selected = basic;
+    elseif (generic tool intent?) then (tool)
+      if (matching read-risk tool harness?) then (yes)
+        :selected = tool;
+        :Expose only tools with approval_risk=read;
         :tools_exposed = true;
       else (no)
-        :Fail fast\ntool capability missing;
+        :Fail fast\nread-only tool capability missing;
         stop
       endif
     elseif (file mutation intent?) then (agentic)
@@ -173,6 +177,11 @@ partition "Workflow construction" {
     if (tools_exposed?) then (yes)
       :Attach allowed_tools, tool_policy,\ntool_timeout_ms, tool_max_rounds,\ntool_approval_mode;
     endif
+  elseif (selected == tool?) then (tool)
+    :Workflows.Tool.build!;
+    :Create assistant only;
+    :No finalizer;
+    :Attach only read-risk tools and policy;
   else (agentic)
     :Workflows.Agentic.build!;
     :Create planner + finalizer;
@@ -193,16 +202,22 @@ partition "Tool harness assembly" {
   if (no selected workflow exposes tools?) then (no tools)
     :Provider request has no tool definitions;
   else (tools)
-    :ToolHarness.builtin_many!(harnesses);
-    :ToolHarness.builtin_policy_many!(harnesses);
+    if (selected == tool?) then (read-only)
+      :ToolHarness.read_only_many!(harnesses, intent);
+      :ToolHarness.read_only_policy_many!(harnesses, intent);
+      :Filter out write/delete/command/network tools;
+    else (full harness)
+      :ToolHarness.builtin_many!(harnesses);
+      :ToolHarness.builtin_policy_many!(harnesses);
+    endif
 
     if (local-files harness?) then (yes)
-      :Expose list_files, read_file, search_files,\nfile_info, create_dir, write_file,\nappend_file, replace_in_file;
+      :Full harness includes list_files, read_file,\nsearch_files, file_info, create_dir,\nwrite_file, append_file, replace_in_file;
       :Require existing tool_root;\nconstrain paths under root;
     endif
 
     if (code-edit harness?) then (yes)
-      :Expose code edit tools:\nfile_info, list_files, read_file,\nsearch_files, apply_edits,\napply_patch, rollback_checkpoint;
+      :Full harness includes code edit tools:\nfile_info, list_files, read_file,\nsearch_files, apply_edits,\napply_patch, rollback_checkpoint;
       if (test commands configured?) then (yes)
         :Add run_test_command only when\napproval_mode=full_access and command is allowlisted;
       endif
@@ -239,7 +254,7 @@ partition "Orchestrator" {
 
 partition "AgentRunner and provider loop" {
   repeat
-    :Build RunContextPrompt with prior results,\nartifacts, selected skills, and tool context;
+    :Build RunContextPrompt with runtime facts,\nprior results, artifacts,\nselected skills, and tool context;
     :Call exactly one provider\n(Echo, OpenAI Responses, or OpenRouter Chat);
 
     if (provider returns invalid payload?) then (invalid)
@@ -291,7 +306,7 @@ partition "Dynamic delegation and final output" {
     :Workers may call tools if workflow exposed them;
     :When idle, start finalizer;
     :final_output = finalizer.output;
-  elseif (selected == chat?) then (chat)
+  elseif (selected == chat or tool?) then (single assistant)
     :No finalizer;
     :final_output = assistant.output;
   elseif (basic workflow idle?) then (basic)

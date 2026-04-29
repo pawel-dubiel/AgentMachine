@@ -1009,7 +1009,7 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
 	_ = args
 	m.view = viewChat
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses progressive auto mode; each run requests auto and records the selected workflow"})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses progressive auto mode; each run requests auto and records the selected route: chat, tool, basic, or agentic"})
 	return m, nil
 }
 
@@ -1684,17 +1684,24 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 }
 
 func (m *model) applyEvent(event eventSummary) {
-	m.eventLog = append(m.eventLog, event)
 	if event.Type == "assistant_delta" && event.Delta != "" {
 		m.appendAgentDelta(event)
 		if userFacingStreamAgent(event.AgentID) {
 			m.liveAssistant += event.Delta
 		}
+		m.markAgentRunning(event)
+		return
 	}
+
+	m.eventLog = append(m.eventLog, event)
 	if m.eventAutoScroll {
 		m.clampEventScroll()
 	}
 
+	m.applyNonDeltaEvent(event)
+}
+
+func (m *model) applyNonDeltaEvent(event eventSummary) {
 	if event.AgentID == "" {
 		return
 	}
@@ -1726,13 +1733,37 @@ func (m *model) applyEvent(event eventSummary) {
 	case "agent_retry_scheduled":
 		agent.Status = "retrying"
 		agent.Error = event.Reason
-	case "provider_request_started", "assistant_delta":
+	case "provider_request_started":
 		if agent.Status == "" {
 			agent.Status = "running"
 		}
 	}
 
 	agent.Events = append(agent.Events, event)
+	m.agents[event.AgentID] = agent
+}
+
+func (m *model) markAgentRunning(event eventSummary) {
+	if event.AgentID == "" {
+		return
+	}
+
+	agent := m.agents[event.AgentID]
+	if agent.ID == "" {
+		agent.ID = event.AgentID
+		agent.ParentAgentID = event.ParentAgentID
+		m.agentOrder = append(m.agentOrder, event.AgentID)
+	}
+	if event.ParentAgentID != "" {
+		agent.ParentAgentID = event.ParentAgentID
+	}
+	if event.Attempt > 0 {
+		agent.Attempt = event.Attempt
+	}
+	if agent.Status == "" {
+		agent.Status = "running"
+	}
+
 	m.agents[event.AgentID] = agent
 }
 

@@ -91,6 +91,38 @@ defmodule AgentMachine.ToolHarness do
     raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
   end
 
+  def read_only_many!(harnesses, opts, intent) when is_list(harnesses) do
+    tools =
+      harnesses
+      |> read_only_harnesses(intent)
+      |> Enum.flat_map(&builtin!(&1, opts))
+      |> maybe_force_time_tool(intent)
+      |> Enum.filter(&(ToolPolicy.approval_risk!(&1) == :read))
+      |> ensure_unique_definition_names!()
+
+    if tools == [] do
+      raise ArgumentError, "no read-only tools available for intent #{inspect(intent)}"
+    end
+
+    tools
+  end
+
+  def read_only_many!(harnesses, _opts, _intent) do
+    raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
+  end
+
+  def read_only_policy_many!(harnesses, opts, intent) do
+    permissions =
+      harnesses
+      |> read_only_many!(opts, intent)
+      |> Enum.map(&ToolPolicy.tool_permission!/1)
+
+    ToolPolicy.new!(
+      harness: policy_harness_name(harnesses),
+      permissions: Enum.uniq(permissions)
+    )
+  end
+
   def builtin_policy!(name, opts \\ [])
 
   def builtin_policy!(nil, _opts), do: nil
@@ -290,6 +322,24 @@ defmodule AgentMachine.ToolHarness do
 
   defp policy_harness_name([harness]), do: harness
   defp policy_harness_name(harnesses), do: harnesses
+
+  defp read_only_harnesses(_harnesses, intent) when intent in [:time, "time"], do: [:time]
+
+  defp read_only_harnesses(harnesses, intent) when intent in [:file_read, "file_read"] do
+    Enum.filter(harnesses, &(&1 in [:local_files, :code_edit]))
+  end
+
+  defp read_only_harnesses(harnesses, intent) when intent in [:tool_use, "tool_use"],
+    do: harnesses
+
+  defp read_only_harnesses(_harnesses, intent) do
+    raise ArgumentError, "unsupported read-only tool intent: #{inspect(intent)}"
+  end
+
+  defp maybe_force_time_tool(_tools, intent) when intent in [:time, "time"],
+    do: [AgentMachine.Tools.Now]
+
+  defp maybe_force_time_tool(tools, _intent), do: tools
 
   defp ensure_unique_definition_names!(tools) do
     tools

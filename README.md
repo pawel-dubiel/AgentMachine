@@ -168,6 +168,11 @@ GitHub tokens, AWS access key IDs, private key blocks, and secret-looking
 `KEY=value` or JSON fields. Redacted payloads include redaction metadata when a
 value was masked.
 
+Remote provider prompts include compact runtime facts in `Run context`, such as
+current UTC time/date, local timezone, and the selected workflow route. These
+facts ground normal chat answers without exposing tools or requiring a tool
+call.
+
 ## Workflows
 
 Choose one workflow for each run:
@@ -177,9 +182,10 @@ Choose one workflow for each run:
   a final answer.
 - `agentic`: asks a planner to choose a direct answer or delegated worker agents
   before returning a final answer.
-- `auto`: deterministic routing policy. It selects `chat`, `basic`, or
-  `agentic` before any workflow is built and reports the selected route in
-  summaries as `workflow_route`.
+- `auto`: routing policy. It selects `chat`, internal read-only `tool`, `basic`,
+  or `agentic` before any workflow is built and reports the selected route in
+  summaries as `workflow_route`. `tool` is internal only; `--workflow tool` is
+  not accepted.
 
 Examples:
 
@@ -218,7 +224,8 @@ mix agent_machine.run \
 
 `auto` uses deterministic routing by default. An optional local multilingual NLI
 classifier can be enabled explicitly to classify intent before the deterministic
-capability matrix selects `chat`, `basic`, or `agentic`.
+capability matrix selects `chat`, internal read-only `tool`, `basic`, or
+`agentic`.
 
 Install the model files into an explicit directory:
 
@@ -254,9 +261,9 @@ capabilities still fail fast before any model workflow starts.
 Intent routing is intentionally conservative:
 
 - `none` -> `chat`.
-- `file_read`, `tool_use` -> `basic` only when a matching read/tool harness is configured.
-- `time` -> `basic` with the `time` harness; if another tool harness is already
-  active, the runtime adds `time` for that run; otherwise `chat` with no tools.
+- `file_read`, `tool_use` -> internal `tool` with only read-risk tools exposed.
+- `time` -> internal `tool` with only the `now` tool; if another tool harness is
+  already active, the runtime adds `time` for that run; otherwise `chat` with no tools.
 - `file_mutation`, `code_mutation`, `test_command` -> `agentic` only when the required write/test capability exists.
 - `delegation` -> `agentic`.
 
@@ -677,8 +684,8 @@ go run .
 In the UI, set a provider, model, and optional tools before sending normal
 messages. The TUI sends normal messages with `--workflow auto`: simple chat
 requests run through the no-tool `chat` workflow, read/search/tool requests use
-`basic` when the matching harness is configured, and mutation or explicit
-delegation requests use `agentic`. Normal messages include a short recent
+the internal read-only `tool` path when the matching harness is configured, and
+mutation or explicit delegation requests use `agentic`. Normal messages include a short recent
 user/assistant conversation context so follow-up wording like "inside this dir"
 can resolve from chat history.
 Each TUI run writes a per-run JSONL stream log next to the config file under

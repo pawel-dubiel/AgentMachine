@@ -22,6 +22,7 @@ defmodule AgentMachine.WorkflowRouter do
     :test_commands,
     :pending_action,
     :recent_context,
+    :mcp_config,
     router_mode: :deterministic,
     router_model_dir: nil,
     router_timeout_ms: nil,
@@ -38,6 +39,7 @@ defmodule AgentMachine.WorkflowRouter do
       test_commands: spec.test_commands || [],
       pending_action: nil,
       recent_context: nil,
+      mcp_config: spec.mcp_config,
       router_mode: spec.router_mode,
       router_model_dir: spec.router_model_dir,
       router_timeout_ms: spec.router_timeout_ms,
@@ -111,8 +113,8 @@ defmodule AgentMachine.WorkflowRouter do
 
         route(
           :auto,
-          :basic,
-          "read_intent_with_filesystem_harness",
+          :tool,
+          "read_intent_with_read_only_tool",
           :file_read,
           true,
           classifier_meta(classified)
@@ -122,12 +124,12 @@ defmodule AgentMachine.WorkflowRouter do
         route_time_intent(input, classified)
 
       :tool_use ->
-        require_any_tool_capability!(input)
+        require_read_only_tool_capability!(input, :tool_use)
 
         route(
           :auto,
-          :basic,
-          "tool_intent_with_configured_harness",
+          :tool,
+          "tool_intent_with_read_only_tool",
           :tool_use,
           true,
           classifier_meta(classified)
@@ -473,8 +475,8 @@ defmodule AgentMachine.WorkflowRouter do
       has_any_harness?(input, [:time, :demo]) ->
         route(
           :auto,
-          :basic,
-          time_reason(input),
+          :tool,
+          "time_intent_with_read_only_tool",
           :time,
           true,
           classifier_meta(classified)
@@ -483,8 +485,8 @@ defmodule AgentMachine.WorkflowRouter do
       tools_configured?(input) ->
         route(
           :auto,
-          :basic,
-          "time_intent_with_auto_time_harness",
+          :tool,
+          "time_intent_with_read_only_tool",
           :time,
           true,
           classifier_meta(classified)
@@ -502,19 +504,31 @@ defmodule AgentMachine.WorkflowRouter do
     end
   end
 
-  defp time_reason(input) do
-    if has_any_harness?(input, [:time]) do
-      "time_intent_with_time_harness"
-    else
-      "time_intent_with_demo_harness"
-    end
-  end
-
   defp require_any_tool_capability!(input) do
     unless tools_configured?(input) do
       raise ArgumentError,
             "auto workflow detected tool intent but no tool harness is configured"
     end
+  end
+
+  defp require_read_only_tool_capability!(input, intent) do
+    require_any_tool_capability!(input)
+
+    AgentMachine.ToolHarness.read_only_many!(
+      input.tool_harnesses,
+      [mcp_config: input.mcp_config],
+      intent
+    )
+
+    :ok
+  rescue
+    exception in ArgumentError ->
+      reraise ArgumentError,
+              [
+                message:
+                  "auto workflow detected tool intent but no read-only tool capability is configured: #{Exception.message(exception)}"
+              ],
+              __STACKTRACE__
   end
 
   defp require_write_capability!(input) do

@@ -1,7 +1,7 @@
 defmodule AgentMachine.WorkflowRouterTest do
   use ExUnit.Case, async: true
 
-  alias AgentMachine.{RunSpec, WorkflowRouter}
+  alias AgentMachine.{MCP.Config, RunSpec, WorkflowRouter}
 
   defmodule LocalCodeMutationClassifier do
     def classify!(_input) do
@@ -58,7 +58,7 @@ defmodule AgentMachine.WorkflowRouterTest do
            }
   end
 
-  test "routes auto local read intent to basic with a filesystem harness" do
+  test "routes auto local read intent to tool with a filesystem harness" do
     route =
       route!(%{
         task: "read README.md",
@@ -70,12 +70,29 @@ defmodule AgentMachine.WorkflowRouterTest do
         tool_approval_mode: :read_only
       })
 
-    assert route.selected == "basic"
+    assert route.selected == "tool"
     assert route.tool_intent == "file_read"
     assert route.tools_exposed
   end
 
-  test "routes auto project check intent to basic with a filesystem harness" do
+  test "routes auto local read intent to tool with a code-edit harness" do
+    route =
+      route!(%{
+        task: "read file lib/foo.ex",
+        workflow: :auto,
+        tool_harness: :code_edit,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "tool"
+    assert route.tool_intent == "file_read"
+    assert route.tools_exposed
+  end
+
+  test "routes auto project check intent to tool with a filesystem harness" do
     route =
       route!(%{
         task: "Hi check in home folder Project1 and if thats app works",
@@ -87,12 +104,12 @@ defmodule AgentMachine.WorkflowRouterTest do
         tool_approval_mode: :read_only
       })
 
-    assert route.selected == "basic"
+    assert route.selected == "tool"
     assert route.tool_intent == "file_read"
     assert route.tools_exposed
   end
 
-  test "routes auto time intent to basic with demo harness" do
+  test "routes auto time intent to tool with demo harness" do
     route =
       route!(%{
         task: "what time is it?",
@@ -103,11 +120,12 @@ defmodule AgentMachine.WorkflowRouterTest do
         tool_approval_mode: :read_only
       })
 
-    assert route.selected == "basic"
+    assert route.selected == "tool"
     assert route.tool_intent == "time"
+    assert route.reason == "time_intent_with_read_only_tool"
   end
 
-  test "routes auto time intent to basic with time harness" do
+  test "routes auto time intent to tool with time harness" do
     route =
       route!(%{
         task: "what time is it?",
@@ -118,12 +136,12 @@ defmodule AgentMachine.WorkflowRouterTest do
         tool_approval_mode: :read_only
       })
 
-    assert route.selected == "basic"
+    assert route.selected == "tool"
     assert route.tool_intent == "time"
-    assert route.reason == "time_intent_with_time_harness"
+    assert route.reason == "time_intent_with_read_only_tool"
   end
 
-  test "routes auto time intent to basic with auto time harness when other tools are configured" do
+  test "routes auto time intent to tool with auto time harness when other tools are configured" do
     route =
       route!(%{
         task: "what time is it?",
@@ -135,9 +153,9 @@ defmodule AgentMachine.WorkflowRouterTest do
         tool_approval_mode: :auto_approved_safe
       })
 
-    assert route.selected == "basic"
+    assert route.selected == "tool"
     assert route.tool_intent == "time"
-    assert route.reason == "time_intent_with_auto_time_harness"
+    assert route.reason == "time_intent_with_read_only_tool"
     assert route.tools_exposed
   end
 
@@ -210,6 +228,38 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.selected == "agentic"
     assert route.tool_intent == "delegation"
     refute route.tools_exposed
+  end
+
+  test "routes generic tool intent to tool with read-risk MCP tool" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "use tool with mcp to search docs",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :read_only,
+        test_commands: [],
+        mcp_config: mcp_config("read")
+      })
+
+    assert route.selected == "tool"
+    assert route.tool_intent == "tool_use"
+  end
+
+  test "fails fast for generic tool intent without read-risk tools" do
+    assert_raise ArgumentError, ~r/no read-only tool capability/, fn ->
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "use tool with mcp to update docs",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :read_only,
+        test_commands: [],
+        mcp_config: mcp_config("write")
+      })
+    end
   end
 
   test "uses pending action for affirmative follow-up routing" do
@@ -372,5 +422,22 @@ defmodule AgentMachine.WorkflowRouterTest do
     })
     |> RunSpec.new!()
     |> WorkflowRouter.route!()
+  end
+
+  defp mcp_config(risk) do
+    Config.from_map!(%{
+      "servers" => [
+        %{
+          "id" => "docs",
+          "transport" => "stdio",
+          "command" => "mcp-docs",
+          "args" => [],
+          "env" => %{},
+          "tools" => [
+            %{"name" => "search", "permission" => "mcp_docs_search", "risk" => risk}
+          ]
+        }
+      ]
+    })
   end
 end
