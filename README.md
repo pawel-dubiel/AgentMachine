@@ -412,7 +412,7 @@ mix agent_machine.run \
   --input-price-per-million 0.15 \
   --output-price-per-million 0.60 \
   --tool-harness local-files \
-  --tool-root /Users/pawel/mywiki \
+  --tool-root /path/to/mywiki \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
   --tool-approval-mode auto-approved-safe \
@@ -503,6 +503,9 @@ Local file tool rules:
 - Paths outside `--tool-root` fail.
 - Models receive the explicit `tool_root` in runtime context and should use
   relative paths under that root for local file tools.
+- Tool execution errors such as a missing path or timeout are returned to the
+  provider as error-shaped `tool_results`, allowing the model to try another
+  safe approach within `--tool-max-rounds`.
 - In the `agentic` workflow, planner and finalizer agents do not receive tools;
   filesystem actions should be delegated to worker agents and reported only from
   worker `tool_results`.

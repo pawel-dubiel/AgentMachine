@@ -61,9 +61,11 @@ defmodule AgentMachine.Orchestrator do
     else
       run_context = %{results: %{}, artifacts: %{}}
       {ready_agents, pending_agents} = split_ready_agents(agents, %{})
+      initial_events = [run_started_event(run_id)] ++ skills_events(run_id, opts)
+      emit_events!(opts, initial_events)
       {tasks, agent_events} = spawn_agents(ready_agents, opts, run_context, nil)
-      events = [run_started_event(run_id)] ++ skills_events(run_id, opts) ++ agent_events
-      emit_events!(opts, events)
+      emit_events!(opts, agent_events)
+      events = initial_events ++ agent_events
 
       run = %{
         id: run_id,

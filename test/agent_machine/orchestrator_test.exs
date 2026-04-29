@@ -698,7 +698,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].error =~ "globally unique"
   end
 
-  test "returns an agent error when a tool call fails" do
+  test "returns recoverable tool execution errors to the provider" do
     agents = [
       %{
         id: "tool-user",
@@ -719,8 +719,17 @@ defmodule AgentMachine.OrchestratorTest do
                tool_approval_mode: :auto_approved_safe
              )
 
-    assert run.results["tool-user"].status == :error
-    assert run.results["tool-user"].error =~ "tool AgentMachine.TestTools.Failing failed"
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].output == "recovered from tool error: :planned_tool_failure"
+
+    assert run.results["tool-user"].tool_results == %{
+             "failing" => %{
+               status: "error",
+               error: ":planned_tool_failure",
+               tool: "AgentMachine.TestTools.Failing"
+             }
+           }
+
     assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
 
     assert run.events
@@ -996,7 +1005,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].error =~ "requires permission :test_command_run"
   end
 
-  test "returns an agent error when a tool call times out" do
+  test "returns recoverable tool timeout errors to the provider" do
     agents = [
       %{
         id: "tool-user",
@@ -1017,8 +1026,11 @@ defmodule AgentMachine.OrchestratorTest do
                tool_approval_mode: :auto_approved_safe
              )
 
-    assert run.results["tool-user"].status == :error
-    assert run.results["tool-user"].error =~ "timed out after 1ms"
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].output == "recovered from tool error: timed out after 1ms"
+    assert run.results["tool-user"].tool_results["sleeping"].status == "error"
+    assert run.results["tool-user"].tool_results["sleeping"].error == "timed out after 1ms"
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
   end
 
   defp tmp_root(prefix) do
@@ -1894,7 +1906,28 @@ defmodule AgentMachine.TestProviders.ToolFailing do
   alias AgentMachine.Agent
 
   @impl true
-  def complete(%Agent{} = agent, _opts) do
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{status: "error", error: error}}]} -> final_response(error)
+      nil -> tool_request(agent)
+    end
+  end
+
+  defp final_response(error) do
+    output = "recovered from tool error: #{error}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp tool_request(agent) do
     output = "called failing tool"
 
     {:ok,
@@ -1936,7 +1969,28 @@ defmodule AgentMachine.TestProviders.ToolSleeping do
   alias AgentMachine.Agent
 
   @impl true
-  def complete(%Agent{} = agent, _opts) do
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{status: "error", error: error}}]} -> final_response(error)
+      nil -> tool_request(agent)
+    end
+  end
+
+  defp final_response(error) do
+    output = "recovered from tool error: #{error}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
+  end
+
+  defp tool_request(agent) do
     output = "called sleeping tool"
 
     {:ok,

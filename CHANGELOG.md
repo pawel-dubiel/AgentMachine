@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Emitted `run_started` before spawning initial agents so JSONL run logs start deterministically.
+- Returned recoverable tool execution errors, including timeouts, to the provider as tool results so the model can choose another tool approach.
 - Fixed JSON decoding of escaped UTF-16 surrogate pairs in provider tool-call arguments.
 - Added progressive workflow routing with `chat`, `basic`, `agentic`, and `auto`, so simple TUI messages skip the planner while summaries report the requested and selected route.
 - Kept the TUI input active during runs and added an editable local message queue that drains serially after the current run finishes.

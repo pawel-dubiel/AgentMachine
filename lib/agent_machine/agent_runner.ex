@@ -525,8 +525,15 @@ defmodule AgentMachine.AgentRunner do
         failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
 
       {:error, reason} ->
-        reason = "tool #{inspect(tool)} failed for call #{inspect(id)}: #{inspect(reason)}"
-        failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
+        recoverable_tool_call_failure(
+          opts,
+          event_context,
+          id,
+          tool,
+          started_at,
+          started_event,
+          reason
+        )
 
       other ->
         reason = "tool #{inspect(tool)} returned invalid payload: #{inspect(other)}"
@@ -545,6 +552,37 @@ defmodule AgentMachine.AgentRunner do
         {:error, "timed out after #{tool_timeout_ms}ms"}
     end
   end
+
+  defp recoverable_tool_call_failure(
+         opts,
+         event_context,
+         id,
+         tool,
+         started_at,
+         started_event,
+         reason
+       ) do
+    finished_at = DateTime.utc_now()
+    error = tool_error_text(reason)
+
+    event_reason = "tool #{inspect(tool)} failed for call #{inspect(id)}: #{error}"
+
+    failed_event =
+      tool_call_failed_event(event_context, id, tool, started_at, finished_at, opts, event_reason)
+
+    emit_event!(opts, failed_event)
+
+    result = %{
+      status: "error",
+      error: error,
+      tool: tool_name(tool)
+    }
+
+    {:ok, %{id: id, result: result}, [started_event, failed_event]}
+  end
+
+  defp tool_error_text(reason) when is_binary(reason), do: reason
+  defp tool_error_text(reason), do: inspect(reason)
 
   defp failed_tool_call(opts, event_context, id, tool, started_at, reason, emit_started? \\ true) do
     finished_at = DateTime.utc_now()
