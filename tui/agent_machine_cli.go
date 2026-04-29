@@ -206,9 +206,13 @@ func buildRunArgs(config runConfig) []string {
 
 func maxSteps(workflow runWorkflow) string {
 	switch workflow {
+	case workflowChat:
+		return defaultChatSteps
 	case workflowBasic:
 		return defaultBasicSteps
 	case workflowAgentic:
+		return defaultAgenticSteps
+	case workflowAuto:
 		return defaultAgenticSteps
 	default:
 		return ""

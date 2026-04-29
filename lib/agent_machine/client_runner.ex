@@ -3,17 +3,19 @@ defmodule AgentMachine.ClientRunner do
   High-level client runner used by CLI and TUI frontends.
   """
 
-  alias AgentMachine.{EventSummary, JSON, Orchestrator, RunSpec}
+  alias AgentMachine.{EventSummary, JSON, Orchestrator, RunSpec, WorkflowRouter}
   alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Skills.{Manifest, Prompt, Selector}
-  alias AgentMachine.Workflows.{Agentic, Basic}
+  alias AgentMachine.Workflows.{Agentic, Basic, Chat}
 
   def run!(attrs, opts \\ []) when is_list(opts) do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
+    workflow_route = WorkflowRouter.route!(spec)
     skill_selection = Selector.select!(spec)
-    {agents, run_opts} = workflow_module(spec).build!(spec)
+    {agents, run_opts} = workflow_module(workflow_route).build!(spec)
     run_opts = put_skill_opts(run_opts, spec, skill_selection)
+    run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
     run_opts = put_event_sink(run_opts, opts)
 
     case Orchestrator.run(agents, run_opts) do
@@ -24,8 +26,9 @@ defmodule AgentMachine.ClientRunner do
     end
   end
 
-  defp workflow_module(%RunSpec{workflow: :basic}), do: Basic
-  defp workflow_module(%RunSpec{workflow: :agentic}), do: Agentic
+  defp workflow_module(%{selected: "chat"}), do: Chat
+  defp workflow_module(%{selected: "basic"}), do: Basic
+  defp workflow_module(%{selected: "agentic"}), do: Agentic
 
   def json!(summary) when is_map(summary) do
     summary |> Redactor.redact_output() |> Map.fetch!(:value) |> JSON.encode!()
@@ -104,6 +107,7 @@ defmodule AgentMachine.ClientRunner do
       status: summary_status(run, failed_results),
       error: summary_error(run, failed_results),
       final_output: final_output(run),
+      workflow_route: workflow_route(run),
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
       skills: summarize_skills(run),
@@ -142,8 +146,8 @@ defmodule AgentMachine.ClientRunner do
   defp final_output(run) do
     case Map.fetch(run.results, "finalizer") do
       {:ok, %{status: :ok, output: output}} -> output
-      :error -> direct_planner_output(run.results)
-      _other -> direct_planner_output(run.results)
+      :error -> direct_planner_output(run.results) || chat_assistant_output(run)
+      _other -> direct_planner_output(run.results) || chat_assistant_output(run)
     end
   end
 
@@ -157,6 +161,26 @@ defmodule AgentMachine.ClientRunner do
   defp direct_decision?(%{mode: "direct"}), do: true
   defp direct_decision?(%{"mode" => "direct"}), do: true
   defp direct_decision?(_decision), do: false
+
+  defp chat_assistant_output(%{
+         opts: opts,
+         results: %{"assistant" => %{status: :ok, output: output}}
+       })
+       when is_binary(output) do
+    if workflow_route_selected?(opts, "chat"), do: output
+  end
+
+  defp chat_assistant_output(_run), do: nil
+
+  defp workflow_route_selected?(opts, selected) when is_list(opts) do
+    case Keyword.get(opts, :workflow_route) do
+      %{selected: ^selected} -> true
+      %{"selected" => ^selected} -> true
+      _other -> false
+    end
+  end
+
+  defp workflow_route_selected?(_opts, _selected), do: false
 
   defp summarize_results(results) do
     Map.new(results, fn {agent_id, result} ->
@@ -199,6 +223,12 @@ defmodule AgentMachine.ClientRunner do
   defp summarize_event_value(value), do: value
 
   defp stringify_map(map) when is_map(map), do: map
+
+  defp workflow_route(run) do
+    run
+    |> Map.get(:opts, [])
+    |> Keyword.get(:workflow_route)
+  end
 
   defp summarize_skills(run) do
     run

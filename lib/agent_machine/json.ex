@@ -125,8 +125,8 @@ defmodule AgentMachine.JSON do
   defp parse_string(<<"\\t", rest::binary>>, acc), do: parse_string(rest, [?\t | acc])
 
   defp parse_string(<<"\\u", hex::binary-size(4), rest::binary>>, acc) do
-    {codepoint, ""} = Integer.parse(hex, 16)
-    parse_string(rest, [<<codepoint::utf8>> | acc])
+    codepoint = parse_hex4!(hex)
+    parse_unicode_escape(codepoint, rest, acc)
   end
 
   defp parse_string(<<char::utf8, rest::binary>>, acc) do
@@ -135,6 +135,42 @@ defmodule AgentMachine.JSON do
 
   defp parse_string("", _acc) do
     raise ArgumentError, "unterminated JSON string"
+  end
+
+  defp parse_unicode_escape(high, <<"\\u", low_hex::binary-size(4), rest::binary>>, acc)
+       when high in 0xD800..0xDBFF do
+    low = parse_hex4!(low_hex)
+
+    if low in 0xDC00..0xDFFF do
+      codepoint = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)
+      parse_string(rest, [<<codepoint::utf8>> | acc])
+    else
+      raise ArgumentError,
+            "invalid JSON unicode escape: high surrogate must be followed by low surrogate"
+    end
+  end
+
+  defp parse_unicode_escape(high, _rest, _acc) when high in 0xD800..0xDBFF do
+    raise ArgumentError,
+          "invalid JSON unicode escape: high surrogate must be followed by low surrogate"
+  end
+
+  defp parse_unicode_escape(low, _rest, _acc) when low in 0xDC00..0xDFFF do
+    raise ArgumentError, "invalid JSON unicode escape: lone low surrogate"
+  end
+
+  defp parse_unicode_escape(codepoint, rest, acc) do
+    parse_string(rest, [<<codepoint::utf8>> | acc])
+  end
+
+  defp parse_hex4!(hex) do
+    case Integer.parse(hex, 16) do
+      {codepoint, ""} ->
+        codepoint
+
+      _other ->
+        raise ArgumentError, "invalid JSON unicode escape: \\u#{hex}"
+    end
   end
 
   defp parse_number(binary) do

@@ -169,14 +169,20 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp workflow_from_opts!(opts) do
     case Keyword.fetch(opts, :workflow) do
+      {:ok, "chat"} ->
+        :chat
+
       {:ok, "basic"} ->
         :basic
 
       {:ok, "agentic"} ->
         :agentic
 
+      {:ok, "auto"} ->
+        :auto
+
       {:ok, workflow} ->
-        Mix.raise("--workflow must be basic or agentic, got: #{inspect(workflow)}")
+        Mix.raise("--workflow must be chat, basic, agentic, or auto, got: #{inspect(workflow)}")
 
       :error ->
         Mix.raise("missing required --workflow option")
@@ -306,6 +312,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp print_text_summary(summary) do
     Mix.shell().info("Run #{summary.run_id}: #{summary.status}")
+    print_workflow_route(summary.workflow_route)
     Mix.shell().info("")
     Mix.shell().info("Final output:")
     Mix.shell().info(summary.final_output || "(none)")
@@ -316,5 +323,14 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.shell().info("  output tokens: #{summary.usage.output_tokens}")
     Mix.shell().info("  total tokens: #{summary.usage.total_tokens}")
     Mix.shell().info("  cost usd: #{summary.usage.cost_usd}")
+  end
+
+  defp print_workflow_route(nil), do: :ok
+
+  defp print_workflow_route(%{requested: requested, selected: selected} = route) do
+    Mix.shell().info("Workflow route: #{requested} -> #{selected}")
+    Mix.shell().info("  reason: #{Map.get(route, :reason) || "(none)"}")
+    Mix.shell().info("  tool intent: #{Map.get(route, :tool_intent) || "(none)"}")
+    Mix.shell().info("  tools exposed: #{Map.get(route, :tools_exposed)}")
   end
 end

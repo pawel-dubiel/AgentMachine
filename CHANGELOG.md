@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed JSON decoding of escaped UTF-16 surrogate pairs in provider tool-call arguments.
+- Added progressive workflow routing with `chat`, `basic`, `agentic`, and `auto`, so simple TUI messages skip the planner while summaries report the requested and selected route.
+- Kept the TUI input active during runs and added an editable local message queue that drains serially after the current run finishes.
 - Added opt-in response streaming over JSONL with deterministic event summaries/details, provider request and assistant delta events, and a live scrollable TUI activity feed.
 - Added ClawHub skill autodiscovery, show, install, update, zip validation, lockfile provenance, and thin TUI `/skills search/show/install/update` pass-through commands.
 - Documented the skills command model, runtime flags, TUI commands, registry format, and ClawHub autodiscovery integration in `docs/skills.md`.

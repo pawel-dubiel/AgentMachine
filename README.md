@@ -148,9 +148,14 @@ value was masked.
 
 Choose one workflow for each run:
 
-- `basic`: runs a straightforward assistant task and returns a final answer.
+- `chat`: runs one no-tool assistant and returns its answer directly.
+- `basic`: runs a straightforward assistant task with optional tools and returns
+  a final answer.
 - `agentic`: asks a planner to choose a direct answer or delegated worker agents
   before returning a final answer.
+- `auto`: deterministic routing policy. It selects `chat`, `basic`, or
+  `agentic` before any workflow is built and reports the selected route in
+  summaries as `workflow_route`.
 
 Examples:
 
@@ -162,6 +167,16 @@ mix agent_machine.run \
   --max-steps 2 \
   --max-attempts 1 \
   "Write a short release note"
+```
+
+```sh
+mix agent_machine.run \
+  --workflow chat \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 1 \
+  --max-attempts 1 \
+  "Explain progressive escalation"
 ```
 
 ```sh
@@ -494,6 +509,9 @@ Local file tool rules:
 - The `agentic` planner returns a visible direct/delegate decision with a reason.
 - Planner and finalizer prompts still receive tool availability and `tool_root`
   as context, but they cannot call tools directly.
+- The `auto` workflow request exposes tools only when the detected intent needs
+  them; normal chat stays on the no-tool `chat` route even when tools are
+  configured.
 - Search requires `rg` in `PATH`.
 - Writes require the parent directory to exist.
 - Append and replace require existing regular files.
@@ -581,15 +599,21 @@ go run .
 ```
 
 In the UI, set a provider, model, and optional tools before sending normal
-messages. The TUI always uses planner-managed `agentic` runs: the planner chooses
-a direct answer for simple requests or delegates worker agents when tools or
-separate execution are needed. Direct planner decisions skip the finalizer and
-use the planner output as the final answer. Normal messages include a short
-recent user/assistant conversation context so follow-up wording like "inside this
-dir" can resolve from chat history.
+messages. The TUI sends normal messages with `--workflow auto`: simple chat
+requests run through the no-tool `chat` workflow, read/search/tool requests use
+`basic` when the matching harness is configured, and mutation or explicit
+delegation requests use `agentic`. Normal messages include a short recent
+user/assistant conversation context so follow-up wording like "inside this dir"
+can resolve from chat history.
 Each TUI run writes an Elixir JSONL log next to the config file under
-`logs/*.jsonl`; the run banner shows the exact log path. Open `/agents` or
-`/agent planner` to read the planner decision.
+`logs/*.jsonl`; the run banner shows the exact log path. Open `/agents` to see
+the requested and selected workflow route, or `/agent planner` when an agentic
+run created a planner.
+
+The input remains active while a run is processing. Press `Enter` during a run
+to queue the message locally; the TUI starts queued messages one at a time after
+the active run finishes. Use `/queue` commands to inspect, edit, remove, clear,
+or move queued messages before they run.
 
 Useful commands:
 
@@ -622,6 +646,11 @@ Useful commands:
 /settings
 /agents
 /agent <id>
+/queue [list]
+/queue edit <index> <new message>
+/queue remove <index>
+/queue clear
+/queue run <index>
 /back
 /clear
 /quit
@@ -629,7 +658,7 @@ Useful commands:
 
 Useful keys:
 
-- `Enter`: submit input.
+- `Enter`: submit input, or queue input while a run is active.
 - `Tab` / `Shift+Tab`: switch views.
 - `Esc`: go back.
 - `Up` / `Down`: command history, agent selection, or model selection.
@@ -656,7 +685,7 @@ The project intentionally fails when required values are missing. Common require
 values are:
 
 - A non-empty task prompt.
-- `--workflow basic|agentic`.
+- `--workflow chat|basic|agentic|auto`.
 - `--provider echo|openai|openrouter`.
 - `--timeout-ms`.
 - `--max-steps`.

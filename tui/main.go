@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,14 +17,15 @@ import (
 )
 
 type summary struct {
-	RunID       string                      `json:"run_id"`
-	Status      string                      `json:"status"`
-	Error       string                      `json:"error"`
-	FinalOutput string                      `json:"final_output"`
-	Results     map[string]runResultSummary `json:"results"`
-	Skills      []skillSummary              `json:"skills"`
-	Usage       usageSummary                `json:"usage"`
-	Events      []eventSummary              `json:"events"`
+	RunID         string                      `json:"run_id"`
+	Status        string                      `json:"status"`
+	Error         string                      `json:"error"`
+	FinalOutput   string                      `json:"final_output"`
+	WorkflowRoute workflowRoute               `json:"workflow_route"`
+	Results       map[string]runResultSummary `json:"results"`
+	Skills        []skillSummary              `json:"skills"`
+	Usage         usageSummary                `json:"usage"`
+	Events        []eventSummary              `json:"events"`
 }
 
 type skillSummary struct {
@@ -44,6 +46,14 @@ type plannerDecision struct {
 	Mode              string   `json:"mode"`
 	Reason            string   `json:"reason"`
 	DelegatedAgentIDs []string `json:"delegated_agent_ids"`
+}
+
+type workflowRoute struct {
+	Requested    string `json:"requested"`
+	Selected     string `json:"selected"`
+	Reason       string `json:"reason"`
+	ToolIntent   string `json:"tool_intent"`
+	ToolsExposed bool   `json:"tools_exposed"`
 }
 
 type usageSummary struct {
@@ -134,12 +144,15 @@ var providers = []provider{providerEcho, providerOpenAI, providerOpenRouter}
 type runWorkflow string
 
 const (
+	workflowChat    runWorkflow = "chat"
 	workflowBasic   runWorkflow = "basic"
 	workflowAgentic runWorkflow = "agentic"
+	workflowAuto    runWorkflow = "auto"
 )
 
 const (
 	defaultRunTimeoutMS  = "120000"
+	defaultChatSteps     = "1"
 	defaultBasicSteps    = "2"
 	defaultAgenticSteps  = "6"
 	defaultHTTPTimeoutMS = "120000"
@@ -195,6 +208,12 @@ type chatMessage struct {
 	Text string
 }
 
+type queuedMessage struct {
+	ID        int
+	Text      string
+	CreatedAt string
+}
+
 type viewMode int
 
 const (
@@ -226,6 +245,8 @@ type model struct {
 	inputHistory       []string
 	historyIndex       int
 	historyDraft       string
+	queuedMessages     []queuedMessage
+	nextQueueID        int
 	view               viewMode
 	selectedAgent      string
 	selectedAgentIndex int
@@ -376,10 +397,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.back()
 				return m, nil
 			}
-			if !m.running {
-				return m.submitInput()
-			}
-			return m, nil
+			return m.submitInput()
 		case "pgup":
 			if m.running && m.view == viewChat {
 				m.scrollEvents(-5)
@@ -415,7 +433,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(msg.Summary)})
 		}
-		return m, nil
+		return m.startNextQueuedRun()
 
 	case streamStartedMsg:
 		m.stream = msg.Session
@@ -457,7 +475,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
 		}
-		return m, nil
+		return m.startNextQueuedRun()
 
 	case skillsCommandMsg:
 		if msg.Err != nil {
@@ -499,7 +517,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if !m.running && m.view != viewAgents && m.view != viewAgentDetail && !m.modelPickerOpen {
+	if m.view != viewAgents && m.view != viewAgentDetail && !m.modelPickerOpen {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -523,7 +541,37 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 		return m.handleCommand(text)
 	}
 
+	if m.running {
+		m.queueMessage(text)
+		return m, nil
+	}
+
 	return m.startRun(text)
+}
+
+func (m *model) queueMessage(text string) {
+	if m.nextQueueID == 0 {
+		m.nextQueueID = 1
+	}
+	item := queuedMessage{
+		ID:        m.nextQueueID,
+		Text:      text,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	m.nextQueueID++
+	m.queuedMessages = append(m.queuedMessages, item)
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: fmt.Sprintf("queued message %d", len(m.queuedMessages))})
+}
+
+func (m model) startNextQueuedRun() (tea.Model, tea.Cmd) {
+	if m.running || len(m.queuedMessages) == 0 {
+		return m, nil
+	}
+
+	next := m.queuedMessages[0]
+	m.queuedMessages = m.queuedMessages[1:]
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "starting queued message: " + compactQueueText(next.Text)})
+	return m.startRun(next.Text)
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
@@ -692,6 +740,11 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	name := strings.TrimPrefix(parts[0], "/")
 	args := parts[1:]
 
+	if m.running && name != "queue" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "command unavailable while a run is active; queue a message or use /queue"})
+		return m, nil
+	}
+
 	switch name {
 	case "help":
 		m.view = viewHelp
@@ -727,6 +780,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.view = viewAgents
 	case "agent":
 		return m.handleAgentCommand(args)
+	case "queue":
+		return m.handleQueueCommand(args)
 	case "back":
 		m.back()
 	case "clear":
@@ -739,6 +794,103 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) handleQueueCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 || args[0] == "list" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: queueListText(m.queuedMessages)})
+		return m, nil
+	}
+
+	switch args[0] {
+	case "edit":
+		if len(args) < 3 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /queue edit <index> <new message>"})
+			return m, nil
+		}
+		index, err := queueIndex(args[1], len(m.queuedMessages))
+		if err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		m.queuedMessages[index].Text = strings.Join(args[2:], " ")
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: fmt.Sprintf("updated queued message %d", index+1)})
+		return m, nil
+	case "remove":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /queue remove <index>"})
+			return m, nil
+		}
+		index, err := queueIndex(args[1], len(m.queuedMessages))
+		if err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		removed := m.queuedMessages[index]
+		m.queuedMessages = append(m.queuedMessages[:index], m.queuedMessages[index+1:]...)
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "removed queued message: " + compactQueueText(removed.Text)})
+		return m, nil
+	case "clear":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /queue clear"})
+			return m, nil
+		}
+		count := len(m.queuedMessages)
+		m.queuedMessages = nil
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: fmt.Sprintf("cleared %d queued message(s)", count)})
+		return m, nil
+	case "run":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /queue run <index>"})
+			return m, nil
+		}
+		index, err := queueIndex(args[1], len(m.queuedMessages))
+		if err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		item := m.queuedMessages[index]
+		m.queuedMessages = append(m.queuedMessages[:index], m.queuedMessages[index+1:]...)
+		if m.running {
+			m.queuedMessages = append([]queuedMessage{item}, m.queuedMessages...)
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: fmt.Sprintf("queued message %d will run next", index+1)})
+			return m, nil
+		}
+		return m.startRun(item.Text)
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /queue [list]|edit <index> <message>|remove <index>|clear|run <index>"})
+		return m, nil
+	}
+}
+
+func queueIndex(value string, total int) (int, error) {
+	if total == 0 {
+		return 0, errors.New("queue is empty")
+	}
+	index, err := strconv.Atoi(value)
+	if err != nil || index < 1 || index > total {
+		return 0, fmt.Errorf("queue index must be between 1 and %d", total)
+	}
+	return index - 1, nil
+}
+
+func queueListText(queue []queuedMessage) string {
+	if len(queue) == 0 {
+		return "queue is empty"
+	}
+	lines := []string{"Queued messages:"}
+	for index, item := range queue {
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, compactQueueText(item.Text)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func compactQueueText(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= 96 {
+		return text
+	}
+	return text[:96] + "..."
 }
 
 func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (tea.Model, tea.Cmd) {
@@ -802,7 +954,7 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
 	_ = args
 	m.view = viewChat
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses planner-managed agentic mode"})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses progressive auto mode; each run requests auto and records the selected workflow"})
 	return m, nil
 }
 
@@ -1438,7 +1590,7 @@ func (m *model) applySummaryResults(summary summary) {
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
 		Task:              task,
-		Workflow:          workflowAgentic,
+		Workflow:          workflowAuto,
 		Provider:          m.provider,
 		APIKey:            m.apiKey(),
 		Model:             m.modelID(),
@@ -1951,10 +2103,14 @@ func parseProvider(value string) (provider, error) {
 
 func parseWorkflow(value string) (runWorkflow, error) {
 	switch strings.ToLower(value) {
+	case "chat":
+		return workflowChat, nil
 	case "basic":
 		return workflowBasic, nil
 	case "agentic":
 		return workflowAgentic, nil
+	case "auto":
+		return workflowAuto, nil
 	default:
 		return "", fmt.Errorf("unsupported workflow: %s", value)
 	}
@@ -2010,7 +2166,18 @@ func (m model) toolsStatus() string {
 }
 
 func runningStatus(config runConfig) string {
-	return "running " + config.Provider.Label() + " / " + config.Model + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+}
+
+func runWorkflowStatus(workflow runWorkflow) string {
+	switch workflow {
+	case workflowAuto:
+		return "progressive-auto"
+	case workflowChat, workflowBasic, workflowAgentic:
+		return string(workflow)
+	default:
+		return emptyAsNone(string(workflow))
+	}
 }
 
 func runToolsStatus(config runConfig) string {

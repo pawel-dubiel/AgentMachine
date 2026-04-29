@@ -81,14 +81,14 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:       "review this project",
-		Workflow:   workflowAgentic,
+		Workflow:   workflowAuto,
 		Provider:   providerEcho,
 		RunTimeout: "240000",
 	})
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "agentic",
+		"--workflow", "auto",
 		"--provider", "echo",
 		"--timeout-ms", "240000",
 		"--max-steps", defaultAgenticSteps,
@@ -252,6 +252,7 @@ func TestPrepareRunLogCreatesPrivateDirectory(t *testing.T) {
 
 func TestRunningStatusIncludesToolState(t *testing.T) {
 	withoutTools := runningStatus(runConfig{
+		Workflow: workflowAuto,
 		Provider: providerOpenRouter,
 		Model:    "qwen/qwen3.5-flash-02-23",
 	})
@@ -259,8 +260,12 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	if !strings.Contains(withoutTools, "tools off") {
 		t.Fatalf("expected tools off in running status, got %q", withoutTools)
 	}
+	if !strings.Contains(withoutTools, "mode progressive-auto") {
+		t.Fatalf("expected progressive auto mode in running status, got %q", withoutTools)
+	}
 
 	withTools := runningStatus(runConfig{
+		Workflow:    workflowAuto,
 		Provider:    providerOpenRouter,
 		Model:       "qwen/qwen3.5-flash-02-23",
 		ToolHarness: "local-files",
@@ -502,8 +507,17 @@ func TestAgentDetailRendersPlannerDecision(t *testing.T) {
 
 func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 	m := model{
+		provider:    providerEcho,
+		providerSet: true,
 		lastSummary: summary{
 			Skills: []skillSummary{{Name: "docs-helper"}},
+			WorkflowRoute: workflowRoute{
+				Requested:    "auto",
+				Selected:     "chat",
+				Reason:       "no_tool_or_mutation_intent_detected",
+				ToolIntent:   "none",
+				ToolsExposed: false,
+			},
 		},
 		agents: map[string]agentState{
 			"planner": {ID: "planner", Status: "ok"},
@@ -514,6 +528,12 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 	view := m.agentsView()
 	if !strings.Contains(view, "Skills: docs-helper") {
 		t.Fatalf("expected selected skills in agents view, got %q", view)
+	}
+	if !strings.Contains(view, "Workflow route: requested=auto selected=chat intent=none tools=false") {
+		t.Fatalf("expected workflow route in agents view, got %q", view)
+	}
+	if !strings.Contains(m.statusLine(), "route=auto->chat") {
+		t.Fatalf("expected workflow route in status line, got %q", m.statusLine())
 	}
 }
 
@@ -648,8 +668,8 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 
 	config := m.runConfig("review this project")
 
-	if config.Workflow != workflowAgentic {
-		t.Fatalf("expected planner-managed agentic workflow, got %q", config.Workflow)
+	if config.Workflow != workflowAuto {
+		t.Fatalf("expected progressive auto workflow request, got %q", config.Workflow)
 	}
 
 	if config.InputPrice != "0.15" {
@@ -750,7 +770,7 @@ func TestInitialModelRequiresProviderBeforeRun(t *testing.T) {
 	}
 }
 
-func TestStartRunUsesAgenticWithoutWorkflowSetup(t *testing.T) {
+func TestStartRunUsesAutoWithoutWorkflowSetup(t *testing.T) {
 	m := model{
 		provider:    providerEcho,
 		providerSet: true,
@@ -763,17 +783,17 @@ func TestStartRunUsesAgenticWithoutWorkflowSetup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command")
 	}
-	if result.activeConfig.Workflow != workflowAgentic {
-		t.Fatalf("expected agentic workflow, got %q", result.activeConfig.Workflow)
+	if result.activeConfig.Workflow != workflowAuto {
+		t.Fatalf("expected auto workflow request, got %q", result.activeConfig.Workflow)
 	}
 }
 
-func TestSetupAndHelpUsePlannerManagedMode(t *testing.T) {
+func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	m := model{provider: providerEcho, providerSet: true}
 
 	setup := m.setupView()
-	if !strings.Contains(setup, "mode: planner-managed agentic") {
-		t.Fatalf("expected planner mode in setup view, got %q", setup)
+	if !strings.Contains(setup, "mode: progressive auto") {
+		t.Fatalf("expected progressive auto mode in setup view, got %q", setup)
 	}
 	if strings.Contains(setup, "/workflow") || strings.Contains(setup, "workflow:") {
 		t.Fatalf("expected setup view to omit workflow selection, got %q", setup)
@@ -790,7 +810,7 @@ func TestSetupAndHelpUsePlannerManagedMode(t *testing.T) {
 	}
 }
 
-func TestWorkflowCommandReportsPlannerManagedMode(t *testing.T) {
+func TestWorkflowCommandReportsProgressiveAutoMode(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
 	m, err := initialModel()
@@ -804,7 +824,7 @@ func TestWorkflowCommandReportsPlannerManagedMode(t *testing.T) {
 	if result.workflowSet {
 		t.Fatal("expected workflow command not to mutate workflow setup")
 	}
-	if !strings.Contains(result.messages[len(result.messages)-1].Text, "planner-managed agentic") {
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "progressive auto") {
 		t.Fatalf("unexpected workflow message: %#v", result.messages[len(result.messages)-1])
 	}
 }
@@ -1754,6 +1774,154 @@ func TestLiveActivityViewRendersSummariesAndScrollHint(t *testing.T) {
 	}
 	if !strings.Contains(view, "Up/Down scroll") {
 		t.Fatalf("expected scroll hint, got %q", view)
+	}
+}
+
+func TestEnterWhileRunningQueuesMessage(t *testing.T) {
+	input := textinput.New()
+	input.SetValue("next question")
+	m := model{input: input, running: true, view: viewChat}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command while current run is active")
+	}
+	if len(result.queuedMessages) != 1 || result.queuedMessages[0].Text != "next question" {
+		t.Fatalf("expected queued message, got %#v", result.queuedMessages)
+	}
+	if result.input.Value() != "" {
+		t.Fatalf("expected input to clear, got %q", result.input.Value())
+	}
+}
+
+func TestQueueCommandsEditRemoveClearAndRun(t *testing.T) {
+	m := model{
+		queuedMessages: []queuedMessage{
+			{ID: 1, Text: "first"},
+			{ID: 2, Text: "second"},
+		},
+	}
+
+	updated, _ := m.handleCommand("/queue edit 2 updated message")
+	result := updated.(model)
+	if result.queuedMessages[1].Text != "updated message" {
+		t.Fatalf("expected edited queue item, got %#v", result.queuedMessages)
+	}
+
+	updated, _ = result.handleCommand("/queue remove 1")
+	result = updated.(model)
+	if len(result.queuedMessages) != 1 || result.queuedMessages[0].Text != "updated message" {
+		t.Fatalf("expected first item removed, got %#v", result.queuedMessages)
+	}
+
+	updated, _ = result.handleCommand("/queue clear")
+	result = updated.(model)
+	if len(result.queuedMessages) != 0 {
+		t.Fatalf("expected cleared queue, got %#v", result.queuedMessages)
+	}
+}
+
+func TestQueueRunStartsImmediatelyWhenIdle(t *testing.T) {
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  filepath.Join(t.TempDir(), "config.json"),
+		queuedMessages: []queuedMessage{
+			{ID: 1, Text: "first"},
+			{ID: 2, Text: "second"},
+		},
+	}
+
+	updated, cmd := m.handleCommand("/queue run 2")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected queued run command")
+	}
+	if !result.running {
+		t.Fatal("expected run to start")
+	}
+	if len(result.queuedMessages) != 1 || result.queuedMessages[0].Text != "first" {
+		t.Fatalf("expected selected item removed from queue, got %#v", result.queuedMessages)
+	}
+}
+
+func TestQueueRunMovesItemToFrontWhileRunning(t *testing.T) {
+	m := model{
+		running: true,
+		queuedMessages: []queuedMessage{
+			{ID: 1, Text: "first"},
+			{ID: 2, Text: "second"},
+			{ID: 3, Text: "third"},
+		},
+	}
+
+	updated, cmd := m.handleCommand("/queue run 3")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no command while current run is active")
+	}
+	if result.queuedMessages[0].Text != "third" {
+		t.Fatalf("expected third to move to front, got %#v", result.queuedMessages)
+	}
+}
+
+func TestQueuedMessageStartsAfterCurrentRun(t *testing.T) {
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  filepath.Join(t.TempDir(), "config.json"),
+		queuedMessages: []queuedMessage{
+			{ID: 1, Text: "next"},
+		},
+	}
+
+	updated, cmd := m.startNextQueuedRun()
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected queued run command")
+	}
+	if !result.running || len(result.queuedMessages) != 0 {
+		t.Fatalf("expected queued run to start and queue to empty, running=%v queue=%#v", result.running, result.queuedMessages)
+	}
+}
+
+func TestNonQueueCommandRejectedWhileRunning(t *testing.T) {
+	m := model{running: true}
+
+	updated, cmd := m.handleCommand("/provider echo")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if len(result.messages) == 0 || !strings.Contains(result.messages[len(result.messages)-1].Text, "command unavailable") {
+		t.Fatalf("expected unavailable command message, got %#v", result.messages)
+	}
+}
+
+func TestQueueRendersInStatusAndChat(t *testing.T) {
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		queuedMessages: []queuedMessage{
+			{ID: 1, Text: "queued message"},
+		},
+	}
+
+	if !strings.Contains(m.statusLine(), "queue=1") {
+		t.Fatalf("expected queue count in status, got %q", m.statusLine())
+	}
+	if !strings.Contains(m.chatView(), "queued message") {
+		t.Fatalf("expected queued message in chat view, got %q", m.chatView())
 	}
 }
 

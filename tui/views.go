@@ -40,12 +40,12 @@ func (m model) View() string {
 	}
 
 	b.WriteString("\n\n")
+	b.WriteString("> ")
+	b.WriteString(m.input.View())
+	b.WriteString("\n")
 	if m.running {
-		b.WriteString(hintStyle.Render("Running. Tab navigates; Agents shows live agent state."))
+		b.WriteString(hintStyle.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
 	} else {
-		b.WriteString("> ")
-		b.WriteString(m.input.View())
-		b.WriteString("\n")
 		b.WriteString(hintStyle.Render("Type a message or /help. Tab changes view. Esc goes back."))
 	}
 	return b.String()
@@ -65,6 +65,12 @@ func (m model) statusLine() string {
 	if m.running {
 		parts = append(parts, "run=running")
 	}
+	if route := workflowRouteStatus(m.lastSummary.WorkflowRoute); route != "" {
+		parts = append(parts, route)
+	}
+	if len(m.queuedMessages) > 0 {
+		parts = append(parts, fmt.Sprintf("queue=%d", len(m.queuedMessages)))
+	}
 	if m.skillsEnabled() {
 		parts = append(parts, "skills="+m.skillsModeLabel())
 	}
@@ -75,7 +81,7 @@ func (m model) statusLine() string {
 }
 
 func (m model) chatView() string {
-	if len(m.messages) == 0 {
+	if len(m.messages) == 0 && len(m.queuedMessages) == 0 {
 		return hintStyle.Render("No messages yet.")
 	}
 
@@ -105,7 +111,21 @@ func (m model) chatView() string {
 		b.WriteString(m.liveActivityView())
 		b.WriteString("\n")
 	}
+	if len(m.queuedMessages) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(m.queueView())
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) queueView() string {
+	lines := []string{labelStyle.Render("Queued")}
+	for index, item := range m.queuedMessages {
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, compactQueueText(item.Text)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) liveActivityView() string {
@@ -231,7 +251,7 @@ func (m model) setupView() string {
 
 	return strings.Join([]string{
 		labelStyle.Render("Setup"),
-		"mode: planner-managed agentic",
+		"mode: progressive auto",
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
@@ -346,6 +366,29 @@ func selectedModelPickerPosition(indexes []int, selected int) int {
 	return 0
 }
 
+func workflowRouteStatus(route workflowRoute) string {
+	if strings.TrimSpace(route.Requested) == "" && strings.TrimSpace(route.Selected) == "" {
+		return ""
+	}
+	return "route=" + emptyAsNone(route.Requested) + "->" + emptyAsNone(route.Selected)
+}
+
+func workflowRouteLine(route workflowRoute) string {
+	if strings.TrimSpace(route.Requested) == "" && strings.TrimSpace(route.Selected) == "" {
+		return ""
+	}
+	parts := []string{
+		"requested=" + emptyAsNone(route.Requested),
+		"selected=" + emptyAsNone(route.Selected),
+		"intent=" + emptyAsNone(route.ToolIntent),
+		fmt.Sprintf("tools=%v", route.ToolsExposed),
+	}
+	if strings.TrimSpace(route.Reason) != "" {
+		parts = append(parts, "reason="+route.Reason)
+	}
+	return "Workflow route: " + strings.Join(parts, " ")
+}
+
 func (m model) agentsView() string {
 	if len(m.agentOrder) == 0 {
 		return "No agents yet. Send a message after setup."
@@ -354,6 +397,9 @@ func (m model) agentsView() string {
 	lines := []string{labelStyle.Render("Agents")}
 	if len(m.eventLog) > 0 {
 		lines = append(lines, liveActivityHeader(m), recentEventLine(m.eventLog[len(m.eventLog)-1]), "")
+	}
+	if route := workflowRouteLine(m.lastSummary.WorkflowRoute); route != "" {
+		lines = append(lines, route, "")
 	}
 	if len(m.lastSummary.Skills) > 0 {
 		lines = append(lines, "Skills: "+skillSummaryLine(m.lastSummary.Skills), "")
@@ -500,6 +546,7 @@ func helpText() string {
 		"/settings",
 		"/agents",
 		"/agent <id>",
+		"/queue [list]|edit <index> <message>|remove <index>|clear|run <index>",
 		"/back",
 		"/clear",
 		"/quit",

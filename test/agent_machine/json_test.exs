@@ -31,4 +31,18 @@ defmodule AgentMachine.JSONTest do
 
     assert %{"output" => [%{"content" => [%{"text" => "done"}]}]} = JSON.decode!(payload)
   end
+
+  test "decodes escaped UTF-16 surrogate pairs" do
+    assert JSON.decode!(~S({"emoji":"\uD83C\uDF26"})) == %{"emoji" => <<0x1F326::utf8>>}
+  end
+
+  test "rejects invalid escaped UTF-16 surrogates" do
+    assert_raise ArgumentError, ~r/high surrogate/, fn ->
+      JSON.decode!(~S({"emoji":"\uD83C"}))
+    end
+
+    assert_raise ArgumentError, ~r/lone low surrogate/, fn ->
+      JSON.decode!(~S({"emoji":"\uDF26"}))
+    end
+  end
 end

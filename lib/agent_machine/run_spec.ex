@@ -36,7 +36,7 @@ defmodule AgentMachine.RunSpec do
 
   @type t :: %__MODULE__{
           task: binary(),
-          workflow: :basic | :agentic,
+          workflow: :chat | :basic | :agentic | :auto,
           provider: :echo | :openai | :openrouter,
           model: binary() | nil,
           timeout_ms: pos_integer(),
@@ -113,11 +113,11 @@ defmodule AgentMachine.RunSpec do
     end)
   end
 
-  defp require_workflow!(workflow) when workflow in [:basic, :agentic], do: :ok
+  defp require_workflow!(workflow) when workflow in [:chat, :basic, :agentic, :auto], do: :ok
 
   defp require_workflow!(workflow) do
     raise ArgumentError,
-          "run spec :workflow must be :basic or :agentic, got: #{inspect(workflow)}"
+          "run spec :workflow must be :chat, :basic, :agentic, or :auto, got: #{inspect(workflow)}"
   end
 
   defp require_provider!(provider) when provider in [:echo, :openai, :openrouter], do: :ok

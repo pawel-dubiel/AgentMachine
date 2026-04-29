@@ -4,7 +4,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
   alias AgentMachine.{AgentResult, ClientRunner, JSON, RunSpec, UsageLedger}
   alias AgentMachine.Tools.ApplyEdits
-  alias AgentMachine.Workflows.{Agentic, Basic}
+  alias AgentMachine.Workflows.{Agentic, Basic, Chat}
   alias Mix.Tasks.AgentMachine.{Rollback, Run}
 
   setup do
@@ -48,6 +48,31 @@ defmodule AgentMachine.ClientRunnerTest do
                  end
   end
 
+  test "validates new workflow request values" do
+    for workflow <- [:chat, :basic, :agentic, :auto] do
+      assert %RunSpec{workflow: ^workflow} =
+               RunSpec.new!(%{
+                 task: "do work",
+                 workflow: workflow,
+                 provider: :echo,
+                 timeout_ms: 1_000,
+                 max_steps: 2,
+                 max_attempts: 1
+               })
+    end
+
+    assert_raise ArgumentError, ~r/:workflow must be :chat, :basic, :agentic, or :auto/, fn ->
+      RunSpec.new!(%{
+        task: "do work",
+        workflow: :unknown,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1
+      })
+    end
+  end
+
   test "builds the basic workflow with OpenRouter provider options" do
     spec =
       RunSpec.new!(%{
@@ -73,6 +98,25 @@ defmodule AgentMachine.ClientRunnerTest do
              provider: AgentMachine.Providers.OpenRouterChat,
              model: "openai/gpt-4o-mini"
            } = Keyword.fetch!(opts, :finalizer)
+  end
+
+  test "builds the chat workflow without tools or finalizer" do
+    spec =
+      RunSpec.new!(%{
+        task: "hello",
+        workflow: :chat,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 1,
+        max_attempts: 1
+      })
+
+    {[assistant], opts} = Chat.build!(spec)
+
+    assert assistant.id == "assistant"
+    assert assistant.metadata == %{agent_machine_disable_tools: true}
+    refute Keyword.has_key?(opts, :finalizer)
+    refute Keyword.has_key?(opts, :allowed_tools)
   end
 
   test "builds workflow tool options from an explicit harness" do
@@ -393,6 +437,48 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Enum.map(summary.events, & &1.type) |> List.last() == "run_completed"
   end
 
+  test "runs the chat echo workflow and returns assistant output directly" do
+    summary =
+      ClientRunner.run!(%{
+        task: "summarize the project",
+        workflow: :chat,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 1,
+        max_attempts: 1
+      })
+
+    assert summary.status == "completed"
+    assert summary.final_output =~ "agent assistant: summarize the project"
+    assert Map.keys(summary.results) == ["assistant"]
+
+    assert summary.workflow_route == %{
+             requested: "chat",
+             selected: "chat",
+             reason: "explicit_chat_workflow",
+             tool_intent: "none",
+             tools_exposed: false
+           }
+  end
+
+  test "runs auto chat without planner when no tool intent is detected" do
+    summary =
+      ClientRunner.run!(%{
+        task: "explain progressive escalation",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1
+      })
+
+    assert summary.status == "completed"
+    assert summary.workflow_route.selected == "chat"
+    assert Map.keys(summary.results) == ["assistant"]
+    refute Map.has_key?(summary.results, "planner")
+    assert summary.final_output =~ "agent assistant: explain progressive escalation"
+  end
+
   test "runs the agentic echo workflow in direct mode and exposes planner decision" do
     summary =
       ClientRunner.run!(%{
@@ -558,6 +644,70 @@ defmodule AgentMachine.ClientRunnerTest do
     decoded = JSON.decode!(json)
     assert decoded["status"] == "completed"
     assert decoded["final_output"] =~ "finalizer"
+  end
+
+  test "mix agent_machine.run accepts auto workflow and reports selected route" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "auto",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "6",
+      "--max-attempts",
+      "1",
+      "--json",
+      "explain progressive escalation"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+
+    decoded = JSON.decode!(json)
+    assert decoded["workflow_route"]["requested"] == "auto"
+    assert decoded["workflow_route"]["selected"] == "chat"
+    assert Map.keys(decoded["results"]) == ["assistant"]
+  end
+
+  test "mix agent_machine.run rejects explicit chat with tool harness options" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/workflow :chat does not accept tool harness options/, fn ->
+      Run.run([
+        "--workflow",
+        "chat",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "1",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "local-files",
+        "--tool-root",
+        System.tmp_dir!(),
+        "--tool-timeout-ms",
+        "100",
+        "--tool-max-rounds",
+        "2",
+        "--tool-approval-mode",
+        "read-only",
+        "--json",
+        "hello"
+      ])
+    end
   end
 
   test "mix agent_machine.run prints JSONL events before final summary" do

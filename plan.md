@@ -4,6 +4,7 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
+- [2026-04-28] Add a dedicated low-latency edit workflow for simple single-agent file/code mutations after progressive auto routing is stable.
 - [2026-04-26] Add OS-level sandbox and execution policy for future process-capable or network-capable tools.
 - [2026-04-26] Add reusable subagent definitions with per-agent prompts, tool allowlists, and permission inheritance.
 - [2026-04-26] Add resumable subagent and run context after durable run state exists.
