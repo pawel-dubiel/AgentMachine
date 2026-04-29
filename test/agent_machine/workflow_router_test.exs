@@ -41,6 +41,23 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.tools_exposed
   end
 
+  test "routes auto project check intent to basic with a filesystem harness" do
+    route =
+      route!(%{
+        task: "Hi check in home folder Project1 and if thats app works",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/home",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 6,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "basic"
+    assert route.tool_intent == "file_read"
+    assert route.tools_exposed
+  end
+
   test "routes auto time intent to basic with demo harness" do
     route =
       route!(%{

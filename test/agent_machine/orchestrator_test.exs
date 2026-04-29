@@ -581,7 +581,7 @@ defmodule AgentMachine.OrchestratorTest do
                timeout: 1_000,
                allowed_tools: [AgentMachine.Tools.CreateDir],
                tool_policy: AgentMachine.ToolHarness.builtin_policy!(:local_files),
-               tool_root: "/Users/pawel",
+               tool_root: "/tmp/agent-machine-home",
                tool_timeout_ms: 100,
                tool_max_rounds: 2,
                tool_approval_mode: :auto_approved_safe
@@ -590,7 +590,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["no-tools"].status == :ok
     assert run.results["no-tools"].output =~ "worker agents only"
     assert run.results["no-tools"].output =~ "create_dir"
-    assert run.results["no-tools"].output =~ "/Users/pawel"
+    assert run.results["no-tools"].output =~ "/tmp/agent-machine-home"
   end
 
   test "runs multiple provider tool rounds up to the explicit limit" do

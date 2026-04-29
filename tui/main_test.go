@@ -119,7 +119,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		OutputPrice:   "0.01",
 		HTTPTimeout:   "120000",
 		ToolHarness:   "local-files",
-		ToolRoot:      "/Users/pawel/mywiki",
+		ToolRoot:      "/tmp/agent-machine-wiki",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "auto-approved-safe",
@@ -142,7 +142,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 		"--tool-timeout-ms", "1000",
 		"--tool-max-rounds", "2",
 		"--tool-approval-mode", "auto-approved-safe",
-		"--tool-root", "/Users/pawel/mywiki",
+		"--tool-root", "/tmp/agent-machine-wiki",
 		"create hello",
 	}
 
@@ -175,7 +175,7 @@ func TestBuildRunArgsIncludesRepeatedTestCommands(t *testing.T) {
 		Workflow:      workflowBasic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "full-access",
@@ -269,10 +269,10 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 		Provider:    providerOpenRouter,
 		Model:       "qwen/qwen3.5-flash-02-23",
 		ToolHarness: "local-files",
-		ToolRoot:    "/Users/pawel",
+		ToolRoot:    "/tmp/agent-machine-home",
 	})
 
-	if !strings.Contains(withTools, "tools local-files root=/Users/pawel") {
+	if !strings.Contains(withTools, "tools local-files root=/tmp/agent-machine-home") {
 		t.Fatalf("expected tool root in running status, got %q", withTools)
 	}
 }
@@ -287,7 +287,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		OutputPrice:   "0.01",
 		HTTPTimeout:   "120000",
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "full-access",
@@ -310,7 +310,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		"--tool-timeout-ms", "1000",
 		"--tool-max-rounds", "2",
 		"--tool-approval-mode", "full-access",
-		"--tool-root", "/Users/pawel/project",
+		"--tool-root", "/tmp/agent-machine-project",
 		"edit code",
 	}
 
@@ -397,7 +397,7 @@ func TestValidateConfigRequiresToolMaxRoundsForLocalFiles(t *testing.T) {
 		Workflow:    workflowBasic,
 		Provider:    providerEcho,
 		ToolHarness: "local-files",
-		ToolRoot:    "/Users/pawel/mywiki",
+		ToolRoot:    "/tmp/agent-machine-wiki",
 		ToolTimeout: "1000",
 	})
 
@@ -412,7 +412,7 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 		Workflow:      workflowBasic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "full-access",
@@ -457,7 +457,7 @@ func TestValidateConfigRequiresToolApprovalMode(t *testing.T) {
 		Workflow:      workflowBasic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 	})
@@ -858,7 +858,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools local-files /Users/pawel/mywiki 1000 2 auto-approved-safe")
+	updated, _ := m.handleCommand("/tools local-files /tmp/agent-machine-wiki 1000 2 auto-approved-safe")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "local-files" {
@@ -869,7 +869,7 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.ToolRoot != "/Users/pawel/mywiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "auto-approved-safe" {
+	if loaded.ToolRoot != "/tmp/agent-machine-wiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
 	}
 }
@@ -883,7 +883,7 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2 full-access")
+	updated, _ := m.handleCommand("/tools code-edit /tmp/agent-machine-project 1000 2 full-access")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "code-edit" {
@@ -894,7 +894,7 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/Users/pawel/project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "full-access" {
+	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/tmp/agent-machine-project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "full-access" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
 	}
 }
@@ -1063,7 +1063,7 @@ func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
 func TestValidateConfigRejectsTestCommandsWithoutCodeEditFullAccess(t *testing.T) {
 	err := validateToolConfig(runConfig{
 		ToolHarness:   "local-files",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "full-access",
@@ -1075,7 +1075,7 @@ func TestValidateConfigRejectsTestCommandsWithoutCodeEditFullAccess(t *testing.T
 
 	err = validateToolConfig(runConfig{
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "auto-approved-safe",
@@ -1092,7 +1092,7 @@ func TestToolsOffClearsTestCommands(t *testing.T) {
 
 	if err := saveSavedConfig(configPath, savedConfig{
 		ToolHarness:   "code-edit",
-		ToolRoot:      "/Users/pawel/project",
+		ToolRoot:      "/tmp/agent-machine-project",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "full-access",
@@ -1123,7 +1123,7 @@ func TestToolsCommandRejectsInvalidApprovalMode(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	updated, _ := m.handleCommand("/tools code-edit /Users/pawel/project 1000 2 maybe")
+	updated, _ := m.handleCommand("/tools code-edit /tmp/agent-machine-project 1000 2 maybe")
 	result := updated.(model)
 
 	if result.savedConfig.ToolHarness != "" {
@@ -1140,7 +1140,7 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 
 	if err := saveSavedConfig(configPath, savedConfig{
 		ToolHarness:   "local-files",
-		ToolRoot:      "/Users/pawel/mywiki",
+		ToolRoot:      "/tmp/agent-machine-wiki",
 		ToolTimeout:   "1000",
 		ToolMaxRounds: "2",
 		ToolApproval:  "auto-approved-safe",
@@ -1254,7 +1254,7 @@ func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
 func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
 	m := model{
 		pendingToolTask: "create directory testmme in my home folder",
-		pendingToolRoot: "/Users/pawel",
+		pendingToolRoot: "/tmp/agent-machine-home",
 	}
 
 	updated, cmd := m.handleCommand("/deny-tools")
@@ -1272,6 +1272,8 @@ func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
 }
 
 func TestStartRunIncludesRecentConversationContext(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
 	m := model{
 		workflow:    workflowBasic,
 		workflowSet: true,
@@ -1279,7 +1281,7 @@ func TestStartRunIncludesRecentConversationContext(t *testing.T) {
 		providerSet: true,
 		savedConfig: savedConfig{
 			ToolHarness:   "local-files",
-			ToolRoot:      "/Users/pawel",
+			ToolRoot:      "/tmp/agent-machine-home",
 			ToolTimeout:   "1000",
 			ToolMaxRounds: "2",
 			ToolApproval:  "auto-approved-safe",
@@ -1419,7 +1421,7 @@ func TestFilesystemWritePromptWhenActiveRootDoesNotCoverRequest(t *testing.T) {
 		configPath:  configPath,
 		savedConfig: savedConfig{
 			ToolHarness:   "local-files",
-			ToolRoot:      "/Users/pawel/mywiki",
+			ToolRoot:      "/tmp/agent-machine-wiki",
 			ToolTimeout:   "1000",
 			ToolMaxRounds: "2",
 			ToolApproval:  "auto-approved-safe",
@@ -1475,7 +1477,7 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 		Provider:        "openrouter",
 		OpenRouterModel: "openai/gpt-4o-mini",
 		ToolHarness:     "local-files",
-		ToolRoot:        "/Users/pawel/mywiki",
+		ToolRoot:        "/tmp/agent-machine-wiki",
 		ToolTimeout:     "1000",
 		ToolMaxRounds:   "2",
 		ToolApproval:    "auto-approved-safe",
@@ -2071,7 +2073,7 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 		OpenAIModel:      "gpt-4o-mini",
 		OpenRouterModel:  "openai/gpt-4o-mini",
 		ToolHarness:      "local-files",
-		ToolRoot:         "/Users/pawel/mywiki",
+		ToolRoot:         "/tmp/agent-machine-wiki",
 		ToolTimeout:      "1000",
 		ToolMaxRounds:    "2",
 		ToolApproval:     "auto-approved-safe",
@@ -2107,7 +2109,7 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 	if loaded.ToolHarness != "local-files" {
 		t.Fatalf("unexpected tool harness: %q", loaded.ToolHarness)
 	}
-	if loaded.ToolRoot != "/Users/pawel/mywiki" {
+	if loaded.ToolRoot != "/tmp/agent-machine-wiki" {
 		t.Fatalf("unexpected tool root: %q", loaded.ToolRoot)
 	}
 	if loaded.ToolTimeout != "1000" {

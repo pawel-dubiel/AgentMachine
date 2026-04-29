@@ -13,14 +13,14 @@ defmodule AgentMachine.RunContextPromptTest do
         run_context: %{results: %{}, artifacts: %{}},
         allowed_tools: [AgentMachine.Tools.CreateDir, AgentMachine.Tools.WriteFile],
         tool_policy: AgentMachine.ToolHarness.builtin_policy!(:local_files),
-        tool_root: "/Users/pawel",
+        tool_root: "/tmp/agent-machine-home",
         tool_approval_mode: :auto_approved_safe
       )
 
     assert %{
              "tools" => %{
                "harness" => "local_files",
-               "root" => "/Users/pawel",
+               "root" => "/tmp/agent-machine-home",
                "approval_mode" => "auto_approved_safe",
                "available_tools" => tools,
                "instruction" => instruction
@@ -41,7 +41,7 @@ defmodule AgentMachine.RunContextPromptTest do
           AgentMachine.ToolHarness.builtin_policy!(:code_edit,
             test_commands: ["mix test"]
           ),
-        tool_root: "/Users/pawel/project",
+        tool_root: "/tmp/agent-machine-project",
         tool_approval_mode: :full_access,
         test_commands: ["mix test"]
       )
@@ -63,7 +63,7 @@ defmodule AgentMachine.RunContextPromptTest do
         run_context: %{results: %{}, artifacts: %{}},
         tool_context: %{
           harness: "local_files",
-          root: "/Users/pawel",
+          root: "/tmp/agent-machine-home",
           approval_mode: :auto_approved_safe,
           available_tools: ["create_dir"],
           instruction: "Tools are available to worker agents only."
@@ -73,7 +73,7 @@ defmodule AgentMachine.RunContextPromptTest do
     assert %{
              "tools" => %{
                "harness" => "local_files",
-               "root" => "/Users/pawel",
+               "root" => "/tmp/agent-machine-home",
                "approval_mode" => "auto_approved_safe",
                "available_tools" => ["create_dir"],
                "instruction" => "Tools are available to worker agents only."
