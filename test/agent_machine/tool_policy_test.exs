@@ -4,7 +4,7 @@ defmodule AgentMachine.ToolPolicyTest do
   alias AgentMachine.ToolPolicy
 
   test "permits tools with granted permissions" do
-    policy = ToolPolicy.new!(permissions: [:demo_time])
+    policy = ToolPolicy.new!(permissions: [:time_read])
 
     assert :ok = ToolPolicy.permit!(policy, AgentMachine.Tools.Now)
   end
@@ -12,7 +12,7 @@ defmodule AgentMachine.ToolPolicyTest do
   test "rejects tools without granted permissions" do
     policy = ToolPolicy.new!(permissions: [:local_files_read])
 
-    assert_raise ArgumentError, ~r/requires permission :demo_time/, fn ->
+    assert_raise ArgumentError, ~r/requires permission :time_read/, fn ->
       ToolPolicy.permit!(policy, AgentMachine.Tools.Now)
     end
   end

@@ -117,6 +117,19 @@ The quality gate runs formatting checks, warnings-as-errors compilation, Credo i
 
 For documentation-only changes, running tests is optional. Say explicitly when tests were not run because the change was documentation-only.
 
+## Debugging Logs
+
+- For TUI debugging, inspect JSONL logs under
+  `$HOME/Library/Application Support/agent-machine/logs/`.
+- TUI per-run stream logs use `run-*.jsonl`; session-level collector logs use
+  `session-*.jsonl`.
+- The TUI setup screen shows the exact `session log` path for the active
+  session.
+- CLI runs write logs only when explicit paths are passed with `--log-file` or
+  `--event-log-file`.
+- Treat log contents as redacted runtime evidence for workflow routing, agent
+  lifecycle, provider activity, tool calls, skills, and final summaries.
+
 ## Current Architecture
 
 - `AgentMachine.Orchestrator` owns run state, task spawning, result aggregation, dynamic delegation, run artifacts, and usage totals.

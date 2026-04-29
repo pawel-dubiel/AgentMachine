@@ -55,6 +55,9 @@ make quality
 For a linked overview of the complete feature set, see
 [FEATURES.md](FEATURES.md).
 
+For a PlantUML overview of routing, skills, MCP, tools, and orchestration, see
+[docs/agent-runtime-flow.puml](docs/agent-runtime-flow.puml).
+
 ## Common Commands
 
 ```sh
@@ -138,6 +141,27 @@ mix agent_machine.run \
   "Review this project and summarize the next step"
 ```
 
+Write a session-level event log through the Elixir collector:
+
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --event-log-file ./agent-machine-session.jsonl \
+  --event-session-id local-session-1 \
+  "Review this project and summarize the next step"
+```
+
+`--log-file` records the JSONL output stream for one run. `--event-log-file`
+uses the supervised `AgentMachine.EventLog` collector and appends redacted
+runtime events plus the final summary, including route decisions, skills,
+agent lifecycle events, provider activity, tool calls, and tool results. The
+collector creates the parent directory, writes JSONL envelopes, and can be used
+alongside `--log-file`.
+
 JSON, JSONL, text summaries, and run log files are redacted before output.
 The redactor masks common API keys, bearer tokens, authorization headers,
 GitHub tokens, AWS access key IDs, private key blocks, and secret-looking
@@ -189,6 +213,52 @@ mix agent_machine.run \
   --jsonl \
   "Review this project and suggest the next change"
 ```
+
+### Router Classifier
+
+`auto` uses deterministic routing by default. An optional local multilingual NLI
+classifier can be enabled explicitly to classify intent before the deterministic
+capability matrix selects `chat`, `basic`, or `agentic`.
+
+Install the model files into an explicit directory:
+
+```sh
+mix agent_machine.router_model.install --target ./router-model
+```
+
+This downloads `tokenizer.json`, `config.json`, and
+`onnx/model_quantized.onnx` from
+`MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7` and writes an
+AgentMachine manifest. Normal runs never download model files.
+
+Use the local classifier only when all local router settings are present:
+
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --router-mode local \
+  --router-model-dir ./router-model \
+  --router-timeout-ms 5000 \
+  --router-confidence-threshold 0.55 \
+  "napraw ten skrypt"
+```
+
+The classifier predicts only `classified_intent` and `confidence`. It never
+grants permissions or exposes tools directly; missing read/write/test
+capabilities still fail fast before any model workflow starts.
+
+Intent routing is intentionally conservative:
+
+- `none` -> `chat`.
+- `file_read`, `tool_use` -> `basic` only when a matching read/tool harness is configured.
+- `time` -> `basic` with the `time` harness; if another tool harness is already
+  active, the runtime adds `time` for that run; otherwise `chat` with no tools.
+- `file_mutation`, `code_mutation`, `test_command` -> `agentic` only when the required write/test capability exists.
+- `delegation` -> `agentic`.
 
 ## Skills
 
@@ -375,7 +445,7 @@ Tools are off unless you enable a harness and provide the required limits.
 The TUI shows the active tool state in the run banner so it is visible whether
 a model can actually perform local file actions.
 
-The `demo` harness exposes a clock tool:
+The `time` harness exposes a safe clock tool:
 
 ```sh
 mix agent_machine.run \
@@ -388,13 +458,16 @@ mix agent_machine.run \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
   --output-price-per-million 0.60 \
-  --tool-harness demo \
+  --tool-harness time \
   --tool-timeout-ms 1000 \
   --tool-max-rounds 2 \
   --tool-approval-mode read-only \
   --json \
   "What time is it now?"
 ```
+
+The legacy `demo` harness still exposes the same clock tool as a compatibility
+alias.
 
 The `local-files` harness can work only under an explicit existing root. It can
 create directories, inspect file metadata, list files, read files, search files,
@@ -608,10 +681,12 @@ requests run through the no-tool `chat` workflow, read/search/tool requests use
 delegation requests use `agentic`. Normal messages include a short recent
 user/assistant conversation context so follow-up wording like "inside this dir"
 can resolve from chat history.
-Each TUI run writes an Elixir JSONL log next to the config file under
-`logs/*.jsonl`; the run banner shows the exact log path. Open `/agents` to see
-the requested and selected workflow route, or `/agent planner` when an agentic
-run created a planner.
+Each TUI run writes a per-run JSONL stream log next to the config file under
+`logs/*.jsonl`; the run banner shows the exact path. The TUI also passes a
+session event log path to the Elixir collector, shown in `/setup` as
+`session log`, so all runs in the TUI session can be analyzed from one JSONL
+file. Open `/agents` to see the requested and selected workflow route, or
+`/agent planner` when an agentic run created a planner.
 
 The input remains active while a run is processing. Press `Enter` during a run
 to queue the message locally; the TUI starts queued messages one at a time after
@@ -628,6 +703,11 @@ Useful commands:
 /models
 /model
 /model <id|next|prev>
+/router deterministic
+/router local <model-dir>
+/router-timeout <ms>
+/router-confidence <float>
+/router-status
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools off
@@ -693,6 +773,9 @@ values are:
 - `--timeout-ms`.
 - `--max-steps`.
 - `--max-attempts`.
+- `--router-mode local` requires `--router-model-dir`, `--router-timeout-ms`,
+  and `--router-confidence-threshold`; deterministic routing is the default.
+- `--event-session-id` requires `--event-log-file`.
 - `--model`, `--http-timeout-ms`, pricing, and API key for remote providers.
 - `--tool-timeout-ms`, `--tool-max-rounds`, and `--tool-approval-mode` when tools are enabled.
 - `--tool-root` for `local-files` and `code-edit`.
@@ -730,8 +813,8 @@ OPENROUTER_API_KEY="..." AGENT_MACHINE_PAID_OPENROUTER_MODEL="openai/gpt-4o-mini
 
 The paid Elixir tests use a 180 second ExUnit timeout because real OpenRouter
 responses can exceed the default 60 second test timeout.
-The paid TUI agentic tests pass a 240 second run timeout to the CLI adapter so
-slower paid models can finish planner and worker phases.
+The TUI uses a 240 second run timeout for `auto` and `agentic` runs so slower
+paid models can finish planner and worker phases.
 
 The GitHub workflow `OpenRouter Paid Integration` is manual-only
 (`workflow_dispatch`) and expects the `OPENROUTER_API_KEY` repository secret.

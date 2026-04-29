@@ -7,6 +7,7 @@ defmodule AgentMachine.ToolHarness do
 
   @builtin_harnesses %{
     demo: [AgentMachine.Tools.Now],
+    time: [AgentMachine.Tools.Now],
     code_edit: [
       AgentMachine.Tools.ApplyEdits,
       AgentMachine.Tools.ApplyPatch,
@@ -33,7 +34,8 @@ defmodule AgentMachine.ToolHarness do
   }
 
   @builtin_policies %{
-    demo: [:demo_time],
+    demo: [:time_read],
+    time: [:time_read],
     code_edit: [
       :code_edit_apply_edits,
       :code_edit_apply_patch,

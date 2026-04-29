@@ -29,9 +29,15 @@ defmodule Mix.Tasks.AgentMachine.Run do
     input_price_per_million: :float,
     output_price_per_million: :float,
     log_file: :string,
+    event_log_file: :string,
+    event_session_id: :string,
     json: :boolean,
     jsonl: :boolean,
-    stream_response: :boolean
+    stream_response: :boolean,
+    router_mode: :string,
+    router_model_dir: :string,
+    router_timeout_ms: :integer,
+    router_confidence_threshold: :float
   ]
 
   @impl true
@@ -45,50 +51,53 @@ defmodule Mix.Tasks.AgentMachine.Run do
     end
 
     validate_output_mode!(opts)
+    validate_event_log_opts!(opts)
 
     attrs = attrs_from_opts(opts, positional)
 
-    with_log_file(opts, fn log_io ->
-      cond do
-        Keyword.get(opts, :jsonl, false) ->
-          output = Process.group_leader()
-
-          summary =
-            AgentMachine.ClientRunner.run!(attrs,
-              event_sink: fn event ->
-                line = AgentMachine.ClientRunner.jsonl_event!(event)
-                IO.puts(output, line)
-                write_log_line!(log_io, line)
-              end
-            )
-
-          summary_line = AgentMachine.ClientRunner.jsonl_summary!(summary)
-          IO.puts(output, summary_line)
-          write_log_line!(log_io, summary_line)
-
-        Keyword.get(opts, :json, false) ->
-          summary =
-            AgentMachine.ClientRunner.run!(attrs,
-              event_sink: fn event ->
-                write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
-              end
-            )
-
-          write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
-          Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
-
-        true ->
-          summary =
-            AgentMachine.ClientRunner.run!(attrs,
-              event_sink: fn event ->
-                write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
-              end
-            )
-
-          write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
-          print_text_summary(summary)
-      end
+    with_event_log(opts, fn ->
+      with_log_file(opts, &run_and_print(opts, attrs, &1))
     end)
+  end
+
+  defp run_and_print(opts, attrs, log_io) do
+    cond do
+      Keyword.get(opts, :jsonl, false) ->
+        output = Process.group_leader()
+
+        summary =
+          AgentMachine.ClientRunner.run!(attrs,
+            event_sink: fn event ->
+              line = AgentMachine.ClientRunner.jsonl_event!(event)
+              IO.puts(output, line)
+              write_log_line!(log_io, line)
+            end
+          )
+
+        summary_line = AgentMachine.ClientRunner.jsonl_summary!(summary)
+        IO.puts(output, summary_line)
+        write_log_line!(log_io, summary_line)
+
+      Keyword.get(opts, :json, false) ->
+        summary = run_with_log_sink(attrs, log_io)
+
+        write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
+        Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
+
+      true ->
+        summary = run_with_log_sink(attrs, log_io)
+
+        write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
+        print_text_summary(summary)
+    end
+  end
+
+  defp run_with_log_sink(attrs, log_io) do
+    AgentMachine.ClientRunner.run!(attrs,
+      event_sink: fn event ->
+        write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
+      end
+    )
   end
 
   defp validate_output_mode!(opts) do
@@ -104,7 +113,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   defp with_log_file(opts, callback) when is_function(callback, 1) do
     case Keyword.fetch(opts, :log_file) do
       {:ok, path} ->
-        path = require_non_empty_log_path!(path)
+        path = require_non_empty_path!(path, "--log-file")
 
         case File.open(path, [:write, :utf8]) do
           {:ok, io} ->
@@ -123,10 +132,37 @@ defmodule Mix.Tasks.AgentMachine.Run do
     end
   end
 
-  defp require_non_empty_log_path!(path) when is_binary(path) and byte_size(path) > 0, do: path
+  defp with_event_log(opts, callback) when is_function(callback, 0) do
+    case Keyword.fetch(opts, :event_log_file) do
+      {:ok, path} ->
+        path = require_non_empty_path!(path, "--event-log-file")
 
-  defp require_non_empty_log_path!(path) do
-    Mix.raise("--log-file must be a non-empty path, got: #{inspect(path)}")
+        AgentMachine.EventLog.configure!(path, %{
+          session_id: Keyword.get(opts, :event_session_id),
+          source: "mix agent_machine.run"
+        })
+
+        try do
+          callback.()
+        after
+          AgentMachine.EventLog.close()
+        end
+
+      :error ->
+        callback.()
+    end
+  end
+
+  defp validate_event_log_opts!(opts) do
+    if Keyword.has_key?(opts, :event_session_id) and not Keyword.has_key?(opts, :event_log_file) do
+      Mix.raise("--event-session-id requires --event-log-file")
+    end
+  end
+
+  defp require_non_empty_path!(path, _flag) when is_binary(path) and byte_size(path) > 0, do: path
+
+  defp require_non_empty_path!(path, flag) do
+    Mix.raise("#{flag} must be a non-empty path, got: #{inspect(path)}")
   end
 
   defp write_log_line!(nil, _line), do: :ok
@@ -157,7 +193,11 @@ defmodule Mix.Tasks.AgentMachine.Run do
       skills_dir: skills_dir_from_opts(opts),
       skill_names: Keyword.get_values(opts, :skill),
       allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false),
-      stream_response: Keyword.get(opts, :stream_response, false)
+      stream_response: Keyword.get(opts, :stream_response, false),
+      router_mode: router_mode_from_opts!(opts),
+      router_model_dir: Keyword.get(opts, :router_model_dir),
+      router_timeout_ms: Keyword.get(opts, :router_timeout_ms),
+      router_confidence_threshold: Keyword.get(opts, :router_confidence_threshold)
     }
   end
 
@@ -216,6 +256,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   end
 
   defp tool_harness_from_string!("demo"), do: :demo
+  defp tool_harness_from_string!("time"), do: :time
   defp tool_harness_from_string!("local-files"), do: :local_files
   defp tool_harness_from_string!("code-edit"), do: :code_edit
   defp tool_harness_from_string!("mcp"), do: :mcp
@@ -223,7 +264,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp tool_harness_from_string!(harness) do
     Mix.raise(
-      "--tool-harness must be demo, local-files, code-edit, mcp, or skills, got: #{inspect(harness)}"
+      "--tool-harness must be demo, time, local-files, code-edit, mcp, or skills, got: #{inspect(harness)}"
     )
   end
 
@@ -247,6 +288,22 @@ defmodule Mix.Tasks.AgentMachine.Run do
     case Keyword.fetch(opts, :skills_dir) do
       {:ok, path} -> path
       :error -> System.get_env("AGENT_MACHINE_SKILLS_DIR")
+    end
+  end
+
+  defp router_mode_from_opts!(opts) do
+    case Keyword.fetch(opts, :router_mode) do
+      {:ok, "deterministic"} ->
+        :deterministic
+
+      {:ok, "local"} ->
+        :local
+
+      {:ok, mode} ->
+        Mix.raise("--router-mode must be deterministic or local, got: #{inspect(mode)}")
+
+      :error ->
+        :deterministic
     end
   end
 
@@ -332,5 +389,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.shell().info("  reason: #{Map.get(route, :reason) || "(none)"}")
     Mix.shell().info("  tool intent: #{Map.get(route, :tool_intent) || "(none)"}")
     Mix.shell().info("  tools exposed: #{Map.get(route, :tools_exposed)}")
+    Mix.shell().info("  classifier: #{Map.get(route, :classifier) || "(none)"}")
+    Mix.shell().info("  classified intent: #{Map.get(route, :classified_intent) || "(none)"}")
+    Mix.shell().info("  confidence: #{Map.get(route, :confidence) || "(none)"}")
   end
 end

@@ -4,6 +4,14 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Documented the TUI run and session log locations in `AGENTS.md` for future debugging.
+- Added a single Elixir event log collector for session-level JSONL logs, including workflow routing, runtime events, tool calls, agent activity, skills, and final summaries.
+- Auto-add the safe `time` harness for `auto` time/date intent when another tool harness is already active, so time questions can use the clock tool without switching saved tools.
+- Added a dedicated `time` tool harness for the clock tool while keeping `demo` as a compatibility alias.
+- Routed `auto` time/date intent to no-tool `chat` when no time-capable harness is configured instead of failing before the model call.
+- Added an opt-in local multilingual router classifier using Ortex, Tokenizers, and an explicit Hugging Face model install task, with CLI/TUI router settings and route confidence metadata.
+- Added a PlantUML runtime flow diagram covering workflow routing, skills, MCP, tool harnesses, orchestration, and provider tool loops.
+- Increased TUI auto/agentic run timeout to 240 seconds and displayed the active run timeout in the run banner.
 - Emitted `run_started` before spawning initial agents so JSONL run logs start deterministically.
 - Returned recoverable tool execution errors, including timeouts, to the provider as tool results so the model can choose another tool approach.
 - Fixed JSON decoding of escaped UTF-16 surrogate pairs in provider tool-call arguments.

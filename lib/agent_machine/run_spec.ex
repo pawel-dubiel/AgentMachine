@@ -31,7 +31,11 @@ defmodule AgentMachine.RunSpec do
     :skills_dir,
     :skill_names,
     :allow_skill_scripts,
-    :stream_response
+    :stream_response,
+    :router_mode,
+    :router_model_dir,
+    :router_timeout_ms,
+    :router_confidence_threshold
   ]
 
   @type t :: %__MODULE__{
@@ -44,8 +48,8 @@ defmodule AgentMachine.RunSpec do
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
           pricing: map() | nil,
-          tool_harness: :demo | :local_files | :code_edit | :mcp | :skills | nil,
-          tool_harnesses: [:demo | :local_files | :code_edit | :mcp | :skills] | nil,
+          tool_harness: :demo | :time | :local_files | :code_edit | :mcp | :skills | nil,
+          tool_harnesses: [:demo | :time | :local_files | :code_edit | :mcp | :skills] | nil,
           tool_timeout_ms: pos_integer() | nil,
           tool_max_rounds: pos_integer() | nil,
           tool_root: binary() | nil,
@@ -58,7 +62,11 @@ defmodule AgentMachine.RunSpec do
           skills_dir: binary() | nil,
           skill_names: [binary()],
           allow_skill_scripts: boolean(),
-          stream_response: boolean()
+          stream_response: boolean(),
+          router_mode: :deterministic | :local,
+          router_model_dir: binary() | nil,
+          router_timeout_ms: pos_integer() | nil,
+          router_confidence_threshold: float() | nil
         }
 
   def new!(attrs) when is_map(attrs) do
@@ -91,6 +99,7 @@ defmodule AgentMachine.RunSpec do
     require_boolean!(spec.stream_response, :stream_response)
     validate_skill_options!(spec)
     validate_tool_options!(spec)
+    validate_router_options!(spec)
     spec
   end
 
@@ -145,12 +154,13 @@ defmodule AgentMachine.RunSpec do
   end
 
   defp validate_tool_options!(%__MODULE__{
-         tool_harnesses: [:demo],
+         tool_harnesses: harnesses,
          tool_timeout_ms: timeout_ms,
          tool_max_rounds: max_rounds,
          tool_approval_mode: approval_mode,
          test_commands: test_commands
-       }) do
+       })
+       when harnesses in [[:demo], [:time]] do
     require_positive_integer!(timeout_ms, :tool_timeout_ms)
     require_positive_integer!(max_rounds, :tool_max_rounds)
     require_tool_approval_mode!(approval_mode)
@@ -179,7 +189,7 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_tool_options!(%__MODULE__{tool_harnesses: harness}) do
     raise ArgumentError,
-          "run spec :tool_harnesses must be a non-empty list of :demo, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
+          "run spec :tool_harnesses must be a non-empty list of :demo, :time, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
   end
 
   defp normalize_skills!(attrs) do
@@ -188,7 +198,37 @@ defmodule AgentMachine.RunSpec do
     |> Map.put_new(:skill_names, [])
     |> Map.put_new(:allow_skill_scripts, false)
     |> Map.put_new(:stream_response, false)
+    |> Map.put_new(:router_mode, :deterministic)
     |> normalize_skill_names!()
+  end
+
+  defp validate_router_options!(%__MODULE__{
+         router_mode: :deterministic,
+         router_model_dir: nil,
+         router_timeout_ms: nil,
+         router_confidence_threshold: nil
+       }),
+       do: :ok
+
+  defp validate_router_options!(%__MODULE__{router_mode: :deterministic} = spec) do
+    raise ArgumentError,
+          "run spec deterministic router does not accept local router options, got :router_model_dir #{inspect(spec.router_model_dir)}, :router_timeout_ms #{inspect(spec.router_timeout_ms)}, and :router_confidence_threshold #{inspect(spec.router_confidence_threshold)}"
+  end
+
+  defp validate_router_options!(%__MODULE__{
+         router_mode: :local,
+         router_model_dir: model_dir,
+         router_timeout_ms: timeout_ms,
+         router_confidence_threshold: threshold
+       }) do
+    require_non_empty_binary!(model_dir, :router_model_dir)
+    require_positive_integer!(timeout_ms, :router_timeout_ms)
+    require_probability!(threshold, :router_confidence_threshold)
+  end
+
+  defp validate_router_options!(%__MODULE__{router_mode: mode}) do
+    raise ArgumentError,
+          "run spec :router_mode must be :deterministic or :local, got: #{inspect(mode)}"
   end
 
   defp normalize_skill_names!(%{skill_names: nil} = attrs), do: Map.put(attrs, :skill_names, [])
@@ -259,12 +299,12 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_harnesses!(harnesses) when is_list(harnesses) and harnesses != [] do
     Enum.each(harnesses, fn
-      harness when harness in [:demo, :local_files, :code_edit, :mcp, :skills] ->
+      harness when harness in [:demo, :time, :local_files, :code_edit, :mcp, :skills] ->
         :ok
 
       harness ->
         raise ArgumentError,
-              "run spec :tool_harness must be :demo, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
+              "run spec :tool_harness must be :demo, :time, :local_files, :code_edit, :mcp, or :skills, got: #{inspect(harness)}"
     end)
   end
 
@@ -385,6 +425,16 @@ defmodule AgentMachine.RunSpec do
   defp require_positive_integer!(value, field) do
     raise ArgumentError,
           "run spec #{inspect(field)} must be a positive integer, got: #{inspect(value)}"
+  end
+
+  defp require_probability!(value, _field)
+       when is_float(value) and value > 0.0 and value <= 1.0 do
+    :ok
+  end
+
+  defp require_probability!(value, field) do
+    raise ArgumentError,
+          "run spec #{inspect(field)} must be a float greater than 0.0 and less than or equal to 1.0, got: #{inspect(value)}"
   end
 
   defp require_tool_approval_mode!(mode)

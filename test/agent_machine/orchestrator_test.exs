@@ -852,7 +852,7 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                allowed_tools: [AgentMachine.Tools.Now],
-               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:demo_time]),
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:time_read]),
                tool_timeout_ms: 100,
                tool_max_rounds: 1,
                tool_approval_mode: :read_only

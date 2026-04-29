@@ -1,0 +1,331 @@
+@startuml
+title AgentMachine runtime flow: routing, skills, MCP, tools, and orchestration
+
+skinparam shadowing false
+skinparam ActivityBorderColor #3f4a5a
+skinparam ActivityBackgroundColor #f8fafc
+skinparam ActivityDiamondBorderColor #3f4a5a
+skinparam ActivityDiamondBackgroundColor #eef2ff
+skinparam NoteBackgroundColor #fff7ed
+skinparam NoteBorderColor #c2410c
+skinparam ArrowColor #334155
+
+start
+
+partition "TUI or Mix CLI boundary" {
+  :User message or CLI task;
+
+  if (TUI normal message?) then (yes)
+    :Build runConfig with workflow=auto;
+    :Include recent conversation context\nfor short follow-ups;
+    :Preflight local permission intent;
+    if (filesystem/code action needs a different harness?) then (yes)
+      :Stop before model call;
+      :Ask user to enable local-files or code-edit\nwith /allow-tools or /yolo-tools;
+      stop
+    else (no)
+      :Build mix agent_machine.run args;
+    endif
+  else (CLI)
+    :Use explicit CLI flags;
+  endif
+
+  :Pass provider, model, workflow request,\npricing, timeouts, skills, tool harnesses,\nMCP config, root, approval mode, test commands;
+}
+
+partition "Mix.Tasks.AgentMachine.Run" {
+  :Parse flags;
+  if (required option missing or invalid?) then (yes)
+    :Fail fast with explicit error;
+    stop
+  else (no)
+    :Build attrs for ClientRunner;
+  endif
+
+  if (--log-file present?) then (yes)
+    :Open JSONL log file;
+  endif
+
+  if (--event-log-file present?) then (yes)
+    :Configure AgentMachine.EventLog\nwith path and optional session_id;
+    :Collector writes event_log_configured;
+  endif
+}
+
+partition "ClientRunner" {
+  :RunSpec.new!(attrs);
+  if (RunSpec invalid?) then (yes)
+    :Fail fast\n(no model call);
+    stop
+  endif
+
+  :WorkflowRouter.route!(RunSpec);
+
+  if (router_mode == local?) then (yes)
+    :LocalIntentClassifier.classify!;
+    :Load tokenizer.json +\nonnx/model_quantized.onnx;
+    :Score fixed NLI hypotheses;
+    if (confidence below threshold?) then (yes)
+      :intent = none;
+    else (no)
+      :intent = classified_intent;
+    endif
+  else (deterministic)
+    :Detect intent with deterministic rules;
+  endif
+
+  if (requested workflow is chat/basic/agentic?) then (explicit)
+    if (requested chat and tools configured?) then (yes)
+      :Fail fast\nchat cannot expose tools;
+      stop
+    else (valid)
+      :selected = requested;
+    endif
+  else (requested auto)
+    if (no tool or mutation intent?) then (chat)
+      :selected = chat;
+      :tools_exposed = false;
+    elseif (read/list/search/inspect intent?) then (basic)
+      if (local-files or code-edit read capability?) then (yes)
+        :selected = basic;
+        :tools_exposed = true;
+      else (no)
+        :Fail fast\nread capability missing;
+        stop
+      endif
+    elseif (time intent?) then (time)
+      if (time/demo harness?) then (yes)
+        :selected = basic;
+        :tools_exposed = true;
+      elseif (another tool harness active?) then (auto-add)
+        :selected = basic;
+        :Auto-add time harness for this run;
+        :tools_exposed = true;
+      else (no)
+        :selected = chat;
+        :tools_exposed = false;
+      endif
+    elseif (generic tool intent?) then (basic)
+      if (matching MCP/tool harness?) then (yes)
+        :selected = basic;
+        :tools_exposed = true;
+      else (no)
+        :Fail fast\ntool capability missing;
+        stop
+      endif
+    elseif (file mutation intent?) then (agentic)
+      if (write-capable local-files or code-edit?) then (yes)
+        :selected = agentic;
+        :tools_exposed = true;
+      else (no)
+        :Fail fast\nwrite capability missing;
+        stop
+      endif
+    elseif (code mutation intent?) then (agentic)
+      if (code-edit harness configured?) then (yes)
+        :selected = agentic;
+        :tools_exposed = true;
+      else (no)
+        :Fail fast\ncode-edit missing;
+        stop
+      endif
+    elseif (test command intent?) then (agentic)
+      if (code-edit + full-access + allowlisted test command?) then (yes)
+        :selected = agentic;
+        :tools_exposed = true;
+      else (no)
+        :Fail fast\ntest capability missing;
+        stop
+      endif
+    elseif (explicit delegation intent?) then (agentic)
+      :selected = agentic;
+    endif
+  endif
+
+  :Emit workflow_routed to EventLog;
+
+  :Skills.Selector.select!(RunSpec);
+  if (skills off?) then (off)
+    :selected_skills = [];
+  elseif (explicit skill names?) then (explicit)
+    :Load named SKILL.md manifests;
+    :Select requested skills;
+  else (skills auto)
+    :Load installed skills;
+    :Deterministically score by task keywords;
+    :Select up to 8 matching skills;
+  endif
+
+  :Build selected workflow only;
+}
+
+partition "Workflow construction" {
+  if (selected == chat?) then (chat)
+    :Workflows.Chat.build!;
+    :Create assistant only;
+    :No finalizer;
+    :No tools;
+    :Disable tools in metadata;
+  elseif (selected == basic?) then (basic)
+    :Workflows.Basic.build!;
+    :Create assistant + finalizer;
+    :Finalizer disables tools;
+    if (tools_exposed?) then (yes)
+      :Attach allowed_tools, tool_policy,\ntool_timeout_ms, tool_max_rounds,\ntool_approval_mode;
+    endif
+  else (agentic)
+    :Workflows.Agentic.build!;
+    :Create planner + finalizer;
+    :Planner metadata:\nagent_machine_response=delegation\nagent_machine_disable_tools=true;
+    :Finalizer disables tools;
+    if (tools_exposed?) then (yes)
+      :Attach allowed_tools, tool_policy,\ntool_timeout_ms, tool_max_rounds,\ntool_approval_mode;
+      note right
+        Planner and finalizer see tool availability
+        in run context, but cannot call tools.
+        Delegated workers inherit the run tool options.
+      end note
+    endif
+  endif
+}
+
+partition "Tool harness assembly" {
+  if (no selected workflow exposes tools?) then (no tools)
+    :Provider request has no tool definitions;
+  else (tools)
+    :ToolHarness.builtin_many!(harnesses);
+    :ToolHarness.builtin_policy_many!(harnesses);
+
+    if (local-files harness?) then (yes)
+      :Expose list_files, read_file, search_files,\nfile_info, create_dir, write_file,\nappend_file, replace_in_file;
+      :Require existing tool_root;\nconstrain paths under root;
+    endif
+
+    if (code-edit harness?) then (yes)
+      :Expose code edit tools:\nfile_info, list_files, read_file,\nsearch_files, apply_edits,\napply_patch, rollback_checkpoint;
+      if (test commands configured?) then (yes)
+        :Add run_test_command only when\napproval_mode=full_access and command is allowlisted;
+      endif
+    endif
+
+    if (time/demo harness?) then (yes)
+      :Expose now tool;
+    endif
+
+    if (skills resources available?) then (yes)
+      :Expose list_skill_resources and read_skill_resource;
+      if (allow_skill_scripts?) then (yes)
+        :Expose run_skill_script with command risk;
+      endif
+    endif
+
+    if (MCP harness?) then (yes)
+      :Load explicit MCP config;
+      :Validate allowlisted servers and tools;
+      :Create namespaced provider-visible MCP tools;
+      :Build permissions from MCP config;
+    endif
+
+    :Reject duplicate provider-visible tool names;
+  endif
+}
+
+partition "Orchestrator" {
+  :Validate agents, dependencies,\nmax_steps, event sink;
+  :Emit run_started before spawning agents;
+  :Event sink forwards runtime events\nto AgentMachine.EventLog and any client sink;
+  :Spawn ready initial agents with Task.Supervisor;
+}
+
+partition "AgentRunner and provider loop" {
+  repeat
+    :Build RunContextPrompt with prior results,\nartifacts, selected skills, and tool context;
+    :Call exactly one provider\n(Echo, OpenAI Responses, or OpenRouter Chat);
+
+    if (provider returns invalid payload?) then (invalid)
+      :Agent result = error;
+      break
+    elseif (provider returns final output only?) then (final)
+      :Normalize delegation response if enabled;
+      :Agent result = ok;
+      break
+    else (provider returns tool_calls)
+      :Validate tool call ids are unique and new;
+      :Validate tool is allowed by harness and policy;
+      :Validate permission and approval mode;
+
+      if (security or contract validation fails?) then (hard fail)
+        :Agent result = error;
+        break
+      else (execute tool)
+        :Run tool with tool_timeout_ms;
+        if (tool returns {:ok, map}) then (ok)
+          :Store tool result;
+          :Send result back to provider\nas tool_continuation;
+        elseif (tool execution error or timeout?) then (recoverable)
+          :Emit tool_call_failed event;
+          :Store error-shaped tool_result;
+          :Send error back to provider\nas tool_continuation;
+        else (invalid tool payload)
+          :Agent result = error;
+          break
+        endif
+      endif
+    endif
+  repeat while (tool rounds < tool_max_rounds?) is (continue)
+
+  if (tool_max_rounds exceeded?) then (yes)
+    :Agent result = error;
+  endif
+}
+
+partition "Dynamic delegation and final output" {
+  if (agent was planner with decision=direct?) then (direct)
+    :No workers;
+    :Skip finalizer;
+    :final_output = planner.output;
+  elseif (agent result has next_agents?) then (delegate)
+    :Validate delegated agents;
+    :Reserve max_steps;
+    :Spawn workers with parent_agent_id=planner;
+    :Workers may call tools if workflow exposed them;
+    :When idle, start finalizer;
+    :final_output = finalizer.output;
+  elseif (selected == chat?) then (chat)
+    :No finalizer;
+    :final_output = assistant.output;
+  elseif (basic workflow idle?) then (basic)
+    :Start finalizer;
+    :final_output = finalizer.output;
+  endif
+}
+
+partition "Summary and output" {
+  :Aggregate usage, events, artifacts, results;
+  :Attach workflow_route:\nrequested, selected, reason,\ntool_intent, tools_exposed,\nclassifier, classified_intent,\nconfidence;
+  :Attach selected skills summary;
+  :Redact secrets from output, logs, events,\nsummaries, and read-style tool results;
+  :Write final summary to EventLog\nwhen configured;
+  if (JSONL?) then (yes)
+    :Stream redacted events;
+    :Write final redacted summary;
+  else (text or JSON)
+    :Print final summary or answer;
+  endif
+}
+
+stop
+
+legend right
+  <b>Fail fast</b>: missing required config, invalid workflow/tool setup,
+  missing capabilities, disallowed tools, permission failures, approval denial,
+  invalid provider/tool contracts.
+
+  <b>Recoverable tool errors</b>: tool runtime errors and timeouts become
+  error-shaped tool_results and are returned to the model so it can choose a
+  different safe approach within tool_max_rounds.
+
+  <b>auto</b> is a routing policy, not a workflow implementation.
+endlegend
+
+@enduml

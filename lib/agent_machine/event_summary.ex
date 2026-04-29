@@ -11,6 +11,11 @@ defmodule AgentMachine.EventSummary do
   defp summary(%{type: :run_completed}), do: "Run completed"
   defp summary(%{type: :run_failed, reason: reason}), do: "Run failed: #{reason}"
 
+  defp summary(%{type: :workflow_routed, selected: selected}),
+    do: "Workflow routed to #{selected}"
+
+  defp summary(%{type: :event_log_configured}), do: "Event log configured"
+
   defp summary(%{type: :skills_loaded, count: count}), do: "Loaded #{count} skill(s)"
   defp summary(%{type: :skills_selected, count: count}), do: "Selected #{count} skill(s)"
 
@@ -81,8 +86,18 @@ defmodule AgentMachine.EventSummary do
       :input_summary,
       :result_summary,
       :delegated_agent_ids,
+      :provider,
       :count,
-      :provider
+      :requested,
+      :selected,
+      :tool_intent,
+      :tools_exposed,
+      :classifier,
+      :classified_intent,
+      :confidence,
+      :active_harnesses,
+      :path,
+      :session_id
     ])
     |> reject_empty_values()
   end

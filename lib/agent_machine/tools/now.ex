@@ -1,12 +1,12 @@
 defmodule AgentMachine.Tools.Now do
   @moduledoc """
-  Safe demo tool that returns the current UTC time.
+  Safe tool that returns the current UTC time.
   """
 
   @behaviour AgentMachine.Tool
 
   @impl true
-  def permission, do: :demo_time
+  def permission, do: :time_read
 
   @impl true
   def approval_risk, do: :read

@@ -66,7 +66,12 @@ defmodule AgentMachine.ToolHarnessTest do
     assert %AgentMachine.ToolPolicy{harness: :demo, permissions: demo_permissions} =
              ToolHarness.builtin_policy!(:demo)
 
-    assert MapSet.member?(demo_permissions, :demo_time)
+    assert MapSet.member?(demo_permissions, :time_read)
+
+    assert %AgentMachine.ToolPolicy{harness: :time, permissions: time_permissions} =
+             ToolHarness.builtin_policy!(:time)
+
+    assert MapSet.member?(time_permissions, :time_read)
 
     assert %AgentMachine.ToolPolicy{harness: :local_files, permissions: local_permissions} =
              ToolHarness.builtin_policy!(:local_files)
@@ -103,7 +108,7 @@ defmodule AgentMachine.ToolHarnessTest do
   end
 
   test "all built-in harness tools expose approval risks" do
-    for harness <- [:demo, :local_files, :code_edit],
+    for harness <- [:demo, :time, :local_files, :code_edit],
         tool <- ToolHarness.builtin!(harness) do
       assert AgentMachine.ToolPolicy.approval_risk!(tool) in [
                :read,

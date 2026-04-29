@@ -3,6 +3,36 @@ defmodule AgentMachine.WorkflowRouterTest do
 
   alias AgentMachine.{RunSpec, WorkflowRouter}
 
+  defmodule LocalCodeMutationClassifier do
+    def classify!(_input) do
+      %{
+        intent: :code_mutation,
+        classified_intent: :code_mutation,
+        classifier: "local",
+        classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+        confidence: 0.91,
+        reason: "test_classifier"
+      }
+    end
+  end
+
+  defmodule LocalLowConfidenceClassifier do
+    def classify!(_input) do
+      %{
+        intent: :none,
+        classified_intent: :code_mutation,
+        classifier: "local",
+        classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+        confidence: 0.30,
+        reason: "local_classifier_below_confidence_threshold"
+      }
+    end
+  end
+
+  defmodule LocalMalformedClassifier do
+    def classify!(_input), do: %{intent: :not_real}
+  end
+
   test "routes auto chat intent to chat without exposing configured tools" do
     route =
       route!(%{
@@ -20,7 +50,11 @@ defmodule AgentMachine.WorkflowRouterTest do
              selected: "chat",
              reason: "no_tool_or_mutation_intent_detected",
              tool_intent: "none",
-             tools_exposed: false
+             tools_exposed: false,
+             classifier: "deterministic",
+             classifier_model: nil,
+             confidence: nil,
+             classified_intent: "none"
            }
   end
 
@@ -71,6 +105,53 @@ defmodule AgentMachine.WorkflowRouterTest do
 
     assert route.selected == "basic"
     assert route.tool_intent == "time"
+  end
+
+  test "routes auto time intent to basic with time harness" do
+    route =
+      route!(%{
+        task: "what time is it?",
+        workflow: :auto,
+        tool_harness: :time,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "basic"
+    assert route.tool_intent == "time"
+    assert route.reason == "time_intent_with_time_harness"
+  end
+
+  test "routes auto time intent to basic with auto time harness when other tools are configured" do
+    route =
+      route!(%{
+        task: "what time is it?",
+        workflow: :auto,
+        tool_harness: :code_edit,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert route.selected == "basic"
+    assert route.tool_intent == "time"
+    assert route.reason == "time_intent_with_auto_time_harness"
+    assert route.tools_exposed
+  end
+
+  test "routes auto time intent to chat without time harness" do
+    route =
+      route!(%{
+        task: "what time is it?",
+        workflow: :auto
+      })
+
+    assert route.selected == "chat"
+    assert route.tool_intent == "time"
+    assert route.reason == "time_intent_without_time_harness"
+    refute route.tools_exposed
   end
 
   test "routes auto filesystem mutation to agentic with local files" do
@@ -145,6 +226,92 @@ defmodule AgentMachine.WorkflowRouterTest do
 
     assert route.selected == "agentic"
     assert route.tool_intent == "file_mutation"
+  end
+
+  test "routes local classifier code mutation to agentic with code-edit harness" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "napraw aplikacje",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:code_edit],
+        approval_mode: :auto_approved_safe,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalCodeMutationClassifier
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "code_mutation"
+    assert route.classifier == "local"
+    assert route.classified_intent == "code_mutation"
+    assert route.confidence == 0.91
+  end
+
+  test "local classifier code mutation fails fast without code-edit harness" do
+    assert_raise ArgumentError, ~r/code mutation intent/, fn ->
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "napraw aplikacje",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:local_files],
+        approval_mode: :auto_approved_safe,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalCodeMutationClassifier
+      })
+    end
+  end
+
+  test "local classifier low confidence falls back to chat" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "explain this",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:code_edit],
+        approval_mode: :auto_approved_safe,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalLowConfidenceClassifier
+      })
+
+    assert route.selected == "chat"
+    assert route.tool_intent == "none"
+    assert route.classifier == "local"
+    assert route.classified_intent == "code_mutation"
+    assert route.reason == "local_classifier_below_confidence_threshold"
+  end
+
+  test "malformed local classifier output fails fast" do
+    assert_raise ArgumentError, ~r/invalid intent/, fn ->
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "anything",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [],
+        approval_mode: nil,
+        test_commands: [],
+        router_mode: :local,
+        router_model_dir: "/tmp/router-model",
+        router_timeout_ms: 100,
+        router_confidence_threshold: 0.5,
+        classifier_module: LocalMalformedClassifier
+      })
+    end
   end
 
   test "fails fast for mutation intent without write-capable harness" do

@@ -55,7 +55,7 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 		"agent_machine.run",
 		"--workflow", "agentic",
 		"--provider", "openrouter",
-		"--timeout-ms", defaultRunTimeoutMS,
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
 		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
@@ -107,6 +107,67 @@ func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
 		}
 	}
+}
+
+func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:             "review this project",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RouterMode:       "local",
+		RouterModelDir:   "/tmp/agent-machine-router-model",
+		RouterTimeout:    "5000",
+		RouterConfidence: "0.55",
+	})
+
+	expected := []string{
+		"agent_machine.run",
+		"--workflow", "auto",
+		"--provider", "echo",
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
+		"--max-steps", defaultAgenticSteps,
+		"--max-attempts", "1",
+		"--jsonl",
+		"--stream-response",
+		"--router-mode", "local",
+		"--router-model-dir", "/tmp/agent-machine-router-model",
+		"--router-timeout-ms", "5000",
+		"--router-confidence-threshold", "0.55",
+		"review this project",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
+	}
+
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
+func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:           "review this project",
+		Workflow:       workflowAuto,
+		Provider:       providerEcho,
+		EventLogFile:   "/tmp/agent-machine-session.jsonl",
+		EventSessionID: "session-1",
+	})
+
+	assertContainsSequence(t, args, []string{"--event-log-file", "/tmp/agent-machine-session.jsonl"})
+	assertContainsSequence(t, args, []string{"--event-session-id", "session-1"})
+}
+
+func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:     "fix the existing app",
+		Workflow: workflowAuto,
+		Provider: providerEcho,
+	})
+
+	assertContainsSequence(t, args, []string{"--timeout-ms", defaultAgenticRunTimeoutMS})
 }
 
 func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
@@ -263,6 +324,12 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	if !strings.Contains(withoutTools, "mode progressive-auto") {
 		t.Fatalf("expected progressive auto mode in running status, got %q", withoutTools)
 	}
+	if !strings.Contains(withoutTools, "router deterministic") {
+		t.Fatalf("expected deterministic router in running status, got %q", withoutTools)
+	}
+	if !strings.Contains(withoutTools, "timeout_ms="+defaultAgenticRunTimeoutMS) {
+		t.Fatalf("expected auto run timeout in running status, got %q", withoutTools)
+	}
 
 	withTools := runningStatus(runConfig{
 		Workflow:    workflowAuto,
@@ -274,6 +341,20 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 
 	if !strings.Contains(withTools, "tools local-files root=/tmp/agent-machine-home") {
 		t.Fatalf("expected tool root in running status, got %q", withTools)
+	}
+
+	withLocalRouter := runningStatus(runConfig{
+		Workflow:         workflowAuto,
+		Provider:         providerOpenRouter,
+		Model:            "qwen/qwen3.5-flash-02-23",
+		RouterMode:       "local",
+		RouterModelDir:   "/tmp/agent-machine-router-model",
+		RouterTimeout:    "5000",
+		RouterConfidence: "0.55",
+	})
+
+	if !strings.Contains(withLocalRouter, "router local dir=/tmp/agent-machine-router-model timeout_ms=5000 confidence=0.55") {
+		t.Fatalf("expected local router in running status, got %q", withLocalRouter)
 	}
 }
 
@@ -312,6 +393,43 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 		"--tool-approval-mode", "full-access",
 		"--tool-root", "/tmp/agent-machine-project",
 		"edit code",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
+		}
+	}
+}
+
+func TestBuildRunArgsIncludesTimeToolHarness(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "what time is it?",
+		Workflow:      workflowAuto,
+		Provider:      providerEcho,
+		ToolHarness:   "time",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "read-only",
+	})
+
+	expected := []string{
+		"agent_machine.run",
+		"--workflow", "auto",
+		"--provider", "echo",
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
+		"--max-steps", defaultAgenticSteps,
+		"--max-attempts", "1",
+		"--jsonl",
+		"--stream-response",
+		"--tool-harness", "time",
+		"--tool-timeout-ms", "1000",
+		"--tool-max-rounds", "2",
+		"--tool-approval-mode", "read-only",
+		"what time is it?",
 	}
 
 	if len(args) != len(expected) {
@@ -375,6 +493,65 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAcceptsLocalRouterConfig(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:             "review this project",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RouterMode:       "local",
+		RouterModelDir:   "/tmp/agent-machine-router-model",
+		RouterTimeout:    "5000",
+		RouterConfidence: "0.55",
+	})
+
+	if err != nil {
+		t.Fatalf("expected valid local router config, got %v", err)
+	}
+}
+
+func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:             "review this project",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RouterMode:       "local",
+		RouterTimeout:    "5000",
+		RouterConfidence: "0.55",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "router model dir") {
+		t.Fatalf("expected router model dir error, got %v", err)
+	}
+
+	err = validateConfig(runConfig{
+		Task:             "review this project",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RouterMode:       "local",
+		RouterModelDir:   "/tmp/agent-machine-router-model",
+		RouterTimeout:    "0",
+		RouterConfidence: "0.55",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "router timeout ms") {
+		t.Fatalf("expected router timeout error, got %v", err)
+	}
+
+	err = validateConfig(runConfig{
+		Task:             "review this project",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RouterMode:       "local",
+		RouterModelDir:   "/tmp/agent-machine-router-model",
+		RouterTimeout:    "5000",
+		RouterConfidence: "1.5",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "router confidence") {
+		t.Fatalf("expected router confidence error, got %v", err)
+	}
+}
+
 func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "write a file",
@@ -420,6 +597,39 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected valid code-edit config, got %v", err)
+	}
+}
+
+func TestValidateConfigAcceptsTimeHarness(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "what time is it?",
+		Workflow:      workflowAuto,
+		Provider:      providerEcho,
+		ToolHarness:   "time",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "read-only",
+	})
+
+	if err != nil {
+		t.Fatalf("expected valid time harness config, got %v", err)
+	}
+}
+
+func TestValidateConfigRejectsTimeHarnessRoot(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "what time is it?",
+		Workflow:      workflowAuto,
+		Provider:      providerEcho,
+		ToolHarness:   "time",
+		ToolRoot:      "/tmp/agent-machine-time",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "read-only",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "time tool harness") {
+		t.Fatalf("expected time harness root error, got %v", err)
 	}
 }
 
@@ -788,6 +998,71 @@ func TestStartRunUsesAutoWithoutWorkflowSetup(t *testing.T) {
 	}
 }
 
+func TestStartRunTimeQuestionWithCodeEditToolsStaysInChat(t *testing.T) {
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		selectedModel: "stepfun/step-3.5-flash",
+		configPath:    filepath.Join(t.TempDir(), "config.json"),
+		modelOptions: []modelOption{
+			{
+				ID: "stepfun/step-3.5-flash",
+				Pricing: modelPricing{
+					InputPerMillion:  0.01,
+					OutputPerMillion: 0.01,
+				},
+			},
+		},
+		savedConfig: savedConfig{
+			OpenRouterAPIKey: "test-key",
+			ToolHarness:      "code-edit",
+			ToolRoot:         "/tmp/agent-machine-project",
+			ToolTimeout:      "1000",
+			ToolMaxRounds:    "6",
+			ToolApproval:     "auto-approved-safe",
+		},
+	}
+
+	updated, cmd := m.startRun("what time we have")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command")
+	}
+	if result.view != viewChat {
+		t.Fatalf("expected chat view, got %v", result.view)
+	}
+	if !result.running {
+		t.Fatal("expected run to start")
+	}
+	if result.activeConfig.Workflow != workflowAuto {
+		t.Fatalf("expected auto workflow, got %q", result.activeConfig.Workflow)
+	}
+}
+
+func TestStartRunPreparationErrorStaysInChatWhenProviderIsSet(t *testing.T) {
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		selectedModel: "",
+		configPath:    filepath.Join(t.TempDir(), "config.json"),
+		savedConfig:   savedConfig{OpenRouterAPIKey: "test-key"},
+	}
+
+	updated, cmd := m.startRun("what time we have")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command")
+	}
+	if result.view != viewChat {
+		t.Fatalf("expected chat view for preparation error, got %v", result.view)
+	}
+	if len(result.messages) == 0 || !strings.Contains(result.messages[len(result.messages)-1].Text, "model") {
+		t.Fatalf("expected model error message in chat, got %#v", result.messages)
+	}
+}
+
 func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	m := model{provider: providerEcho, providerSet: true}
 
@@ -849,6 +1124,91 @@ func TestWorkflowCommandDoesNotPersistWorkflow(t *testing.T) {
 	}
 }
 
+func TestRouterCommandPersistsLocalRouter(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/router local /tmp/agent-machine-router-model")
+	result := updated.(model)
+
+	if result.savedConfig.RouterMode != "local" {
+		t.Fatalf("expected local router, got %q", result.savedConfig.RouterMode)
+	}
+	if result.savedConfig.RouterModelDir != "/tmp/agent-machine-router-model" {
+		t.Fatalf("unexpected router model dir: %q", result.savedConfig.RouterModelDir)
+	}
+	if result.savedConfig.RouterTimeout != defaultRouterTimeoutMS || result.savedConfig.RouterConfidence != defaultRouterConfidence {
+		t.Fatalf("unexpected local router defaults: %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.RouterMode != "local" || loaded.RouterModelDir != "/tmp/agent-machine-router-model" {
+		t.Fatalf("unexpected saved router config: %#v", loaded)
+	}
+}
+
+func TestRouterTuningCommandsPersistSettings(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/router local /tmp/agent-machine-router-model")
+	result := updated.(model)
+	updated, _ = result.handleCommand("/router-timeout 750")
+	result = updated.(model)
+	updated, _ = result.handleCommand("/router-confidence 0.7")
+	result = updated.(model)
+
+	if result.savedConfig.RouterTimeout != "750" || result.savedConfig.RouterConfidence != "0.7" {
+		t.Fatalf("unexpected router tuning: %#v", result.savedConfig)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "confidence=0.7") {
+		t.Fatalf("expected router status message, got %#v", result.messages[len(result.messages)-1])
+	}
+}
+
+func TestRouterStatusCommandShowsCurrentSettings(t *testing.T) {
+	m := model{
+		savedConfig: savedConfig{
+			RouterMode:       "local",
+			RouterModelDir:   "/tmp/agent-machine-router-model",
+			RouterTimeout:    "750",
+			RouterConfidence: "0.7",
+		},
+	}
+
+	updated, _ := m.handleCommand("/router-status")
+	result := updated.(model)
+	text := result.messages[len(result.messages)-1].Text
+
+	if !strings.Contains(text, "router: local dir=/tmp/agent-machine-router-model timeout_ms=750 confidence=0.7") {
+		t.Fatalf("unexpected router status: %q", text)
+	}
+}
+
+func TestRouterConfidenceCommandValidatesValue(t *testing.T) {
+	m := model{savedConfig: savedConfig{RouterMode: "local", RouterModelDir: "/tmp/agent-machine-router-model"}}
+
+	updated, _ := m.handleCommand("/router-confidence 2")
+	result := updated.(model)
+
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "router confidence") {
+		t.Fatalf("expected router confidence error, got %#v", result.messages[len(result.messages)-1])
+	}
+}
+
 func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
@@ -896,6 +1256,34 @@ func TestToolsCommandPersistsCodeEditHarness(t *testing.T) {
 	}
 	if loaded.ToolHarness != "code-edit" || loaded.ToolRoot != "/tmp/agent-machine-project" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "full-access" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestToolsCommandPersistsTimeHarness(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools time 1000 2 read-only")
+	result := updated.(model)
+
+	if result.savedConfig.ToolHarness != "time" {
+		t.Fatalf("expected time harness, got %q", result.savedConfig.ToolHarness)
+	}
+	if result.savedConfig.ToolRoot != "" {
+		t.Fatalf("expected time harness without root, got %q", result.savedConfig.ToolRoot)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolHarness != "time" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "read-only" {
+		t.Fatalf("unexpected saved time tool config: %#v", loaded)
 	}
 }
 

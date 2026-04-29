@@ -63,7 +63,7 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert "mcp_docs_search" in names
 
     policy = ToolHarness.builtin_policy_many!([:demo, :mcp], mcp_config: config)
-    assert MapSet.member?(policy.permissions, :demo_time)
+    assert MapSet.member?(policy.permissions, :time_read)
     assert MapSet.member?(policy.permissions, :mcp_docs_search)
     assert policy.harness == [:demo, :mcp]
   end

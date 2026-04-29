@@ -3,7 +3,7 @@ defmodule AgentMachine.ClientRunner do
   High-level client runner used by CLI and TUI frontends.
   """
 
-  alias AgentMachine.{EventSummary, JSON, Orchestrator, RunSpec, WorkflowRouter}
+  alias AgentMachine.{EventLog, EventSummary, JSON, Orchestrator, RunSpec, WorkflowRouter}
   alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Skills.{Manifest, Prompt, Selector}
   alias AgentMachine.Workflows.{Agentic, Basic, Chat}
@@ -12,6 +12,8 @@ defmodule AgentMachine.ClientRunner do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
     workflow_route = WorkflowRouter.route!(spec)
+    spec = maybe_put_auto_time_harness(spec, workflow_route)
+    write_workflow_route_event(spec, workflow_route)
     skill_selection = Selector.select!(spec)
     {agents, run_opts} = workflow_module(workflow_route).build!(spec)
     run_opts = put_skill_opts(run_opts, spec, skill_selection)
@@ -19,9 +21,9 @@ defmodule AgentMachine.ClientRunner do
     run_opts = put_event_sink(run_opts, opts)
 
     case Orchestrator.run(agents, run_opts) do
-      {:ok, run} -> summarize_run(run)
-      {:error, {:failed, run}} -> summarize_run(run)
-      {:error, {:timeout, run}} -> summarize_timeout(run)
+      {:ok, run} -> summarize_and_log(run)
+      {:error, {:failed, run}} -> summarize_and_log(run)
+      {:error, {:timeout, run}} -> summarize_timeout_and_log(run)
       {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
     end
   end
@@ -29,6 +31,36 @@ defmodule AgentMachine.ClientRunner do
   defp workflow_module(%{selected: "chat"}), do: Chat
   defp workflow_module(%{selected: "basic"}), do: Basic
   defp workflow_module(%{selected: "agentic"}), do: Agentic
+
+  defp maybe_put_auto_time_harness(
+         %RunSpec{tool_harnesses: harnesses} = spec,
+         %{reason: "time_intent_with_auto_time_harness"}
+       )
+       when is_list(harnesses) do
+    if Enum.any?(harnesses, &(&1 in [:time, :demo])) do
+      spec
+    else
+      %{spec | tool_harnesses: harnesses ++ [:time]}
+    end
+  end
+
+  defp maybe_put_auto_time_harness(spec, _workflow_route), do: spec
+
+  defp write_workflow_route_event(spec, route) do
+    EventLog.write_event(%{
+      type: :workflow_routed,
+      requested: route.requested,
+      selected: route.selected,
+      reason: route.reason,
+      tool_intent: route.tool_intent,
+      tools_exposed: route.tools_exposed,
+      classifier: Map.get(route, :classifier),
+      classified_intent: Map.get(route, :classified_intent),
+      confidence: Map.get(route, :confidence),
+      active_harnesses: Enum.map(spec.tool_harnesses || [], &Atom.to_string/1),
+      at: DateTime.utc_now()
+    })
+  end
 
   def json!(summary) when is_map(summary) do
     summary |> Redactor.redact_output() |> Map.fetch!(:value) |> JSON.encode!()
@@ -54,6 +86,18 @@ defmodule AgentMachine.ClientRunner do
     |> Map.put(:status, "timeout")
   end
 
+  defp summarize_and_log(run) do
+    run
+    |> summarize_run()
+    |> tap(&EventLog.write_summary/1)
+  end
+
+  defp summarize_timeout_and_log(run) do
+    run
+    |> summarize_timeout()
+    |> tap(&EventLog.write_summary/1)
+  end
+
   defp validate_opts!(opts) do
     allowed_keys = [:event_sink]
     unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
@@ -76,8 +120,18 @@ defmodule AgentMachine.ClientRunner do
 
   defp put_event_sink(run_opts, opts) do
     case Keyword.fetch(opts, :event_sink) do
-      :error -> run_opts
-      {:ok, sink} -> Keyword.put(run_opts, :event_sink, sink)
+      :error ->
+        if EventLog.configured?() do
+          Keyword.put(run_opts, :event_sink, &EventLog.write_event/1)
+        else
+          run_opts
+        end
+
+      {:ok, sink} ->
+        Keyword.put(run_opts, :event_sink, fn event ->
+          EventLog.write_event(event)
+          sink.(event)
+        end)
     end
   end
 

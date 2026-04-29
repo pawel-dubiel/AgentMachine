@@ -8,6 +8,7 @@ defmodule AgentMachine.Application do
     children = [
       {Task.Supervisor, name: AgentMachine.AgentSupervisor},
       AgentMachine.UsageLedger,
+      AgentMachine.EventLog,
       AgentMachine.Orchestrator
     ]
 

@@ -255,15 +255,24 @@ func (m model) setupView() string {
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
+		m.routerStatus(),
 		m.toolsStatus(),
 		m.skillsStatus(),
+		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
 		"run timeout ms: " + defaultRunTimeoutMS,
+		"agentic/auto timeout ms: " + defaultAgenticRunTimeoutMS,
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
 		"Commands",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
+		"/router deterministic",
+		"/router local <model-dir>",
+		"/router-timeout <ms>",
+		"/router-confidence <float>",
+		"/router-status",
+		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools off",
@@ -382,6 +391,15 @@ func workflowRouteLine(route workflowRoute) string {
 		"selected=" + emptyAsNone(route.Selected),
 		"intent=" + emptyAsNone(route.ToolIntent),
 		fmt.Sprintf("tools=%v", route.ToolsExposed),
+	}
+	if strings.TrimSpace(route.Classifier) != "" {
+		parts = append(parts, "classifier="+route.Classifier)
+	}
+	if strings.TrimSpace(route.ClassifiedIntent) != "" {
+		parts = append(parts, "classified="+route.ClassifiedIntent)
+	}
+	if route.Confidence != nil {
+		parts = append(parts, fmt.Sprintf("confidence=%.3f", *route.Confidence))
 	}
 	if strings.TrimSpace(route.Reason) != "" {
 		parts = append(parts, "reason="+route.Reason)
@@ -531,6 +549,11 @@ func helpText() string {
 		"/setup",
 		"/provider echo|openai|openrouter",
 		"/key <api-key>",
+		"/router deterministic|local <model-dir>",
+		"/router-timeout <ms>",
+		"/router-confidence <float>",
+		"/router-status",
+		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools off",

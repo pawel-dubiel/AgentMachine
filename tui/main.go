@@ -49,11 +49,15 @@ type plannerDecision struct {
 }
 
 type workflowRoute struct {
-	Requested    string `json:"requested"`
-	Selected     string `json:"selected"`
-	Reason       string `json:"reason"`
-	ToolIntent   string `json:"tool_intent"`
-	ToolsExposed bool   `json:"tools_exposed"`
+	Requested        string   `json:"requested"`
+	Selected         string   `json:"selected"`
+	Reason           string   `json:"reason"`
+	ToolIntent       string   `json:"tool_intent"`
+	ToolsExposed     bool     `json:"tools_exposed"`
+	Classifier       string   `json:"classifier"`
+	ClassifierModel  string   `json:"classifier_model"`
+	Confidence       *float64 `json:"confidence"`
+	ClassifiedIntent string   `json:"classified_intent"`
 }
 
 type usageSummary struct {
@@ -151,12 +155,15 @@ const (
 )
 
 const (
-	defaultRunTimeoutMS  = "120000"
-	defaultChatSteps     = "1"
-	defaultBasicSteps    = "2"
-	defaultAgenticSteps  = "6"
-	defaultHTTPTimeoutMS = "120000"
-	liveEventWindowSize  = 8
+	defaultRunTimeoutMS        = "120000"
+	defaultAgenticRunTimeoutMS = "240000"
+	defaultChatSteps           = "1"
+	defaultBasicSteps          = "2"
+	defaultAgenticSteps        = "6"
+	defaultHTTPTimeoutMS       = "120000"
+	defaultRouterTimeoutMS     = "5000"
+	defaultRouterConfidence    = "0.55"
+	liveEventWindowSize        = 8
 )
 
 type runConfig struct {
@@ -176,11 +183,17 @@ type runConfig struct {
 	ToolApproval      string
 	TestCommands      []string
 	MCPConfig         string
+	RouterMode        string
+	RouterModelDir    string
+	RouterTimeout     string
+	RouterConfidence  string
 	SkillsMode        string
 	SkillsDir         string
 	SkillNames        []string
 	AllowSkillScripts bool
 	LogFile           string
+	EventLogFile      string
+	EventSessionID    string
 }
 
 type savedConfig struct {
@@ -197,6 +210,10 @@ type savedConfig struct {
 	ToolApproval      string   `json:"tool_approval_mode,omitempty"`
 	TestCommands      []string `json:"test_commands,omitempty"`
 	MCPConfig         string   `json:"mcp_config,omitempty"`
+	RouterMode        string   `json:"router_mode,omitempty"`
+	RouterModelDir    string   `json:"router_model_dir,omitempty"`
+	RouterTimeout     string   `json:"router_timeout_ms,omitempty"`
+	RouterConfidence  string   `json:"router_confidence_threshold,omitempty"`
 	SkillsMode        string   `json:"skills_mode,omitempty"`
 	SkillsDir         string   `json:"skills_dir,omitempty"`
 	SkillNames        []string `json:"skill_names,omitempty"`
@@ -265,6 +282,8 @@ type model struct {
 	pendingToolTask    string
 	pendingToolRoot    string
 	pendingToolHarness string
+	eventSessionID     string
+	eventLogFile       string
 }
 
 var (
@@ -291,10 +310,14 @@ func initialModel() (model, error) {
 	input.Width = 96
 	input.Focus()
 
+	sessionID := newSessionID()
+
 	m := model{
-		input:       input,
-		savedConfig: savedConfig,
-		configPath:  configPath,
+		input:          input,
+		savedConfig:    savedConfig,
+		configPath:     configPath,
+		eventSessionID: sessionID,
+		eventLogFile:   sessionEventLogPath(configPath, sessionID),
 		messages: []chatMessage{
 			{Role: "system", Text: "Open Setup and select a provider before running AgentMachine."},
 		},
@@ -595,16 +618,12 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	runTask := permissionTask
 	config, err := resolveConfig(m.runConfig(runTask))
 	if err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
-		m.view = viewSetup
-		return m, nil
+		return m.withRunPreparationError(err), nil
 	}
 	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
-		m.view = viewSetup
-		return m, nil
+		return m.withRunPreparationError(err), nil
 	}
 
 	m.rememberAPIKey(config.Provider, config.APIKey)
@@ -636,6 +655,16 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	return m, startStreamingCommand(config)
 }
 
+func (m model) withRunPreparationError(err error) model {
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+	if !m.providerSet {
+		m.view = viewSetup
+	} else {
+		m.view = viewChat
+	}
+	return m
+}
+
 func (m model) taskWithConversationContext(task string) string {
 	history := recentConversationMessages(m.messages, 6)
 	if len(history) == 0 {
@@ -656,6 +685,14 @@ func nextRunLogPath(configPath string) string {
 		"logs",
 		time.Now().UTC().Format("20060102T150405.000000000Z")+".jsonl",
 	)
+}
+
+func newSessionID() string {
+	return time.Now().UTC().Format("20060102T150405.000000000Z")
+}
+
+func sessionEventLogPath(configPath string, sessionID string) string {
+	return filepath.Join(filepath.Dir(configPath), "logs", "session-"+sessionID+".jsonl")
 }
 
 func recentConversationMessages(messages []chatMessage, limit int) []chatMessage {
@@ -755,6 +792,14 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.view = viewSetup
 	case "workflow":
 		return m.handleWorkflowCommand(args)
+	case "router":
+		return m.handleRouterCommand(args)
+	case "router-timeout":
+		return m.handleRouterTimeoutCommand(args)
+	case "router-confidence":
+		return m.handleRouterConfidenceCommand(args)
+	case "router-status":
+		return m.handleRouterStatusCommand(args)
 	case "provider":
 		return m.handleProviderCommand(args)
 	case "key":
@@ -968,6 +1013,107 @@ func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleRouterCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.routerStatus()})
+		return m, nil
+	}
+
+	switch args[0] {
+	case "deterministic":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router deterministic"})
+			return m, nil
+		}
+		m.savedConfig.RouterMode = ""
+		m.savedConfig.RouterModelDir = ""
+		m.savedConfig.RouterTimeout = ""
+		m.savedConfig.RouterConfidence = ""
+	case "local":
+		if len(args) != 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router local <model-dir>"})
+			return m, nil
+		}
+		if strings.TrimSpace(args[1]) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "router model dir must not be empty"})
+			return m, nil
+		}
+		m.savedConfig.RouterMode = "local"
+		m.savedConfig.RouterModelDir = args[1]
+		if strings.TrimSpace(m.savedConfig.RouterTimeout) == "" {
+			m.savedConfig.RouterTimeout = defaultRouterTimeoutMS
+		}
+		if strings.TrimSpace(m.savedConfig.RouterConfidence) == "" {
+			m.savedConfig.RouterConfidence = defaultRouterConfidence
+		}
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router deterministic|local <model-dir>"})
+		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.routerStatus()})
+	return m, nil
+}
+
+func (m model) handleRouterTimeoutCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router-timeout <ms>"})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[0], "router timeout ms"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if m.savedConfig.RouterMode != "local" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "router timeout requires /router local <model-dir>"})
+		return m, nil
+	}
+	m.savedConfig.RouterTimeout = args[0]
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.routerStatus()})
+	return m, nil
+}
+
+func (m model) handleRouterConfidenceCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router-confidence <float>"})
+		return m, nil
+	}
+	if err := validateProbability(args[0], "router confidence"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if m.savedConfig.RouterMode != "local" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "router confidence requires /router local <model-dir>"})
+		return m, nil
+	}
+	m.savedConfig.RouterConfidence = args[0]
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.routerStatus()})
+	return m, nil
+}
+
+func (m model) handleRouterStatusCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router-status"})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.routerStatus()})
+	return m, nil
+}
+
 func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider: " + string(m.provider)})
@@ -1052,6 +1198,32 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolApproval = ""
 		m.savedConfig.TestCommands = nil
 		m.savedConfig.MCPConfig = ""
+	case "time":
+		if len(args) != 4 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools time <timeout-ms> <max-rounds> <approval-mode>"})
+			return m, nil
+		}
+		if err := validatePositiveInt(args[1], "tool timeout ms"); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		if err := validatePositiveInt(args[2], "tool max rounds"); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		if err := validateToolApprovalMode(args[3]); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		if len(m.savedConfig.TestCommands) > 0 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access"})
+			return m, nil
+		}
+		m.savedConfig.ToolHarness = args[0]
+		m.savedConfig.ToolRoot = ""
+		m.savedConfig.ToolTimeout = args[1]
+		m.savedConfig.ToolMaxRounds = args[2]
+		m.savedConfig.ToolApproval = args[3]
 	case "local-files", "code-edit":
 		if len(args) != 5 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools " + args[0] + " <root> <timeout-ms> <max-rounds> <approval-mode>"})
@@ -1083,7 +1255,7 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 		m.savedConfig.ToolMaxRounds = args[3]
 		m.savedConfig.ToolApproval = args[4]
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|local-files|code-edit <root> <timeout-ms> <max-rounds> <approval-mode>"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /tools off|time <timeout-ms> <max-rounds> <approval-mode>|local-files|code-edit <root> <timeout-ms> <max-rounds> <approval-mode>"})
 		return m, nil
 	}
 
@@ -1611,10 +1783,16 @@ func (m model) runConfig(task string) runConfig {
 		ToolApproval:      m.savedConfig.ToolApproval,
 		TestCommands:      append([]string(nil), m.savedConfig.TestCommands...),
 		MCPConfig:         m.savedConfig.MCPConfig,
+		RouterMode:        m.savedConfig.RouterMode,
+		RouterModelDir:    m.savedConfig.RouterModelDir,
+		RouterTimeout:     m.savedConfig.RouterTimeout,
+		RouterConfidence:  m.savedConfig.RouterConfidence,
 		SkillsMode:        m.savedConfig.SkillsMode,
 		SkillsDir:         m.savedConfig.SkillsDir,
 		SkillNames:        append([]string(nil), m.savedConfig.SkillNames...),
 		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
+		EventLogFile:      m.eventLogFile,
+		EventSessionID:    m.eventSessionID,
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -1747,6 +1925,9 @@ func validateConfig(config runConfig) error {
 	if err := validateSkillsConfig(config); err != nil {
 		return err
 	}
+	if err := validateRouterConfig(config); err != nil {
+		return err
+	}
 
 	switch config.Provider {
 	case providerEcho:
@@ -1779,6 +1960,31 @@ func validateConfig(config runConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
+	}
+}
+
+func validateRouterConfig(config runConfig) error {
+	mode := strings.TrimSpace(config.RouterMode)
+	if mode == "" {
+		mode = "deterministic"
+	}
+
+	switch mode {
+	case "deterministic":
+		if strings.TrimSpace(config.RouterModelDir) != "" || strings.TrimSpace(config.RouterTimeout) != "" || strings.TrimSpace(config.RouterConfidence) != "" {
+			return errors.New("deterministic router does not accept local router settings")
+		}
+		return nil
+	case "local":
+		if strings.TrimSpace(config.RouterModelDir) == "" {
+			return errors.New("router model dir must not be empty for local router")
+		}
+		if err := validatePositiveInt(config.RouterTimeout, "router timeout ms"); err != nil {
+			return err
+		}
+		return validateProbability(config.RouterConfidence, "router confidence")
+	default:
+		return fmt.Errorf("unsupported router mode: %s", config.RouterMode)
 	}
 }
 
@@ -1864,6 +2070,20 @@ func validateToolConfig(config runConfig) error {
 			return err
 		}
 		return nil
+	case "time":
+		if strings.TrimSpace(config.ToolRoot) != "" || len(config.TestCommands) != 0 {
+			return errors.New("time tool harness does not accept tool root or test commands")
+		}
+		if err := validatePositiveInt(config.ToolTimeout, "tool timeout ms"); err != nil {
+			return err
+		}
+		if err := validatePositiveInt(config.ToolMaxRounds, "tool max rounds"); err != nil {
+			return err
+		}
+		if err := validateToolApprovalMode(config.ToolApproval); err != nil {
+			return err
+		}
+		return nil
 	case "local-files", "code-edit":
 		if strings.TrimSpace(config.MCPConfig) == "" && config.MCPConfig != "" {
 			return errors.New("MCP config path must not be empty")
@@ -1919,6 +2139,14 @@ func validateTestCommands(commands []string) error {
 			return fmt.Errorf("duplicate test command: %s", command)
 		}
 		seen[command] = true
+	}
+	return nil
+}
+
+func validateProbability(value string, label string) error {
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed <= 0 || parsed > 1 {
+		return fmt.Errorf("%s must be greater than 0 and less than or equal to 1", label)
 	}
 	return nil
 }
@@ -2190,6 +2418,8 @@ func (m model) toolsStatus() string {
 			return "tools: mcp config=" + m.savedConfig.MCPConfig
 		}
 		return "tools: off"
+	case "time":
+		return "tools: time timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval)
 	case "local-files", "code-edit":
 		status := "tools: " + m.savedConfig.ToolHarness + " root=" + emptyAsNone(m.savedConfig.ToolRoot) + " timeout_ms=" + emptyAsNone(m.savedConfig.ToolTimeout) + " max_rounds=" + emptyAsNone(m.savedConfig.ToolMaxRounds) + " approval=" + emptyAsNone(m.savedConfig.ToolApproval) + " test_commands=" + fmt.Sprintf("%d", len(m.savedConfig.TestCommands))
 		if strings.TrimSpace(m.savedConfig.MCPConfig) != "" {
@@ -2202,7 +2432,7 @@ func (m model) toolsStatus() string {
 }
 
 func runningStatus(config runConfig) string {
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / timeout_ms=" + runTimeoutMS(config) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func runWorkflowStatus(workflow runWorkflow) string {
@@ -2223,6 +2453,8 @@ func runToolsStatus(config runConfig) string {
 			return "tools mcp config=" + config.MCPConfig
 		}
 		return "tools off"
+	case "time":
+		return "tools time timeout_ms=" + emptyAsNone(config.ToolTimeout) + " max_rounds=" + emptyAsNone(config.ToolMaxRounds)
 	case "local-files", "code-edit":
 		status := "tools " + config.ToolHarness + " root=" + emptyAsNone(config.ToolRoot) + " timeout_ms=" + emptyAsNone(config.ToolTimeout) + " max_rounds=" + emptyAsNone(config.ToolMaxRounds)
 		if strings.TrimSpace(config.MCPConfig) != "" {
@@ -2232,6 +2464,28 @@ func runToolsStatus(config runConfig) string {
 	default:
 		return "tools unsupported " + config.ToolHarness
 	}
+}
+
+func (m model) routerStatus() string {
+	mode := strings.TrimSpace(m.savedConfig.RouterMode)
+	if mode == "" || mode == "deterministic" {
+		return "router: deterministic"
+	}
+	if mode == "local" {
+		return "router: local dir=" + emptyAsNone(m.savedConfig.RouterModelDir) + " timeout_ms=" + emptyAsNone(m.savedConfig.RouterTimeout) + " confidence=" + emptyAsNone(m.savedConfig.RouterConfidence)
+	}
+	return "router: unsupported " + mode
+}
+
+func runRouterStatus(config runConfig) string {
+	mode := strings.TrimSpace(config.RouterMode)
+	if mode == "" || mode == "deterministic" {
+		return "router deterministic"
+	}
+	if mode == "local" {
+		return "router local dir=" + emptyAsNone(config.RouterModelDir) + " timeout_ms=" + emptyAsNone(config.RouterTimeout) + " confidence=" + emptyAsNone(config.RouterConfidence)
+	}
+	return "router unsupported " + mode
 }
 
 func (m model) skillsEnabled() bool {
@@ -2320,6 +2574,15 @@ func (m *model) applySavedSettings() error {
 		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
 	}); err != nil {
 		return fmt.Errorf("invalid saved skills in TUI config: %w", err)
+	}
+
+	if err := validateRouterConfig(runConfig{
+		RouterMode:       m.savedConfig.RouterMode,
+		RouterModelDir:   m.savedConfig.RouterModelDir,
+		RouterTimeout:    m.savedConfig.RouterTimeout,
+		RouterConfidence: m.savedConfig.RouterConfidence,
+	}); err != nil {
+		return fmt.Errorf("invalid saved router in TUI config: %w", err)
 	}
 
 	if m.providerSet {

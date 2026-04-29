@@ -197,8 +197,25 @@ func buildRunArgs(config runConfig) []string {
 		args = append(args, "--allow-skill-scripts")
 	}
 
+	if strings.TrimSpace(config.RouterMode) != "" {
+		args = append(args, "--router-mode", config.RouterMode)
+		if config.RouterMode == "local" {
+			args = append(args,
+				"--router-model-dir", config.RouterModelDir,
+				"--router-timeout-ms", config.RouterTimeout,
+				"--router-confidence-threshold", config.RouterConfidence,
+			)
+		}
+	}
+
 	if config.LogFile != "" {
 		args = append(args, "--log-file", config.LogFile)
+	}
+	if config.EventLogFile != "" {
+		args = append(args, "--event-log-file", config.EventLogFile)
+	}
+	if config.EventSessionID != "" {
+		args = append(args, "--event-session-id", config.EventSessionID)
 	}
 
 	return append(args, config.Task)
@@ -222,6 +239,9 @@ func maxSteps(workflow runWorkflow) string {
 func runTimeoutMS(config runConfig) string {
 	if strings.TrimSpace(config.RunTimeout) != "" {
 		return config.RunTimeout
+	}
+	if config.Workflow == workflowAgentic || config.Workflow == workflowAuto {
+		return defaultAgenticRunTimeoutMS
 	}
 	return defaultRunTimeoutMS
 }

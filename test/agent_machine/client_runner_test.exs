@@ -2,13 +2,19 @@ defmodule AgentMachine.ClientRunnerTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
-  alias AgentMachine.{AgentResult, ClientRunner, JSON, RunSpec, UsageLedger}
+  alias AgentMachine.{AgentResult, ClientRunner, EventLog, JSON, RunSpec, UsageLedger}
   alias AgentMachine.Tools.ApplyEdits
   alias AgentMachine.Workflows.{Agentic, Basic, Chat}
   alias Mix.Tasks.AgentMachine.{Rollback, Run}
 
   setup do
     UsageLedger.reset!()
+    EventLog.close()
+
+    on_exit(fn ->
+      EventLog.close()
+    end)
+
     :ok
   end
 
@@ -128,7 +134,7 @@ defmodule AgentMachine.ClientRunnerTest do
         timeout_ms: 1_000,
         max_steps: 2,
         max_attempts: 1,
-        tool_harness: :demo,
+        tool_harness: :time,
         tool_timeout_ms: 100,
         tool_max_rounds: 2,
         tool_approval_mode: :read_only
@@ -138,10 +144,10 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert Keyword.fetch!(opts, :allowed_tools) == [AgentMachine.Tools.Now]
 
-    assert %AgentMachine.ToolPolicy{harness: :demo, permissions: permissions} =
+    assert %AgentMachine.ToolPolicy{harness: :time, permissions: permissions} =
              Keyword.fetch!(opts, :tool_policy)
 
-    assert MapSet.member?(permissions, :demo_time)
+    assert MapSet.member?(permissions, :time_read)
     assert Keyword.fetch!(opts, :tool_timeout_ms) == 100
     assert Keyword.fetch!(opts, :tool_max_rounds) == 2
     assert Keyword.fetch!(opts, :tool_approval_mode) == :read_only
@@ -457,7 +463,11 @@ defmodule AgentMachine.ClientRunnerTest do
              selected: "chat",
              reason: "explicit_chat_workflow",
              tool_intent: "none",
-             tools_exposed: false
+             tools_exposed: false,
+             classifier: "deterministic",
+             classifier_model: nil,
+             confidence: nil,
+             classified_intent: "none"
            }
   end
 
@@ -477,6 +487,69 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(summary.results) == ["assistant"]
     refute Map.has_key?(summary.results, "planner")
     assert summary.final_output =~ "agent assistant: explain progressive escalation"
+  end
+
+  test "runs auto time intent with time tool when another harness is configured" do
+    root = Path.join(System.tmp_dir!(), "agent-machine-auto-time-#{System.unique_integer()}")
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "what time is it?",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        tool_harness: :code_edit,
+        tool_root: root,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert summary.status == "completed"
+    assert summary.workflow_route.selected == "basic"
+    assert summary.workflow_route.reason == "time_intent_with_auto_time_harness"
+    assert Map.keys(summary.results) |> Enum.sort() == ["assistant", "finalizer"]
+  end
+
+  test "collector records workflow route, runtime events, and final summary" do
+    path =
+      Path.join(System.tmp_dir!(), "agent-machine-client-events-#{System.unique_integer()}.jsonl")
+
+    EventLog.configure!(path, %{session_id: "session-1"})
+
+    summary =
+      ClientRunner.run!(%{
+        task: "explain progressive escalation",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1
+      })
+
+    EventLog.close()
+
+    assert summary.status == "completed"
+
+    lines = path |> File.read!() |> String.split("\n", trim: true)
+    decoded = Enum.map(lines, &JSON.decode!/1)
+
+    event_types =
+      decoded
+      |> Enum.filter(&(&1["type"] == "event"))
+      |> Enum.map(&get_in(&1, ["event", "type"]))
+
+    assert "workflow_routed" in event_types
+    assert "run_started" in event_types
+    assert "agent_started" in event_types
+
+    assert Enum.any?(
+             decoded,
+             &(&1["type"] == "summary" and &1["summary"]["run_id"] == summary.run_id)
+           )
   end
 
   test "runs the agentic echo workflow in direct mode and exposes planner decision" do
@@ -679,6 +752,195 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
+  test "mix agent_machine.run writes session event log through collector" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-session-events-#{System.unique_integer()}.jsonl"
+      )
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "auto",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "6",
+      "--max-attempts",
+      "1",
+      "--event-log-file",
+      path,
+      "--event-session-id",
+      "session-1",
+      "--json",
+      "explain progressive escalation"
+    ])
+
+    assert_receive {:mix_shell, :info, [_json]}
+
+    decoded =
+      path
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&JSON.decode!/1)
+
+    assert Enum.any?(
+             decoded,
+             &(get_in(&1, ["event", "type"]) == "event_log_configured" and
+                 get_in(&1, ["event", "session_id"]) == "session-1")
+           )
+
+    assert Enum.any?(decoded, &(get_in(&1, ["event", "type"]) == "workflow_routed"))
+    assert Enum.any?(decoded, &(&1["type"] == "summary"))
+  end
+
+  test "mix agent_machine.run rejects event session id without event log file" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--event-session-id requires --event-log-file/, fn ->
+      Run.run([
+        "--workflow",
+        "chat",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "1",
+        "--max-attempts",
+        "1",
+        "--event-session-id",
+        "session-1",
+        "hello"
+      ])
+    end
+  end
+
+  test "mix agent_machine.run accepts local router flags" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "basic",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "2",
+      "--max-attempts",
+      "1",
+      "--router-mode",
+      "local",
+      "--router-model-dir",
+      "/tmp/agent-machine-router-model",
+      "--router-timeout-ms",
+      "100",
+      "--router-confidence-threshold",
+      "0.5",
+      "--json",
+      "hello"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+    assert JSON.decode!(json)["status"] == "completed"
+  end
+
+  test "mix agent_machine.run rejects invalid local router options" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:router_model_dir/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--router-mode",
+        "local",
+        "--json",
+        "hello"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:router_timeout_ms/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--router-mode",
+        "local",
+        "--router-model-dir",
+        "/tmp/agent-machine-router-model",
+        "--router-timeout-ms",
+        "0",
+        "--router-confidence-threshold",
+        "0.5",
+        "--json",
+        "hello"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:router_confidence_threshold/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--router-mode",
+        "local",
+        "--router-model-dir",
+        "/tmp/agent-machine-router-model",
+        "--router-timeout-ms",
+        "100",
+        "--router-confidence-threshold",
+        "1.5",
+        "--json",
+        "hello"
+      ])
+    end
+  end
+
   test "mix agent_machine.run rejects explicit chat with tool harness options" do
     Mix.Task.reenable("agent_machine.run")
 
@@ -793,6 +1055,46 @@ defmodule AgentMachine.ClientRunnerTest do
         "what time is it?"
       ])
     end
+  end
+
+  test "mix agent_machine.run accepts time tool harness" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "auto",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "6",
+      "--max-attempts",
+      "1",
+      "--tool-harness",
+      "time",
+      "--tool-timeout-ms",
+      "100",
+      "--tool-max-rounds",
+      "2",
+      "--tool-approval-mode",
+      "read-only",
+      "--json",
+      "what time is it?"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+
+    decoded = JSON.decode!(json)
+    assert decoded["workflow_route"]["selected"] == "basic"
+    assert decoded["workflow_route"]["reason"] == "time_intent_with_time_harness"
   end
 
   test "mix agent_machine.run accepts code-edit tool harness with explicit root budget and timeout" do
