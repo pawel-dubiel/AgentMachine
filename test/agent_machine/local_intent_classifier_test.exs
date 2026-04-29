@@ -97,6 +97,18 @@ defmodule AgentMachine.LocalIntentClassifierTest do
     end
   end
 
+  test "ONNX runner scores zero-shot logits with entailment versus contradiction" do
+    score = LocalIntentClassifier.OnnxRunner.zero_shot_probability!([0.0, 10.0, -2.0], 0, 2)
+
+    assert_in_delta score, 0.880797, 0.000001
+  end
+
+  test "ONNX runner fails fast when required logits are missing" do
+    assert_raise ArgumentError, ~r/entailment and contradiction logits/, fn ->
+      LocalIntentClassifier.OnnxRunner.zero_shot_probability!([0.0], 0, 2)
+    end
+  end
+
   @tag :manual_router_model
   test "runs real local ONNX classifier when AGENT_MACHINE_ROUTER_MODEL_DIR is set" do
     if model_dir = System.get_env("AGENT_MACHINE_ROUTER_MODEL_DIR") do

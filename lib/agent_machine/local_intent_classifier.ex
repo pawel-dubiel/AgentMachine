@@ -192,7 +192,28 @@ defmodule AgentMachine.LocalIntentClassifier do
       logits
       |> Nx.backend_transfer(Nx.BinaryBackend)
       |> Nx.to_flat_list()
-      |> entailment_probability!(assets.entailment_index)
+      |> zero_shot_probability!(assets.entailment_index, assets.contradiction_index)
+    end
+
+    @doc false
+    def zero_shot_probability!(logits, entailment_index, contradiction_index)
+        when is_list(logits) and entailment_index in 0..2 and contradiction_index in 0..2 do
+      max_index = max(entailment_index, contradiction_index)
+
+      if length(logits) <= max_index do
+        raise ArgumentError,
+              "local router ONNX output must contain entailment and contradiction logits"
+      end
+
+      # Hugging Face zero-shot classification scores each candidate using
+      # entailment vs contradiction; the neutral logit is intentionally ignored.
+      entailment_logit = Enum.at(logits, entailment_index)
+      contradiction_logit = Enum.at(logits, contradiction_index)
+      max_logit = max(entailment_logit, contradiction_logit)
+      entailment = :math.exp(entailment_logit - max_logit)
+      contradiction = :math.exp(contradiction_logit - max_logit)
+
+      entailment / (entailment + contradiction)
     end
 
     defp encode!(tokenizer, %{premise: premise, hypothesis: hypothesis}) do
@@ -230,21 +251,6 @@ defmodule AgentMachine.LocalIntentClassifier do
     defp int64_tensor(values) when is_list(values) do
       values
       |> then(&Nx.tensor([&1], type: {:s, 64}))
-    end
-
-    defp entailment_probability!(logits, entailment_index)
-         when is_list(logits) and entailment_index in 0..2 do
-      if length(logits) < 3 do
-        raise ArgumentError, "local router ONNX output must contain at least 3 logits"
-      end
-
-      max = Enum.max(logits)
-      exps = Enum.map(logits, &:math.exp(&1 - max))
-      total = Enum.sum(exps)
-
-      exps
-      |> Enum.at(entailment_index)
-      |> Kernel./(total)
     end
 
     defp load_assets!(model_dir) do
@@ -287,7 +293,8 @@ defmodule AgentMachine.LocalIntentClassifier do
         tokenizer: tokenizer,
         model: model,
         inputs: inputs,
-        entailment_index: entailment_index!(config_path)
+        entailment_index: label_index!(config_path, "entail"),
+        contradiction_index: label_index!(config_path, "contradict")
       }
     end
 
@@ -304,18 +311,18 @@ defmodule AgentMachine.LocalIntentClassifier do
       end
     end
 
-    defp entailment_index!(config_path) do
+    defp label_index!(config_path, needle) do
       config = config_path |> File.read!() |> JSON.decode!()
       id2label = Map.fetch!(config, "id2label")
 
       id2label
       |> Enum.find_value(fn {index, label} ->
-        if label |> String.downcase() |> String.contains?("entail") do
+        if label |> String.downcase() |> String.contains?(needle) do
           String.to_integer(index)
         end
       end)
       |> case do
-        nil -> raise ArgumentError, "local router config.json does not define an entailment label"
+        nil -> raise ArgumentError, "local router config.json does not define a #{needle} label"
         index -> index
       end
     end
