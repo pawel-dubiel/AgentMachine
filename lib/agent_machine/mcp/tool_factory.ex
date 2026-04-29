@@ -31,7 +31,7 @@ defmodule AgentMachine.MCP.ToolFactory do
     Module.create(module, quoted, Macro.Env.location(__ENV__))
   rescue
     exception in CompileError ->
-      if exception.description =~ "currently being defined" do
+      if Exception.message(exception) =~ "currently being defined" do
         wait_for_module!(module, 50)
       else
         reraise exception, __STACKTRACE__

@@ -162,6 +162,11 @@ agent lifecycle events, provider activity, tool calls, and tool results. The
 collector creates the parent directory, writes JSONL envelopes, and can be used
 alongside `--log-file`.
 
+Internally, each run owns a supervised OTP subtree with a run server, per-run
+task supervisor, event collector, and tool session supervisor. Runs are
+registered in `AgentMachine.RunRegistry` and emit `:telemetry` events alongside
+JSONL logs for run, agent, tool, MCP call, and workflow-route activity.
+
 JSON, JSONL, text summaries, and run log files are redacted before output.
 The redactor masks common API keys, bearer tokens, authorization headers,
 GitHub tokens, AWS access key IDs, private key blocks, and secret-looking
@@ -169,9 +174,9 @@ GitHub tokens, AWS access key IDs, private key blocks, and secret-looking
 value was masked.
 
 Remote provider prompts include compact runtime facts in `Run context`, such as
-current UTC time/date, local timezone, and the selected workflow route. These
-facts ground normal chat answers without exposing tools or requiring a tool
-call.
+current UTC time/date, local timezone, selected workflow route, and concise
+AgentMachine capability facts. These facts ground normal chat answers without
+exposing tools or requiring a tool call.
 
 ## Workflows
 
@@ -618,9 +623,10 @@ Local file tool rules:
 - MCP stdio servers are launched without a shell from the configured executable
   and args. MCP Streamable HTTP calls use JSON-RPC POST requests with the
   explicit tool timeout.
-- MCP stdio sessions are kept alive for the duration of one agent run, so
-  stateful servers such as Playwright MCP can handle multi-step tool loops like
-  `browser_navigate` followed by `browser_snapshot`.
+- MCP stdio sessions are supervised under the current run and kept alive for
+  the duration of one agent attempt, so stateful servers such as Playwright MCP
+  can handle multi-step tool loops like `browser_navigate` followed by
+  `browser_snapshot`.
 
 Example Playwright MCP config:
 
@@ -742,6 +748,11 @@ The input remains active while a run is processing. Press `Enter` during a run
 to queue the message locally; the TUI starts queued messages one at a time after
 the active run finishes. Use `/queue` commands to inspect, edit, remove, clear,
 or move queued messages before they run.
+
+When a filesystem request needs broader tool permission, the TUI shows an
+interactive selector in chat. Use Up/Down and Enter to allow writes, allow full
+access, or deny the request; `/allow-tools`, `/yolo-tools`, and `/deny-tools`
+remain available as command fallbacks.
 
 Useful commands:
 

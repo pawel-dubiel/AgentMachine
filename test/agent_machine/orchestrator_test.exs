@@ -8,6 +8,11 @@ defmodule AgentMachine.OrchestratorTest do
     :ok
   end
 
+  test "application starts run registry and run supervisor" do
+    assert Process.whereis(AgentMachine.RunRegistry)
+    assert Process.whereis(AgentMachine.RunSupervisor)
+  end
+
   test "spawns agents and collects results with usage" do
     agents = [
       %{
@@ -38,6 +43,86 @@ defmodule AgentMachine.OrchestratorTest do
     assert %{agents: 2, total_tokens: total_tokens, cost_usd: cost_usd} = UsageLedger.totals()
     assert total_tokens > 0
     assert cost_usd == 0.0
+  end
+
+  test "registers each run and its per-run supervisors" do
+    run_id = "run-registry-#{System.unique_integer([:positive])}"
+
+    agents = [
+      %{
+        id: "assistant",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, ^run_id} = Orchestrator.start_run(agents, run_id: run_id)
+    assert %{id: ^run_id} = Orchestrator.get_run(run_id)
+    assert [{run_pid, _}] = Registry.lookup(AgentMachine.RunRegistry, {:run, run_id})
+    assert Process.alive?(run_pid)
+
+    assert [{task_supervisor, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:task_supervisor, run_id})
+
+    assert Process.alive?(task_supervisor)
+
+    assert [{tool_session_supervisor, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:tool_session_supervisor, run_id})
+
+    assert Process.alive?(tool_session_supervisor)
+
+    assert [{event_collector, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:event_collector, run_id})
+
+    assert Process.alive?(event_collector)
+  end
+
+  test "agent tasks run under the per-run task supervisor" do
+    agents = [
+      %{
+        id: "inspector",
+        provider: AgentMachine.TestProviders.TaskSupervisorInspecting,
+        model: "test",
+        input: "inspect",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000)
+    assert run.results["inspector"].output == "per-run-task-supervisor"
+  end
+
+  test "terminating a run subtree cleans up its registered processes and tasks" do
+    run_id = "run-cleanup-#{System.unique_integer([:positive])}"
+
+    agents = [
+      %{
+        id: "slow",
+        provider: AgentMachine.TestProviders.LongRunning,
+        model: "test",
+        input: "sleep",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, ^run_id} = Orchestrator.start_run(agents, run_id: run_id)
+    assert [{run_pid, _}] = Registry.lookup(AgentMachine.RunRegistry, {:run, run_id})
+
+    assert [{task_supervisor, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:task_supervisor, run_id})
+
+    assert {:ok, [task_pid]} = wait_for_task_child(task_supervisor, 50)
+    assert tree_pid = run_tree_pid_for(run_pid)
+
+    assert :ok = DynamicSupervisor.terminate_child(AgentMachine.RunSupervisor, tree_pid)
+    Process.sleep(20)
+
+    refute Process.alive?(run_pid)
+    refute Process.alive?(task_supervisor)
+    refute Process.alive?(task_pid)
+    assert Registry.lookup(AgentMachine.RunRegistry, {:run, run_id}) == []
   end
 
   test "fails fast when required fields are missing" do
@@ -1033,11 +1118,129 @@ defmodule AgentMachine.OrchestratorTest do
     assert Enum.any?(run.events, &(&1.type == :tool_call_failed))
   end
 
+  test "emits telemetry for run, agent, and tool events" do
+    parent = self()
+    handler_id = {:orchestrator_test, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:agent_machine, :run, :start],
+          [:agent_machine, :run, :stop],
+          [:agent_machine, :agent, :start],
+          [:agent_machine, :agent, :stop],
+          [:agent_machine, :tool, :start],
+          [:agent_machine, :tool, :stop]
+        ],
+        &AgentMachine.TestTelemetryForwarder.handle/4,
+        parent
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
+             )
+
+    events = flush_telemetry([])
+    assert Enum.any?(events, &match?({[:agent_machine, :run, :start], _, %{run_id: _}}, &1))
+
+    assert Enum.any?(
+             events,
+             &match?({[:agent_machine, :run, :stop], %{duration: _}, %{run_id: _}}, &1)
+           )
+
+    assert Enum.any?(
+             events,
+             &match?({[:agent_machine, :agent, :start], _, %{agent_id: "tool-user"}}, &1)
+           )
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {[:agent_machine, :agent, :stop], %{duration: _}, %{agent_id: "tool-user"}},
+               &1
+             )
+           )
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {[:agent_machine, :tool, :start], _, %{tool: "AgentMachine.TestTools.Uppercase"}},
+               &1
+             )
+           )
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {[:agent_machine, :tool, :stop], %{duration: _},
+                %{tool: "AgentMachine.TestTools.Uppercase"}},
+               &1
+             )
+           )
+
+    assert run.results["tool-user"].status == :ok
+  end
+
   defp tmp_root(prefix) do
     root = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer()}")
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf(root) end)
     root
+  end
+
+  defp wait_for_task_child(_task_supervisor, 0), do: {:error, :timeout}
+
+  defp wait_for_task_child(task_supervisor, attempts_left) do
+    case Task.Supervisor.children(task_supervisor) do
+      [] ->
+        Process.sleep(10)
+        wait_for_task_child(task_supervisor, attempts_left - 1)
+
+      pids ->
+        {:ok, pids}
+    end
+  end
+
+  defp run_tree_pid_for(run_pid) do
+    AgentMachine.RunSupervisor
+    |> DynamicSupervisor.which_children()
+    |> Enum.find_value(fn {_id, pid, _type, _modules} ->
+      if run_tree_has_child?(pid, run_pid), do: pid
+    end)
+  end
+
+  defp run_tree_has_child?(tree_pid, child_pid) do
+    tree_pid
+    |> Supervisor.which_children()
+    |> Enum.any?(fn {_id, pid, _type, _modules} -> pid == child_pid end)
+  end
+
+  defp flush_telemetry(acc) do
+    receive do
+      {:telemetry, event, measurements, metadata} ->
+        flush_telemetry([{event, measurements, metadata} | acc])
+    after
+      50 -> Enum.reverse(acc)
+    end
   end
 end
 
@@ -1600,6 +1803,49 @@ defmodule AgentMachine.TestProviders.ToolUsing do
     text
     |> String.split(~r/\s+/, trim: true)
     |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.TaskSupervisorInspecting do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = _agent, opts) do
+    task_supervisor = Keyword.fetch!(opts, :task_supervisor)
+    run_children = Task.Supervisor.children(task_supervisor)
+    global_children = Task.Supervisor.children(AgentMachine.AgentSupervisor)
+
+    output =
+      if self() in run_children and self() not in global_children do
+        "per-run-task-supervisor"
+      else
+        "wrong-task-supervisor"
+      end
+
+    {:ok,
+     %{
+       output: output,
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
+  end
+end
+
+defmodule AgentMachine.TestProviders.LongRunning do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = _agent, _opts) do
+    Process.sleep(5_000)
+
+    {:ok,
+     %{
+       output: "finished",
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
   end
 end
 

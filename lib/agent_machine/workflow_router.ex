@@ -377,7 +377,34 @@ defmodule AgentMachine.WorkflowRouter do
   defp delegation_intent?(text) do
     text
     |> normalize()
-    |> contains_any?(["use agents", "use subagents", "delegate", "worker", "workers"])
+    |> contains_any?([
+      "use agents",
+      "use agent",
+      "spawn agents",
+      "spawn agent",
+      "start agents",
+      "start agent",
+      "create agents",
+      "create agent",
+      "use subagents",
+      "use subagent",
+      "spawn subagents",
+      "spawn subagent",
+      "delegate",
+      "deleguj",
+      "delegowac",
+      "delegować",
+      "uzyj agentow",
+      "użyj agentów",
+      "odpal agentow",
+      "odpal agentów",
+      "agentow",
+      "agentów",
+      "worker",
+      "workers",
+      "workerow",
+      "workerów"
+    ])
   end
 
   defp test_intent?(text) do

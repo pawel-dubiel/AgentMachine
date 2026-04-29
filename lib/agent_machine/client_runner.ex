@@ -3,7 +3,16 @@ defmodule AgentMachine.ClientRunner do
   High-level client runner used by CLI and TUI frontends.
   """
 
-  alias AgentMachine.{EventLog, EventSummary, JSON, Orchestrator, RunSpec, WorkflowRouter}
+  alias AgentMachine.{
+    EventLog,
+    EventSummary,
+    JSON,
+    Orchestrator,
+    RunSpec,
+    Telemetry,
+    WorkflowRouter
+  }
+
   alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Skills.{Manifest, Prompt, Selector}
   alias AgentMachine.Workflows.{Agentic, Basic, Chat, Tool}
@@ -50,6 +59,12 @@ defmodule AgentMachine.ClientRunner do
   defp maybe_put_auto_time_harness(spec, _workflow_route), do: spec
 
   defp write_workflow_route_event(spec, route) do
+    Telemetry.execute(
+      [:agent_machine, :workflow, :route],
+      %{system_time: Telemetry.system_time()},
+      %{workflow_route: route}
+    )
+
     EventLog.write_event(%{
       type: :workflow_routed,
       requested: route.requested,

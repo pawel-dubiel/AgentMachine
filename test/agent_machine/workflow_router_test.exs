@@ -230,6 +230,26 @@ defmodule AgentMachine.WorkflowRouterTest do
     refute route.tools_exposed
   end
 
+  test "routes spawn agents intent to agentic when it names concrete work" do
+    route = route!(%{task: "spawn agents to review this project", workflow: :auto})
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "delegation"
+  end
+
+  test "keeps pure agent capability questions in chat" do
+    route = route!(%{task: "can you spawn some agents", workflow: :auto})
+
+    assert route.selected == "chat"
+    assert route.tool_intent == "none"
+
+    followup =
+      route!(%{task: "but when you solve problems i think you can spawn them", workflow: :auto})
+
+    assert followup.selected == "chat"
+    assert followup.tool_intent == "none"
+  end
+
   test "routes generic tool intent to tool with read-risk MCP tool" do
     route =
       WorkflowRouter.route!(%WorkflowRouter{

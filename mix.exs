@@ -31,6 +31,7 @@ defmodule AgentMachine.MixProject do
     [
       {:nx, "~> 0.6"},
       {:ortex, "~> 0.1.10"},
+      {:telemetry, "~> 1.0"},
       {:tokenizers, "~> 0.5.1"},
       {:yamerl, "~> 0.10"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}

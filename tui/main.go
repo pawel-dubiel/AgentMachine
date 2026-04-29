@@ -295,6 +295,7 @@ type model struct {
 	pendingToolTask    string
 	pendingToolRoot    string
 	pendingToolHarness string
+	pendingToolChoice  int
 	eventSessionID     string
 	eventLogFile       string
 }
@@ -478,6 +479,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+
+		if m.pendingToolTask != "" && m.view == viewChat && !m.running && strings.TrimSpace(m.input.Value()) == "" {
+			switch msg.String() {
+			case "up", "k":
+				m.movePendingToolChoice(-1)
+				return m, nil
+			case "down", "j":
+				m.movePendingToolChoice(1)
+				return m, nil
+			case "enter":
+				return m.applyPendingToolChoice()
+			case "a":
+				m.pendingToolChoice = 0
+				return m.applyPendingToolChoice()
+			case "y":
+				m.pendingToolChoice = 1
+				return m.applyPendingToolChoice()
+			case "d", "esc":
+				m.pendingToolChoice = 2
+				return m.applyPendingToolChoice()
+			}
 		}
 
 		switch msg.String() {
@@ -713,6 +736,7 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		m.pendingToolTask = task
 		m.pendingToolRoot = root
 		m.pendingToolHarness = harness
+		m.pendingToolChoice = 0
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: prompt})
 		m.view = viewChat
 		return m, nil
@@ -1095,8 +1119,53 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	m.pendingToolTask = ""
 	m.pendingToolRoot = ""
 	m.pendingToolHarness = ""
+	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " approval=" + approval})
 	return m.startRun(task)
+}
+
+type pendingToolOption struct {
+	Label       string
+	Description string
+	Approval    string
+	Deny        bool
+}
+
+func pendingToolOptions() []pendingToolOption {
+	return []pendingToolOption{
+		{
+			Label:       "Allow writes",
+			Description: "Enable required tools for this root with auto-approved-safe approval and retry now.",
+			Approval:    "auto-approved-safe",
+		},
+		{
+			Label:       "Full access",
+			Description: "Enable required tools for this root with full-access approval and retry now.",
+			Approval:    "full-access",
+		},
+		{
+			Label:       "Deny",
+			Description: "Decline this tool request; no run starts.",
+			Deny:        true,
+		},
+	}
+}
+
+func (m *model) movePendingToolChoice(delta int) {
+	options := pendingToolOptions()
+	m.pendingToolChoice = (m.pendingToolChoice + delta + len(options)) % len(options)
+}
+
+func (m model) applyPendingToolChoice() (tea.Model, tea.Cmd) {
+	options := pendingToolOptions()
+	if m.pendingToolChoice < 0 || m.pendingToolChoice >= len(options) {
+		m.pendingToolChoice = 0
+	}
+	option := options[m.pendingToolChoice]
+	if option.Deny {
+		return m.handleDenyToolsCommand(nil)
+	}
+	return m.handleAllowToolsCommand([]string{option.Approval}, option.Approval)
 }
 
 func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
@@ -1107,6 +1176,7 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 	m.pendingToolTask = ""
 	m.pendingToolRoot = ""
 	m.pendingToolHarness = ""
+	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool request denied; no run started"})
 	return m, nil
 }
@@ -2357,6 +2427,7 @@ func toolPermissionText(reason string, harness string, root string, activeRoot s
 		lines = append(lines, "active root: "+activeRoot)
 	}
 	lines = append(lines,
+		"Use the selector below to approve or deny this request.",
 		"Run /allow-tools to enable "+harness+" for this root and retry now.",
 		"Run /yolo-tools to enable "+harness+" full-access for this root and retry now.",
 		"Run /deny-tools to decline.",

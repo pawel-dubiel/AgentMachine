@@ -133,7 +133,14 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 
 ## Current Architecture
 
-- `AgentMachine.Orchestrator` owns run state, task spawning, result aggregation, dynamic delegation, run artifacts, and usage totals.
+- `AgentMachine.Orchestrator` is the public run facade. It validates run input,
+  starts one supervised run subtree, and delegates snapshots/awaiting to the
+  per-run process.
+- `AgentMachine.RunServer` owns one run's state, task spawning, result
+  aggregation, dynamic delegation, run artifacts, and usage totals.
+- `AgentMachine.RunRegistry` names run-scoped processes by `{type, run_id}`;
+  each run subtree includes a run event collector, per-run task supervisor, tool
+  session supervisor, and run server.
 - `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, `AgentMachine.Workflows.Agentic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - `AgentMachine.DelegationResponse` parses opt-in structured planner output into delegated worker specs.
@@ -158,7 +165,9 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   finalizer, and `auto` may internally select a no-finalizer read-only `tool`
   path that is not accepted as a public workflow value.
 - Runs may use `max_attempts` for explicit retry attempts.
-- Runs collect in-memory `events` for lightweight observability.
+- Runs collect in-memory `events` for lightweight observability and emit
+  `:telemetry` events for run, agent, tool, MCP call, and workflow-route
+  activity alongside JSONL logs.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
 - Tool calls require `allowed_tools`, `tool_policy`, `tool_timeout_ms`,
   `tool_max_rounds`, and `tool_approval_mode`.
@@ -187,8 +196,9 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   explicitly allowlisted MCP tools through namespaced provider-visible names.
   MCP stdio and Streamable HTTP protocol, env-secret resolution, permissions,
   transport calls, redaction, and result bounding belong in Elixir.
-- MCP stdio sessions are kept alive per agent run so stateful MCP servers such
-  as Playwright can handle multi-step tool loops.
+- MCP sessions are supervised under the per-run tool session supervisor and are
+  kept alive per agent attempt so stateful MCP servers such as Playwright can
+  handle multi-step tool loops.
 - Repeated `--test-command <command>` values may extend `code-edit` with
   `run_test_command` only under `full-access`. Command execution must stay in
   Elixir, use exact allowlist matching, avoid shells, keep cwd inside

@@ -8,6 +8,7 @@ defmodule AgentMachine.AgentRunner do
     MCP.Session,
     ToolHarness,
     ToolPolicy,
+    ToolSessionSupervisor,
     Usage,
     UsageLedger
   }
@@ -130,7 +131,7 @@ defmodule AgentMachine.AgentRunner do
 
   defp with_mcp_session(agent, opts, callback) do
     if mcp_session_required?(agent, opts) do
-      {:ok, session} = Session.start_link(Keyword.fetch!(opts, :mcp_config))
+      {:ok, session} = start_mcp_session(agent, opts)
 
       try do
         callback.(Keyword.put(opts, :mcp_session, session))
@@ -141,6 +142,20 @@ defmodule AgentMachine.AgentRunner do
       end
     else
       callback.(opts)
+    end
+  end
+
+  defp start_mcp_session(agent, opts) do
+    config = Keyword.fetch!(opts, :mcp_config)
+    run_id = Keyword.fetch!(opts, :run_id)
+    attempt = Keyword.fetch!(opts, :attempt)
+
+    case Keyword.fetch(opts, :tool_session_supervisor) do
+      {:ok, supervisor} ->
+        ToolSessionSupervisor.start_mcp_session(supervisor, run_id, agent.id, attempt, config)
+
+      :error ->
+        Session.start_link({config, %{run_id: run_id, agent_id: agent.id, attempt: attempt}})
     end
   end
 
@@ -954,9 +969,15 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp emit_event!(opts, event) do
-    case Keyword.fetch(opts, :event_sink) do
-      :error -> :ok
-      {:ok, sink} -> sink.(event)
+    case Keyword.fetch(opts, :event_collector) do
+      {:ok, collector} ->
+        AgentMachine.RunEventCollector.emit(collector, event)
+
+      :error ->
+        case Keyword.fetch(opts, :event_sink) do
+          :error -> :ok
+          {:ok, sink} -> sink.(event)
+        end
     end
   end
 

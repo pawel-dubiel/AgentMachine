@@ -31,6 +31,7 @@ defmodule AgentMachine.RunContextPrompt do
       current_utc: DateTime.to_iso8601(now),
       utc_date: Date.to_iso8601(DateTime.to_date(now)),
       local_timezone: local_timezone(),
+      agent_machine: agent_machine_facts(),
       instruction: "Use these runtime facts when relevant. Do not invent dates or times."
     }
     |> maybe_put_workflow_route(route)
@@ -120,6 +121,21 @@ defmodule AgentMachine.RunContextPrompt do
       :workflow_route,
       Map.take(route, [:requested, :selected, :reason, :tool_intent])
     )
+  end
+
+  defp agent_machine_facts do
+    %{
+      role: "assistant running inside AgentMachine",
+      execution_model:
+        "Models do not directly spawn OS processes. They return text, tool calls, or structured delegation; the Elixir runtime executes tools and starts delegated worker agents.",
+      workflows: %{
+        chat: "no tools, workers, or side effects",
+        tool: "read-only tool calls when selected by auto routing",
+        agentic: "planner may return next_agents; Elixir runtime starts worker agents"
+      },
+      instruction:
+        "Be precise about the selected route. Do not claim AgentMachine lacks agents. In chat route, explain that concrete 'use agents to do X' requests can be routed through agentic workflow, but this chat run has no workers or tools."
+    }
   end
 
   defp local_timezone do

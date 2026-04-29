@@ -120,6 +120,9 @@ defmodule AgentMachine.ClientRunnerTest do
     {[assistant], opts} = Chat.build!(spec)
 
     assert assistant.id == "assistant"
+    assert assistant.instructions =~ "assistant running inside AgentMachine"
+    assert assistant.instructions =~ "AgentMachine can route concrete tasks"
+    assert assistant.instructions =~ "this chat route cannot manually spawn arbitrary workers"
     assert assistant.metadata == %{agent_machine_disable_tools: true}
     refute Keyword.has_key?(opts, :finalizer)
     refute Keyword.has_key?(opts, :allowed_tools)
@@ -515,6 +518,34 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(summary.results) == ["assistant"]
     refute Map.has_key?(summary.results, "planner")
     assert summary.final_output =~ "agent assistant: explain progressive escalation"
+  end
+
+  test "emits workflow route telemetry" do
+    parent = self()
+    handler_id = {:client_runner_test, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:agent_machine, :workflow, :route],
+        &AgentMachine.TestTelemetryForwarder.handle/4,
+        parent
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert %{status: "completed"} =
+             ClientRunner.run!(%{
+               task: "explain progressive escalation",
+               workflow: :auto,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 6,
+               max_attempts: 1
+             })
+
+    assert_receive {:telemetry, [:agent_machine, :workflow, :route], %{system_time: _},
+                    %{workflow_route: %{requested: "auto", selected: "chat"}}}
   end
 
   test "runs auto time intent with time tool when another harness is configured" do

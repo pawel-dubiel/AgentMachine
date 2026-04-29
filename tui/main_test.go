@@ -1810,8 +1810,12 @@ func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
 		t.Fatalf("expected local-files pending harness, got %q", result.pendingToolHarness)
 	}
 	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "required harness: local-files") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
+	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "required harness: local-files") || !strings.Contains(last, "Use the selector below") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
 		t.Fatalf("expected permission prompt, got %q", last)
+	}
+	view := result.View()
+	if !strings.Contains(view, "Tool Permission") || !strings.Contains(view, "> Allow writes") || !strings.Contains(view, "Full access") || !strings.Contains(view, "Deny") {
+		t.Fatalf("expected permission selector, got %q", view)
 	}
 }
 
@@ -1943,6 +1947,98 @@ func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
 	}
 	if result.savedConfig.ToolApproval != "full-access" {
 		t.Fatalf("expected full-access, got %#v", result.savedConfig)
+	}
+}
+
+func TestPendingToolSelectorApprovesWithKeyboard(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("expected home directory, got %v", err)
+	}
+
+	m := model{
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		view:               viewChat,
+		input:              textinput.New(),
+		pendingToolTask:    "create directory testmme in my home folder",
+		pendingToolRoot:    home,
+		pendingToolHarness: "local-files",
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command after selecting allow")
+	}
+	if !result.running {
+		t.Fatal("expected run to start after selector approval")
+	}
+	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
+		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
+	}
+	if result.pendingToolTask != "" {
+		t.Fatalf("expected pending request to clear, got %q", result.pendingToolTask)
+	}
+}
+
+func TestPendingToolSelectorCanChooseFullAccessAndDeny(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	m := model{
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		view:               viewChat,
+		input:              textinput.New(),
+		pendingToolTask:    "fix /tmp/agent-machine-home/app.py",
+		pendingToolRoot:    "/tmp/agent-machine-home",
+		pendingToolHarness: "code-edit",
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	result := updated.(model)
+	if cmd != nil {
+		t.Fatal("expected no command while moving selector")
+	}
+	if result.pendingToolChoice != 1 {
+		t.Fatalf("expected full-access selection, got %d", result.pendingToolChoice)
+	}
+
+	updated, cmd = result.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result = updated.(model)
+	if cmd == nil {
+		t.Fatal("expected run command after full-access selector approval")
+	}
+	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
+	}
+
+	deny := model{
+		view:               viewChat,
+		input:              textinput.New(),
+		pendingToolTask:    "fix the existing app",
+		pendingToolRoot:    "/tmp/agent-machine-home",
+		pendingToolHarness: "code-edit",
+		pendingToolChoice:  2,
+	}
+	updated, cmd = deny.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result = updated.(model)
+	if cmd != nil {
+		t.Fatal("expected no run command after deny")
+	}
+	if result.pendingToolTask != "" || result.pendingToolHarness != "" {
+		t.Fatalf("expected deny to clear pending request, got %#v", result)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "denied") {
+		t.Fatalf("expected denied message, got %#v", result.messages)
 	}
 }
 

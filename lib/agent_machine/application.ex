@@ -6,6 +6,8 @@ defmodule AgentMachine.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      {Registry, keys: :unique, name: AgentMachine.RunRegistry},
+      AgentMachine.RunSupervisor,
       {Task.Supervisor, name: AgentMachine.AgentSupervisor},
       AgentMachine.UsageLedger,
       AgentMachine.EventLog,

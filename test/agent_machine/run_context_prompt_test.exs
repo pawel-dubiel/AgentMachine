@@ -17,6 +17,12 @@ defmodule AgentMachine.RunContextPromptTest do
                "current_utc" => "2026-04-29T16:27:30Z",
                "utc_date" => "2026-04-29",
                "local_timezone" => timezone,
+               "agent_machine" => %{
+                 "role" => role,
+                 "execution_model" => execution_model,
+                 "workflows" => workflows,
+                 "instruction" => agent_machine_instruction
+               },
                "instruction" => instruction
              },
              "results" => %{},
@@ -24,6 +30,11 @@ defmodule AgentMachine.RunContextPromptTest do
            } = JSON.decode!(text)
 
     assert is_binary(timezone)
+    assert role == "assistant running inside AgentMachine"
+    assert execution_model =~ "Elixir runtime executes tools"
+    assert workflows["chat"] =~ "no tools"
+    assert workflows["agentic"] =~ "next_agents"
+    assert agent_machine_instruction =~ "Do not claim AgentMachine lacks agents"
     assert instruction =~ "Do not invent dates or times"
   end
 

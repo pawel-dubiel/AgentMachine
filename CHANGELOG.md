@@ -4,6 +4,13 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added an interactive TUI selector for pending filesystem tool permissions so
+  users can approve safe writes, full access, or deny without typing commands.
+- Added compact AgentMachine capability facts to runtime prompt context and
+  taught chat mode how to answer agent-spawning meta questions accurately.
+- Moved run execution into supervised per-run OTP subtrees with registry names,
+  per-run task/tool-session supervisors, supervised MCP sessions, and telemetry
+  events alongside existing JSONL logs.
 - Ignored local Playwright MCP runtime artifacts and common Playwright report/output directories.
 - Fixed the TUI Playwright MCP preset so `--headless` is passed to Playwright MCP instead of `npx`.
 - Added per-agent persistent MCP stdio sessions, MCP `clientInfo` initialization, stdio env reference handling, TUI `/mcp add playwright` preset/config commands, web-browse routing for Playwright MCP, a self-contained Playwright MCP example config, and an opt-in paid OpenRouter Playwright MCP integration test target.

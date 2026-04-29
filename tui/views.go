@@ -45,6 +45,8 @@ func (m model) View() string {
 	b.WriteString("\n")
 	if m.running {
 		b.WriteString(hintStyle.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
+	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
+		b.WriteString(hintStyle.Render("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."))
 	} else {
 		b.WriteString(hintStyle.Render("Type a message or /help. Tab changes view. Esc goes back."))
 	}
@@ -107,6 +109,12 @@ func (m model) chatView() string {
 		b.WriteString(m.liveActivityView())
 		b.WriteString("\n")
 	}
+	if m.pendingToolTask != "" && !m.running {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(m.pendingToolPermissionView())
+	}
 	if len(m.queuedMessages) > 0 {
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
@@ -114,6 +122,40 @@ func (m model) chatView() string {
 		b.WriteString(m.queueView())
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) pendingToolPermissionView() string {
+	root := emptyAsNone(m.pendingToolRoot)
+	harness := emptyAs(m.pendingToolHarness, "local-files")
+	lines := []string{
+		labelStyle.Render("Tool Permission"),
+		"harness: " + harness,
+		"root: " + root,
+		"task: " + compactQueueText(m.pendingToolTask),
+		"",
+	}
+
+	options := pendingToolOptions()
+	selected := m.pendingToolChoice
+	if selected < 0 || selected >= len(options) {
+		selected = 0
+	}
+
+	for index, option := range options {
+		prefix := "  "
+		if index == selected {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+option.Label+" - "+option.Description)
+	}
+
+	lines = append(lines, "", "Up/Down choose. Enter accepts. a=allow, y=full access, d/Esc=deny.")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
 }
 
 func (m model) thinkingView() string {

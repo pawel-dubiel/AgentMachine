@@ -3,10 +3,23 @@ defmodule AgentMachine.MCP.Session do
 
   use GenServer
 
-  alias AgentMachine.{JSON, MCP.Config}
+  alias AgentMachine.{JSON, MCP.Config, Telemetry}
 
   def start_link(%Config{} = config) do
-    GenServer.start_link(__MODULE__, config)
+    GenServer.start_link(__MODULE__, {config, %{}})
+  end
+
+  def start_link({%Config{} = config, metadata}) when is_map(metadata) do
+    GenServer.start_link(__MODULE__, {config, metadata})
+  end
+
+  def child_spec(arg) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [arg]},
+      restart: :temporary,
+      type: :worker
+    }
   end
 
   def call_tool(pid, server_id, tool_name, arguments, timeout_ms)
@@ -20,24 +33,47 @@ defmodule AgentMachine.MCP.Session do
   end
 
   @impl true
-  def init(%Config{} = config) do
-    {:ok, %{config: config, stdio: %{}, http: %{}}}
+  def init({%Config{} = config, metadata}) when is_map(metadata) do
+    {:ok, %{config: config, telemetry_metadata: metadata, stdio: %{}, http: %{}}}
   end
 
   @impl true
   def handle_call({:call_tool, server_id, tool_name, arguments, timeout_ms}, _from, state) do
     server = Config.server_by_id!(state.config, server_id)
 
-    {response, state} =
-      case server.transport do
-        :stdio -> call_stdio_tool!(state, server, tool_name, arguments, timeout_ms)
-        :streamable_http -> call_http_tool!(state, server, tool_name, arguments, timeout_ms)
-      end
+    started_at = Telemetry.start_time()
+    metadata = mcp_telemetry_metadata(state, server_id, tool_name)
 
-    {:reply, response, state}
-  rescue
-    exception in [ArgumentError, ErlangError, System.EnvError] ->
-      {:reply, {:error, Exception.message(exception)}, state}
+    Telemetry.execute(
+      [:agent_machine, :mcp, :call, :start],
+      %{system_time: Telemetry.system_time()},
+      metadata
+    )
+
+    try do
+      {response, state} =
+        case server.transport do
+          :stdio -> call_stdio_tool!(state, server, tool_name, arguments, timeout_ms)
+          :streamable_http -> call_http_tool!(state, server, tool_name, arguments, timeout_ms)
+        end
+
+      Telemetry.execute(
+        [:agent_machine, :mcp, :call, :stop],
+        %{duration: Telemetry.duration_since(started_at)},
+        metadata
+      )
+
+      {:reply, response, state}
+    rescue
+      exception in [ArgumentError, ErlangError, System.EnvError] ->
+        Telemetry.execute(
+          [:agent_machine, :mcp, :call, :exception],
+          %{duration: Telemetry.duration_since(started_at)},
+          Map.put(metadata, :error, Exception.message(exception))
+        )
+
+        {:reply, {:error, Exception.message(exception)}, state}
+    end
   end
 
   @impl true
@@ -183,6 +219,12 @@ defmodule AgentMachine.MCP.Session do
     unless MapSet.member?(tools, tool_name) do
       raise ArgumentError, "MCP server did not list configured tool #{inspect(tool_name)}"
     end
+  end
+
+  defp mcp_telemetry_metadata(state, server_id, tool_name) do
+    state.telemetry_metadata
+    |> Map.put(:mcp_server_id, server_id)
+    |> Map.put(:mcp_tool, tool_name)
   end
 
   defp decode_response!(body, id) do

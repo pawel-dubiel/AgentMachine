@@ -7,6 +7,7 @@ defmodule AgentMachine.MCPIntegrationTest do
     MCP.Config,
     MCP.Session,
     MCP.ToolFactory,
+    Orchestrator,
     RunSpec,
     ToolHarness
   }
@@ -234,6 +235,85 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert get_in(second, [:result, "content", Access.at(0), "text"]) == "call 2"
 
     GenServer.stop(session)
+  end
+
+  test "agent MCP tool use starts and stops a supervised MCP session" do
+    parent = self()
+    handler_id = {:mcp_integration_test, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:agent_machine, :mcp, :call, :start],
+          [:agent_machine, :mcp, :call, :stop]
+        ],
+        &AgentMachine.TestTelemetryForwarder.handle/4,
+        parent
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    script = fake_stdio_server!()
+
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "docs",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+            ]
+          }
+        ]
+      })
+
+    agents = [
+      %{
+        id: "mcp-user",
+        provider: AgentMachine.TestProviders.MCPToolUsing,
+        model: "test",
+        input: "beam",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: ToolHarness.builtin!(:mcp, mcp_config: config),
+               tool_policy: ToolHarness.builtin_policy!(:mcp, mcp_config: config),
+               mcp_config: config,
+               tool_timeout_ms: 1_000,
+               tool_max_rounds: 1,
+               tool_approval_mode: :read_only
+             )
+
+    assert run.results["mcp-user"].output == "supervised mcp: result for beam"
+
+    assert [{tool_session_supervisor, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:tool_session_supervisor, run.id})
+
+    assert DynamicSupervisor.which_children(tool_session_supervisor) == []
+
+    events = flush_telemetry([])
+
+    assert Enum.any?(
+             events,
+             &match?({[:agent_machine, :mcp, :call, :start], _, %{mcp_server_id: "docs"}}, &1)
+           )
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {[:agent_machine, :mcp, :call, :stop], %{duration: _}, %{mcp_tool: "search"}},
+               &1
+             )
+           )
   end
 
   test "MCP stdio session resolves env refs into the child process env" do
@@ -471,5 +551,65 @@ defmodule AgentMachine.MCPIntegrationTest do
   defp request_body!(request) do
     [_headers, body] = String.split(request, "\r\n\r\n", parts: 2)
     body
+  end
+
+  defp flush_telemetry(acc) do
+    receive do
+      {:telemetry, event, measurements, metadata} ->
+        flush_telemetry([{event, measurements, metadata} | acc])
+    after
+      50 -> Enum.reverse(acc)
+    end
+  end
+end
+
+defmodule AgentMachine.TestProviders.MCPToolUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{state: %{supervised: true}, results: [%{result: result}]} ->
+        text = get_in(result, [:result, "content", Access.at(0), "text"])
+        final_response("supervised mcp: #{text}")
+
+      nil ->
+        tool_request(agent, opts)
+    end
+  end
+
+  defp tool_request(agent, opts) do
+    [tool | _rest] = Keyword.fetch!(opts, :allowed_tools)
+    session = Keyword.fetch!(opts, :mcp_session)
+    supervisor = Keyword.fetch!(opts, :tool_session_supervisor)
+
+    supervised? =
+      supervisor
+      |> DynamicSupervisor.which_children()
+      |> Enum.any?(fn {_id, pid, _type, _modules} -> pid == session end)
+
+    {:ok,
+     %{
+       output: "called mcp tool",
+       tool_calls: [
+         %{
+           id: "mcp-search",
+           tool: tool,
+           input: %{arguments: %{"query" => agent.input}}
+         }
+       ],
+       tool_state: %{supervised: supervised?},
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
+  end
+
+  defp final_response(output) do
+    {:ok,
+     %{
+       output: output,
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
   end
 end
