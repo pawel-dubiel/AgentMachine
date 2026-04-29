@@ -205,6 +205,23 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.tool_intent == "code_mutation"
   end
 
+  test "routes auto Next.js project creation as code mutation" do
+    route =
+      route!(%{
+        task: "in home folder create tt100 dir and create nextjs project",
+        workflow: :auto,
+        tool_harness: :code_edit,
+        tool_root: "/tmp/home",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "code_mutation"
+    assert route.reason == "code_mutation_intent_with_code_edit_harness"
+  end
+
   test "routes auto test command intent only with code edit full access and allowlist" do
     route =
       route!(%{
@@ -446,6 +463,20 @@ defmodule AgentMachine.WorkflowRouterTest do
         workflow: :auto,
         tool_harness: :local_files,
         tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+    end
+  end
+
+  test "fails fast for Next.js project creation without code-edit harness" do
+    assert_raise ArgumentError, ~r/code mutation intent/, fn ->
+      route!(%{
+        task: "in home folder create tt100 dir and create nextjs project",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/home",
         tool_timeout_ms: 100,
         tool_max_rounds: 2,
         tool_approval_mode: :auto_approved_safe

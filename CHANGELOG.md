@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Routed Next.js/front-end project creation as code mutation so the TUI asks
+  for `code-edit` instead of using only local-files permissions.
 - Fixed Mix CLI parsing for repeated `--tool-harness`, `--test-command`, and
   `--skill` flags so combined harnesses such as local-files plus MCP are not
   reduced to only the last flag.

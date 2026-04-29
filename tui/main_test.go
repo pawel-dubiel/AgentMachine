@@ -1901,6 +1901,41 @@ func TestCodeEditFollowUpPromptRequiresCodeEditHarness(t *testing.T) {
 	}
 }
 
+func TestNextJSProjectCreationRequiresCodeEditHarness(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  configPath,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+	}
+
+	updated, cmd := m.startRun("in home folder create tt100 dir and create nextjs project")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command before code-edit permission")
+	}
+	if result.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit pending harness, got %q", result.pendingToolHarness)
+	}
+	last := result.messages[len(result.messages)-1].Text
+	if !strings.Contains(last, "required harness: code-edit") ||
+		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
+		t.Fatalf("expected code-edit permission prompt, got %q", last)
+	}
+}
+
 func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
@@ -1919,7 +1954,7 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 		},
 	}
 
-	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected mutation intent but no write-capable tool harness is configured")
+	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured")
 	updated, handled := m.withRunPermissionError(err)
 
 	if !handled {
@@ -1928,13 +1963,13 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 	if updated.pendingToolTask == "" {
 		t.Fatal("expected pending tool task")
 	}
-	if updated.pendingToolHarness != "local-files" {
-		t.Fatalf("expected local-files harness, got %q", updated.pendingToolHarness)
+	if updated.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
 	}
 	last := updated.messages[len(updated.messages)-1].Text
 	if !strings.Contains(last, "filesystem permission required") ||
-		!strings.Contains(last, "required harness: local-files") ||
-		!strings.Contains(last, "active tool approval mode") {
+		!strings.Contains(last, "required harness: code-edit") ||
+		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
 		t.Fatalf("expected permission prompt, got %q", last)
 	}
 }

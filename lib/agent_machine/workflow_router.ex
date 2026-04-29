@@ -525,6 +525,14 @@ defmodule AgentMachine.WorkflowRouter do
       ".go",
       ".js",
       ".ts",
+      "nextjs",
+      "next.js",
+      "react",
+      "vite",
+      "package.json",
+      "src/",
+      "app/",
+      "pages/",
       "mix.exs"
     ])
   end

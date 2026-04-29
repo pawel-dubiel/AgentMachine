@@ -2575,10 +2575,11 @@ func requiredWriteHarness(task string) string {
 func codeWriteIntent(task string) bool {
 	text := strings.ToLower(task)
 	codeVerb := containsAny(text, []string{
-		"rewrite", "fix", "patch", "edit", "update", "change", "repair",
+		"create", "make", "scaffold", "generate", "rewrite", "fix", "patch", "edit", "update", "change", "repair",
 	})
 	codeNoun := containsAny(text, []string{
 		"code", "script", "app", "python", ".py", ".js", ".ts", ".go", ".ex", ".exs", "weather_app.py",
+		"nextjs", "next.js", "react", "vite", "package.json",
 	})
 	return codeVerb && codeNoun
 }
