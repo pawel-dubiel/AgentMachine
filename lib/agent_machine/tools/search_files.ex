@@ -20,7 +20,8 @@ defmodule AgentMachine.Tools.SearchFiles do
   def definition do
     %{
       name: "search_files",
-      description: "Search text files under the configured tool root using ripgrep.",
+      description:
+        "Search file contents under a narrow path using ripgrep. This does not find file or directory names; use list_files or file_info first when the user names a known path.",
       input_schema: %{
         "type" => "object",
         "properties" => %{

@@ -29,6 +29,8 @@ defmodule AgentMachine.RunContextPromptTest do
 
     assert "create_dir" in tools
     assert "write_file" in tools
+    assert instruction =~ "inspect that exact relative path"
+    assert instruction =~ "Use search_files only for content search under a narrow path"
     assert instruction =~ "Do not claim file or directory changes unless tool_results confirm"
   end
 

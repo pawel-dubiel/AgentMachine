@@ -1183,9 +1183,53 @@ func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
 	if result.pendingToolTask == "" {
 		t.Fatal("expected pending tool task")
 	}
+	if result.pendingToolHarness != "local-files" {
+		t.Fatalf("expected local-files pending harness, got %q", result.pendingToolHarness)
+	}
 	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
+	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "required harness: local-files") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
 		t.Fatalf("expected permission prompt, got %q", last)
+	}
+}
+
+func TestCodeEditFollowUpPromptRequiresCodeEditHarness(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  configPath,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "Hi check in home folder Project1 and if thats app works"},
+			{Role: "assistant", Text: "Found Projekt1/weather_app.py. The Python script is malformed and needs rewriting."},
+		},
+	}
+
+	updated, cmd := m.startRun("yes rewrite and fix")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command before code-edit permission")
+	}
+	if result.pendingToolTask != "yes rewrite and fix" {
+		t.Fatalf("expected pending follow-up task, got %q", result.pendingToolTask)
+	}
+	if result.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit pending harness, got %q", result.pendingToolHarness)
+	}
+	last := result.messages[len(result.messages)-1].Text
+	if !strings.Contains(last, "required harness: code-edit") || !strings.Contains(last, "active tool harness cannot perform this filesystem action") {
+		t.Fatalf("expected code-edit permission prompt, got %q", last)
 	}
 }
 
@@ -1218,8 +1262,36 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
-	if result.pendingToolTask != "" || result.pendingToolRoot != "" {
-		t.Fatalf("expected pending tool request to be cleared, got task=%q root=%q", result.pendingToolTask, result.pendingToolRoot)
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
+		t.Fatalf("expected pending tool request to be cleared, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
+	}
+}
+
+func TestAllowToolsApprovesPendingCodeEditRun(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	m := model{
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		pendingToolTask:    "yes rewrite and fix",
+		pendingToolRoot:    "/tmp/agent-machine-home",
+		pendingToolHarness: "code-edit",
+	}
+
+	updated, cmd := m.handleCommand("/allow-tools")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command after allowing code-edit tools")
+	}
+	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolRoot != "/tmp/agent-machine-home" || result.savedConfig.ToolApproval != "auto-approved-safe" {
+		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
+	}
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
+		t.Fatalf("expected pending tool request to clear, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
 	}
 }
 
@@ -1263,8 +1335,8 @@ func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command after denying tools")
 	}
-	if result.pendingToolTask != "" || result.pendingToolRoot != "" {
-		t.Fatalf("expected pending request to clear, got task=%q root=%q", result.pendingToolTask, result.pendingToolRoot)
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
+		t.Fatalf("expected pending request to clear, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
 	}
 	if !strings.Contains(result.messages[len(result.messages)-1].Text, "denied") {
 		t.Fatalf("expected denied message, got %#v", result.messages)

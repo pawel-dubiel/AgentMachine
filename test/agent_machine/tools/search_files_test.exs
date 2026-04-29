@@ -3,6 +3,13 @@ defmodule AgentMachine.Tools.SearchFilesTest do
 
   alias AgentMachine.Tools.SearchFiles
 
+  test "describes search as narrow content search rather than path discovery" do
+    definition = SearchFiles.definition()
+
+    assert definition.description =~ "Search file contents under a narrow path"
+    assert definition.description =~ "does not find file or directory names"
+  end
+
   test "searches files under the configured tool root with rg" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-search-#{System.unique_integer()}"))

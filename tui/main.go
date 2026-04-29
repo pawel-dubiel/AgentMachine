@@ -264,6 +264,7 @@ type model struct {
 	stream             *streamSession
 	pendingToolTask    string
 	pendingToolRoot    string
+	pendingToolHarness string
 }
 
 var (
@@ -581,15 +582,17 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if prompt, root, needsPermission := m.toolPermissionPrompt(task); needsPermission {
+	permissionTask := m.taskWithConversationContext(task)
+	if prompt, root, harness, needsPermission := m.toolPermissionPrompt(permissionTask); needsPermission {
 		m.pendingToolTask = task
 		m.pendingToolRoot = root
+		m.pendingToolHarness = harness
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: prompt})
 		m.view = viewChat
 		return m, nil
 	}
 
-	runTask := m.taskWithConversationContext(task)
+	runTask := permissionTask
 	config, err := resolveConfig(m.runConfig(runTask))
 	if err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
@@ -922,7 +925,12 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 		}
 	}
 
-	m.savedConfig.ToolHarness = "local-files"
+	harness := m.pendingToolHarness
+	if harness == "" {
+		harness = "local-files"
+	}
+
+	m.savedConfig.ToolHarness = harness
 	m.savedConfig.ToolRoot = root
 	m.savedConfig.ToolTimeout = "1000"
 	m.savedConfig.ToolMaxRounds = "6"
@@ -936,7 +944,8 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	task := m.pendingToolTask
 	m.pendingToolTask = ""
 	m.pendingToolRoot = ""
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed local-files tools root=" + root + " approval=" + approval})
+	m.pendingToolHarness = ""
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " approval=" + approval})
 	return m.startRun(task)
 }
 
@@ -947,6 +956,7 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 	m.pendingToolTask = ""
 	m.pendingToolRoot = ""
+	m.pendingToolHarness = ""
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool request denied; no run started"})
 	return m, nil
 }
@@ -1913,54 +1923,80 @@ func validateTestCommands(commands []string) error {
 	return nil
 }
 
-func (m model) toolPermissionPrompt(task string) (string, string, bool) {
-	if !filesystemWriteIntent(task) {
-		return "", "", false
+func (m model) toolPermissionPrompt(task string) (string, string, string, bool) {
+	requiredHarness := requiredWriteHarness(task)
+	if requiredHarness == "" {
+		return "", "", "", false
 	}
 
 	root := inferredToolRoot(task)
 	if root == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 
-	switch m.savedConfig.ToolHarness {
-	case "local-files":
+	switch {
+	case m.savedConfig.ToolHarness == requiredHarness:
 		if !pathInsideRoot(root, m.savedConfig.ToolRoot) {
 			return toolPermissionText(
 				"requested filesystem location is outside the active tool root",
+				requiredHarness,
 				root,
 				m.savedConfig.ToolRoot,
-			), root, true
+			), root, requiredHarness, true
 		}
 		if m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access" {
 			return toolPermissionText(
 				"active tool approval mode cannot perform writes without an interactive approval bridge",
+				requiredHarness,
 				root,
 				m.savedConfig.ToolRoot,
-			), root, true
+			), root, requiredHarness, true
 		}
-		return "", "", false
-	case "":
-		return toolPermissionText("filesystem tools are off", root, ""), root, true
+		return "", "", "", false
+	case m.savedConfig.ToolHarness == "":
+		return toolPermissionText("filesystem tools are off", requiredHarness, root, ""), root, requiredHarness, true
 	default:
-		return toolPermissionText("active tool harness cannot perform this filesystem action", root, m.savedConfig.ToolRoot), root, true
+		return toolPermissionText("active tool harness cannot perform this filesystem action", requiredHarness, root, m.savedConfig.ToolRoot), root, requiredHarness, true
 	}
 }
 
-func toolPermissionText(reason string, root string, activeRoot string) string {
+func toolPermissionText(reason string, harness string, root string, activeRoot string) string {
 	lines := []string{
 		"filesystem permission required: " + reason,
+		"required harness: " + harness,
 		"requested root: " + root,
 	}
 	if strings.TrimSpace(activeRoot) != "" {
 		lines = append(lines, "active root: "+activeRoot)
 	}
 	lines = append(lines,
-		"Run /allow-tools to enable local-files for this root and retry now.",
-		"Run /yolo-tools to enable full-access for this root and retry now.",
+		"Run /allow-tools to enable "+harness+" for this root and retry now.",
+		"Run /yolo-tools to enable "+harness+" full-access for this root and retry now.",
 		"Run /deny-tools to decline.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func requiredWriteHarness(task string) string {
+	switch {
+	case codeWriteIntent(task):
+		return "code-edit"
+	case filesystemWriteIntent(task):
+		return "local-files"
+	default:
+		return ""
+	}
+}
+
+func codeWriteIntent(task string) bool {
+	text := strings.ToLower(task)
+	codeVerb := containsAny(text, []string{
+		"rewrite", "fix", "patch", "edit", "update", "change", "repair",
+	})
+	codeNoun := containsAny(text, []string{
+		"code", "script", "app", "python", ".py", ".js", ".ts", ".go", ".ex", ".exs", "weather_app.py",
+	})
+	return codeVerb && codeNoun
 }
 
 func filesystemWriteIntent(task string) bool {
