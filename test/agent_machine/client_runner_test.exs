@@ -1257,6 +1257,98 @@ defmodule AgentMachine.ClientRunnerTest do
     assert %{"status" => "completed"} = JSON.decode!(line)
   end
 
+  test "mix agent_machine.run preserves repeated tool harness flags" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-local-files-cli-#{System.unique_integer()}")
+
+    event_log =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-repeated-harnesses-#{System.unique_integer()}.jsonl"
+      )
+
+    mcp_config =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-repeated-harnesses-#{System.unique_integer()}.mcp.json"
+      )
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+      File.rm_rf(root)
+      File.rm(event_log)
+      File.rm(mcp_config)
+    end)
+
+    File.mkdir_p!(root)
+
+    File.write!(
+      mcp_config,
+      JSON.encode!(%{
+        "servers" => [
+          %{
+            "id" => "browser",
+            "transport" => "stdio",
+            "command" => "mcp-browser",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{"name" => "snapshot", "permission" => "mcp_browser_snapshot", "risk" => "read"}
+            ]
+          }
+        ]
+      })
+    )
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "auto",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "6",
+      "--max-attempts",
+      "1",
+      "--tool-harness",
+      "local-files",
+      "--tool-harness",
+      "mcp",
+      "--tool-root",
+      root,
+      "--tool-timeout-ms",
+      "100",
+      "--tool-max-rounds",
+      "2",
+      "--tool-approval-mode",
+      "read-only",
+      "--mcp-config",
+      mcp_config,
+      "--event-log-file",
+      event_log,
+      "--json",
+      "hello"
+    ])
+
+    assert_receive {:mix_shell, :info, [line]}
+    assert %{"status" => "completed"} = JSON.decode!(line)
+
+    route_event =
+      event_log
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&JSON.decode!/1)
+      |> Enum.find(&(get_in(&1, ["event", "type"]) == "workflow_routed"))
+
+    assert get_in(route_event, ["event", "active_harnesses"]) == ["local_files", "mcp"]
+  end
+
   test "mix agent_machine.run accepts repeated test commands with code-edit full-access" do
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)

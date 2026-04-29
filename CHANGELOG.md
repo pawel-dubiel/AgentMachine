@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed Mix CLI parsing for repeated `--tool-harness`, `--test-command`, and
+  `--skill` flags so combined harnesses such as local-files plus MCP are not
+  reduced to only the last flag.
 - Replaced the custom JSON parser/encoder with a Jason-backed
   `AgentMachine.JSON` wrapper and documented when to prefer proven libraries.
 - Fixed JSON decoding for exponent-only numbers like `8e-7` returned by some
