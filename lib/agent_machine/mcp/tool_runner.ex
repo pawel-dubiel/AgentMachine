@@ -1,7 +1,7 @@
 defmodule AgentMachine.MCP.ToolRunner do
   @moduledoc false
 
-  alias AgentMachine.{JSON, MCP.Client, MCP.Config, Secrets.Redactor}
+  alias AgentMachine.{JSON, MCP.Client, MCP.Config, MCP.Session, Secrets.Redactor}
 
   @max_result_bytes 50_000
 
@@ -9,8 +9,8 @@ defmodule AgentMachine.MCP.ToolRunner do
     with {:ok, arguments} <- arguments(input) do
       config = Keyword.fetch!(opts, :mcp_config)
       timeout_ms = Keyword.fetch!(opts, :tool_timeout_ms)
-      server = Config.server_by_id!(config, server_id)
-      response = Client.call_tool(server, tool_name, arguments, timeout_ms)
+      Config.server_by_id!(config, server_id)
+      response = call_tool(server_id, tool_name, arguments, timeout_ms, opts)
       {:ok, result(server_id, tool_name, response)}
     end
   rescue
@@ -19,6 +19,21 @@ defmodule AgentMachine.MCP.ToolRunner do
   end
 
   def run(_server_id, _tool_name, input, _opts), do: {:error, {:invalid_input, input}}
+
+  defp call_tool(server_id, tool_name, arguments, timeout_ms, opts) do
+    case Keyword.fetch(opts, :mcp_session) do
+      {:ok, session} when is_pid(session) ->
+        case Session.call_tool(session, server_id, tool_name, arguments, timeout_ms) do
+          {:error, reason} -> raise ArgumentError, reason
+          response -> response
+        end
+
+      :error ->
+        config = Keyword.fetch!(opts, :mcp_config)
+        server = Config.server_by_id!(config, server_id)
+        Client.call_tool(server, tool_name, arguments, timeout_ms)
+    end
+  end
 
   defp arguments(input) do
     cond do

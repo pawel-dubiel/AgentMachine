@@ -93,84 +93,102 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp route_auto!(input) do
     classified = classify_intent!(input)
+    route_auto_intent(input, classified.intent, classified)
+  end
 
-    case classified.intent do
-      :none ->
-        route(:auto, :chat, none_reason(classified), :none, false, classifier_meta(classified))
+  defp route_auto_intent(_input, :none, classified) do
+    route(:auto, :chat, none_reason(classified), :none, false, classifier_meta(classified))
+  end
 
-      :delegation ->
-        route(
-          :auto,
-          :agentic,
-          "explicit_delegation_intent",
-          :delegation,
-          tools_configured?(input),
-          classifier_meta(classified)
-        )
+  defp route_auto_intent(input, :delegation, classified) do
+    route(
+      :auto,
+      :agentic,
+      "explicit_delegation_intent",
+      :delegation,
+      tools_configured?(input),
+      classifier_meta(classified)
+    )
+  end
 
-      :file_read ->
-        require_read_capability!(input)
+  defp route_auto_intent(input, :file_read, classified) do
+    require_read_capability!(input)
 
-        route(
-          :auto,
-          :tool,
-          "read_intent_with_read_only_tool",
-          :file_read,
-          true,
-          classifier_meta(classified)
-        )
+    route(
+      :auto,
+      :tool,
+      "read_intent_with_read_only_tool",
+      :file_read,
+      true,
+      classifier_meta(classified)
+    )
+  end
 
-      :time ->
-        route_time_intent(input, classified)
+  defp route_auto_intent(input, :time, classified), do: route_time_intent(input, classified)
 
-      :tool_use ->
-        require_read_only_tool_capability!(input, :tool_use)
+  defp route_auto_intent(input, :web_browse, classified) do
+    require_browser_mcp_capability!(input)
 
-        route(
-          :auto,
-          :tool,
-          "tool_intent_with_read_only_tool",
-          :tool_use,
-          true,
-          classifier_meta(classified)
-        )
+    route(
+      :auto,
+      :agentic,
+      "web_browse_intent_with_mcp_browser",
+      :web_browse,
+      true,
+      classifier_meta(classified)
+    )
+  end
 
-      :file_mutation ->
-        require_write_capability!(input)
+  defp route_auto_intent(input, :tool_use, classified) do
+    require_read_only_tool_capability!(input, :tool_use)
 
-        route(
-          :auto,
-          :agentic,
-          write_reason(input),
-          :file_mutation,
-          true,
-          classifier_meta(classified)
-        )
+    route(
+      :auto,
+      :tool,
+      "tool_intent_with_read_only_tool",
+      :tool_use,
+      true,
+      classifier_meta(classified)
+    )
+  end
 
-      :code_mutation ->
-        require_code_edit_capability!(input)
+  defp route_auto_intent(input, :file_mutation, classified) do
+    require_write_capability!(input)
 
-        route(
-          :auto,
-          :agentic,
-          "code_mutation_intent_with_code_edit_harness",
-          :code_mutation,
-          true,
-          classifier_meta(classified)
-        )
+    route(
+      :auto,
+      :agentic,
+      write_reason(input),
+      :file_mutation,
+      true,
+      classifier_meta(classified)
+    )
+  end
 
-      :test_command ->
-        require_test_capability!(input)
+  defp route_auto_intent(input, :code_mutation, classified) do
+    require_code_edit_capability!(input)
 
-        route(
-          :auto,
-          :agentic,
-          "test_intent_with_code_edit_full_access",
-          :test_command,
-          true,
-          classifier_meta(classified)
-        )
-    end
+    route(
+      :auto,
+      :agentic,
+      "code_mutation_intent_with_code_edit_harness",
+      :code_mutation,
+      true,
+      classifier_meta(classified)
+    )
+  end
+
+  defp route_auto_intent(input, :test_command, classified) do
+    require_test_capability!(input)
+
+    route(
+      :auto,
+      :agentic,
+      "test_intent_with_code_edit_full_access",
+      :test_command,
+      true,
+      classifier_meta(classified)
+    )
   end
 
   defp route(requested, selected, reason, tool_intent, tools_exposed, classifier_meta) do
@@ -223,16 +241,23 @@ defmodule AgentMachine.WorkflowRouter do
   defp deterministic_intent(input) do
     text = effective_text(input)
 
-    cond do
-      delegation_intent?(text) -> :delegation
-      test_intent?(text) -> :test_command
-      code_mutation_intent?(text) -> :code_mutation
-      file_mutation_intent?(text) -> :file_mutation
-      file_read_intent?(text) -> :file_read
-      time_intent?(text) -> :time
-      tool_use_intent?(text) -> :tool_use
-      true -> :none
-    end
+    deterministic_intent_rules()
+    |> Enum.find_value(:none, fn {intent, predicate} ->
+      if predicate.(text), do: intent
+    end)
+  end
+
+  defp deterministic_intent_rules do
+    [
+      delegation: &delegation_intent?/1,
+      test_command: &test_intent?/1,
+      code_mutation: &code_mutation_intent?/1,
+      file_mutation: &file_mutation_intent?/1,
+      file_read: &file_read_intent?/1,
+      time: &time_intent?/1,
+      web_browse: &web_browse_intent?/1,
+      tool_use: &tool_use_intent?/1
+    ]
   end
 
   defp deterministic_meta(intent) do
@@ -413,6 +438,38 @@ defmodule AgentMachine.WorkflowRouter do
     |> contains_any?(["use tool", "call tool", "with mcp", "using mcp"])
   end
 
+  defp web_browse_intent?(text) do
+    normalized = normalize(text)
+
+    web_action? =
+      contains_any?(normalized, [
+        "open",
+        "access",
+        "browse",
+        "visit",
+        "go to",
+        "load",
+        "read website",
+        "read web",
+        "inspect website",
+        "inspect web"
+      ])
+
+    web_target? =
+      contains_any?(normalized, [
+        "website",
+        "webpage",
+        "web page",
+        "url",
+        "browser",
+        "playwright",
+        "http",
+        "www."
+      ]) or normalized =~ ~r/\b[a-z0-9-]+\.(com|org|net|io|dev|app|pl|co|ai)\b/
+
+    web_action? and web_target?
+  end
+
   defp mutation_intent?(text) do
     contains_any?(text, [
       "create",
@@ -562,6 +619,27 @@ defmodule AgentMachine.WorkflowRouter do
       true ->
         :ok
     end
+  end
+
+  defp require_browser_mcp_capability!(input) do
+    unless has_browser_mcp_tool?(input) do
+      raise ArgumentError,
+            "auto workflow detected web browse intent but no MCP browser network tool is configured"
+    end
+
+    if input.approval_mode != :full_access do
+      raise ArgumentError,
+            "auto workflow detected web browse intent but :tool_approval_mode must be :full_access for network-risk MCP browser tools"
+    end
+  end
+
+  defp has_browser_mcp_tool?(%__MODULE__{tool_harnesses: harnesses, mcp_config: mcp_config}) do
+    :mcp in harnesses and match?(%AgentMachine.MCP.Config{}, mcp_config) and
+      Enum.any?(mcp_config.tools, fn tool ->
+        tool.name == "browser_navigate" and
+          tool.risk == :network and
+          String.contains?(tool.provider_name, "playwright")
+      end)
   end
 
   defp write_reason(input) do

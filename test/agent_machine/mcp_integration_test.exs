@@ -1,7 +1,16 @@
 defmodule AgentMachine.MCPIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias AgentMachine.{JSON, MCP.Client, MCP.Config, MCP.ToolFactory, RunSpec, ToolHarness}
+  alias AgentMachine.{
+    JSON,
+    MCP.Client,
+    MCP.Config,
+    MCP.Session,
+    MCP.ToolFactory,
+    RunSpec,
+    ToolHarness
+  }
+
   alias Mix.Tasks.AgentMachine.Run
 
   test "MCP config validates explicit allowlists and rejects inline secrets" do
@@ -151,6 +160,8 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert_receive {:http_request, 1, first}
     assert_receive {:http_request, 2, second}
     assert_receive {:http_request, 3, third}
+    assert first =~ ~s("clientInfo")
+    assert first =~ ~s("name":"agent-machine")
     refute first =~ "mcp-session-id: session-1"
     assert second =~ "mcp-session-id: session-1"
     assert third =~ "mcp-session-id: session-1"
@@ -190,6 +201,76 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert result.redacted == true
     assert JSON.encode!(result) =~ "[REDACTED"
     refute JSON.encode!(result) =~ "sk-abcdefghijklmnopqrstuvwxyz123456"
+  end
+
+  test "MCP session reuses one stdio server across tool calls" do
+    script = counting_stdio_server!()
+
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "browser",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{"name" => "snapshot", "permission" => "mcp_browser_snapshot", "risk" => "read"}
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+    {:ok, session} = Session.start_link(config)
+
+    opts = [mcp_config: config, mcp_session: session, tool_timeout_ms: 1_000]
+
+    assert {:ok, first} = tool.run(%{"arguments" => %{}}, opts)
+    assert get_in(first, [:result, "content", Access.at(0), "text"]) == "call 1"
+
+    assert {:ok, second} = tool.run(%{"arguments" => %{}}, opts)
+    assert get_in(second, [:result, "content", Access.at(0), "text"]) == "call 2"
+
+    GenServer.stop(session)
+  end
+
+  test "MCP stdio session resolves env refs into the child process env" do
+    script = env_stdio_server!()
+    System.put_env("AGENT_MACHINE_MCP_ENV_TEST_TOKEN", "env-token-42")
+    on_exit(fn -> System.delete_env("AGENT_MACHINE_MCP_ENV_TEST_TOKEN") end)
+
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "env",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{
+              "AGENT_MACHINE_CHILD_TOKEN" => "env:AGENT_MACHINE_MCP_ENV_TEST_TOKEN"
+            },
+            "tools" => [
+              %{"name" => "read_env", "permission" => "mcp_env_read_env", "risk" => "read"}
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+    {:ok, session} = Session.start_link(config)
+
+    assert {:ok, result} =
+             tool.run(%{"arguments" => %{}},
+               mcp_config: config,
+               mcp_session: session,
+               tool_timeout_ms: 1_000
+             )
+
+    assert get_in(result, [:result, "content", Access.at(0), "text"]) == "env-token-42"
+    GenServer.stop(session)
   end
 
   test "RunSpec accepts repeated tool harnesses and loads MCP config" do
@@ -294,6 +375,68 @@ defmodule AgentMachine.MCPIntegrationTest do
           ;;
         *'"method":"tools/call"'*)
           printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\\n' "$id" "#{text}"
+          ;;
+      esac
+    done
+    """
+
+    File.write!(path, script)
+    File.chmod!(path, 0o700)
+    path
+  end
+
+  defp counting_stdio_server! do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-counting-mcp-#{System.unique_integer([:positive])}.sh"
+      )
+
+    script = """
+    #!/bin/sh
+    count=0
+    while IFS= read -r line; do
+      id=$(printf '%s\\n' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+      case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18"}}\\n' "$id"
+          ;;
+        *'"method":"tools/list"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"snapshot","inputSchema":{"type":"object"}}]}}\\n' "$id"
+          ;;
+        *'"method":"tools/call"'*)
+          count=$((count + 1))
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"call %s"}]}}\\n' "$id" "$count"
+          ;;
+      esac
+    done
+    """
+
+    File.write!(path, script)
+    File.chmod!(path, 0o700)
+    path
+  end
+
+  defp env_stdio_server! do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-env-mcp-#{System.unique_integer([:positive])}.sh"
+      )
+
+    script = """
+    #!/bin/sh
+    while IFS= read -r line; do
+      id=$(printf '%s\\n' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+      case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18"}}\\n' "$id"
+          ;;
+        *'"method":"tools/list"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"read_env","inputSchema":{"type":"object"}}]}}\\n' "$id"
+          ;;
+        *'"method":"tools/call"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\\n' "$id" "$AGENT_MACHINE_CHILD_TOKEN"
           ;;
       esac
     done

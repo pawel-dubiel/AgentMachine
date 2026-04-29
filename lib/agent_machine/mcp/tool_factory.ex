@@ -18,11 +18,38 @@ defmodule AgentMachine.MCP.ToolFactory do
         Macro.camelize("#{tool.provider_name}_#{:erlang.phash2({tool.permission, tool.risk})}")
       ])
 
-    unless Code.ensure_loaded?(module) do
-      Module.create(module, quoted_tool(tool), Macro.Env.location(__ENV__))
-    end
+    :global.trans({__MODULE__, module}, fn ->
+      unless Code.ensure_loaded?(module) do
+        create_or_wait_for_module!(module, quoted_tool(tool))
+      end
+    end)
 
     module
+  end
+
+  defp create_or_wait_for_module!(module, quoted) do
+    Module.create(module, quoted, Macro.Env.location(__ENV__))
+  rescue
+    exception in CompileError ->
+      if exception.description =~ "currently being defined" do
+        wait_for_module!(module, 50)
+      else
+        reraise exception, __STACKTRACE__
+      end
+  end
+
+  defp wait_for_module!(_module, 0) do
+    raise CompileError,
+      description: "timed out waiting for MCP dynamic tool module compilation"
+  end
+
+  defp wait_for_module!(module, attempts_left) do
+    if Code.ensure_loaded?(module) do
+      :ok
+    else
+      Process.sleep(10)
+      wait_for_module!(module, attempts_left - 1)
+    end
   end
 
   defp quoted_tool(tool) do

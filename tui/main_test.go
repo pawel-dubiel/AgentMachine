@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1376,10 +1377,13 @@ func TestMCPConfigCommandPersistsAndClearsPath(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	modelAfter, _ := m.handleCommand("/mcp-config /tmp/agent-machine.mcp.json")
+	modelAfter, _ := m.handleCommand("/mcp-config /tmp/agent-machine.mcp.json 120000 6 full-access")
 	result := modelAfter.(model)
 	if result.savedConfig.MCPConfig != "/tmp/agent-machine.mcp.json" {
 		t.Fatalf("expected MCP config path, got %#v", result.savedConfig)
+	}
+	if result.savedConfig.ToolTimeout != "120000" || result.savedConfig.ToolMaxRounds != "6" || result.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("expected MCP tool budget, got %#v", result.savedConfig)
 	}
 
 	loaded, err := loadSavedConfig(configPath)
@@ -1389,11 +1393,199 @@ func TestMCPConfigCommandPersistsAndClearsPath(t *testing.T) {
 	if loaded.MCPConfig != "/tmp/agent-machine.mcp.json" {
 		t.Fatalf("expected persisted MCP config path, got %#v", loaded)
 	}
+	if loaded.ToolTimeout != "120000" || loaded.ToolMaxRounds != "6" || loaded.ToolApproval != "full-access" {
+		t.Fatalf("expected persisted MCP tool budget, got %#v", loaded)
+	}
 
 	modelAfter, _ = result.handleCommand("/mcp-config off")
 	result = modelAfter.(model)
 	if result.savedConfig.MCPConfig != "" {
 		t.Fatalf("expected cleared MCP config path, got %#v", result.savedConfig)
+	}
+}
+
+func TestMCPConfigCommandRejectsMissingToolBudget(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/mcp-config /tmp/agent-machine.mcp.json")
+	result := modelAfter.(model)
+
+	if result.savedConfig.MCPConfig != "" {
+		t.Fatalf("expected MCP config not to persist without budget, got %#v", result.savedConfig)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "tool timeout") {
+		t.Fatalf("expected explicit missing budget error, got %#v", result.messages)
+	}
+}
+
+func TestMCPAddPlaywrightCreatesManagedConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		ToolHarness:   "local-files",
+		ToolRoot:      "/tmp/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/mcp add playwright npx @playwright/mcp@latest")
+	result := modelAfter.(model)
+	managedPath := managedMCPConfigPath(configPath)
+
+	if result.savedConfig.MCPConfig != managedPath {
+		t.Fatalf("expected managed MCP config, got %#v", result.savedConfig)
+	}
+	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" {
+		t.Fatalf("expected MCP preset to disable filesystem tools, got %#v", result.savedConfig)
+	}
+	if result.savedConfig.ToolTimeout != "120000" || result.savedConfig.ToolMaxRounds != "6" || result.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("expected MCP tool budget, got %#v", result.savedConfig)
+	}
+
+	data, err := os.ReadFile(managedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	expectedOrder := []string{
+		`"--yes"`,
+		`"--cache"`,
+		`"@playwright/mcp@latest"`,
+		`"--headless"`,
+	}
+	lastIndex := -1
+	for _, expected := range expectedOrder {
+		index := strings.Index(text, expected)
+		if index <= lastIndex {
+			t.Fatalf("expected %s after previous npx/playwright arg in generated config: %s", expected, text)
+		}
+		lastIndex = index
+	}
+	for _, expected := range []string{
+		`"id": "playwright"`,
+		`"command": "npx"`,
+		`"browser_navigate"`,
+		`"risk": "network"`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected generated MCP config to contain %q, got %s", expected, text)
+		}
+	}
+}
+
+func TestPlaywrightCommandPutsHeadlessAfterPackage(t *testing.T) {
+	command, args, err := playwrightCommand([]string{"npx", "@playwright/mcp@latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "npx" {
+		t.Fatalf("expected npx command, got %q", command)
+	}
+
+	packageIndex := indexOf(args, "@playwright/mcp@latest")
+	headlessIndex := indexOf(args, "--headless")
+	cacheIndex := indexOf(args, "--cache")
+
+	if cacheIndex < 0 || packageIndex < 0 || headlessIndex < 0 {
+		t.Fatalf("expected cache, package, and headless args, got %#v", args)
+	}
+	if !(cacheIndex < packageIndex && packageIndex < headlessIndex) {
+		t.Fatalf("expected npx options before package and --headless after package, got %#v", args)
+	}
+}
+
+func indexOf(values []string, expected string) int {
+	for index, value := range values {
+		if value == expected {
+			return index
+		}
+	}
+	return -1
+}
+
+func TestMCPRemovePlaywrightClearsManagedConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/mcp add playwright npx @playwright/mcp@latest")
+	result := modelAfter.(model)
+	managedPath := managedMCPConfigPath(configPath)
+
+	modelAfter, _ = result.handleCommand("/mcp remove playwright")
+	result = modelAfter.(model)
+
+	if result.savedConfig.MCPConfig != "" {
+		t.Fatalf("expected MCP config to clear, got %#v", result.savedConfig)
+	}
+	if _, err := os.Stat(managedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected managed MCP config file to be removed, got %v", err)
+	}
+}
+
+func TestStartupMCPFlagsPersistConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModelWithArgs([]string{
+		"--mcp-config",
+		"/tmp/agent-machine.mcp.json",
+		"--tool-timeout-ms",
+		"120000",
+		"--tool-max-rounds",
+		"6",
+		"--tool-approval-mode",
+		"full-access",
+	})
+	if err != nil {
+		t.Fatalf("expected startup MCP flags to load, got %v", err)
+	}
+
+	if m.savedConfig.MCPConfig != "/tmp/agent-machine.mcp.json" {
+		t.Fatalf("expected MCP config path, got %#v", m.savedConfig)
+	}
+	if m.savedConfig.ToolTimeout != "120000" || m.savedConfig.ToolMaxRounds != "6" || m.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("expected tool budget to persist, got %#v", m.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MCPConfig != "/tmp/agent-machine.mcp.json" || loaded.ToolApproval != "full-access" {
+		t.Fatalf("expected persisted startup MCP config, got %#v", loaded)
+	}
+}
+
+func TestStartupMCPFlagsRequireToolBudget(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	_, err := initialModelWithArgs([]string{
+		"--mcp-config",
+		"/tmp/agent-machine.mcp.json",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--tool-timeout-ms") {
+		t.Fatalf("expected missing tool budget error, got %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ defmodule AgentMachine.LocalIntentClassifier do
     :code_mutation,
     :test_command,
     :time,
+    :web_browse,
     :tool_use,
     :delegation
   ]
@@ -27,6 +28,8 @@ defmodule AgentMachine.LocalIntentClassifier do
     test_command:
       "This request asks to run tests, execute a test command, or verify by running a command.",
     time: "This request asks for the current time or current date.",
+    web_browse:
+      "This request asks to open, access, browse, inspect, or read a website, web page, URL, or browser page.",
     tool_use:
       "This request explicitly asks to use a tool, API, MCP server, or external tool integration.",
     delegation:

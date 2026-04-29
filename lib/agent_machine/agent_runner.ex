@@ -5,6 +5,7 @@ defmodule AgentMachine.AgentRunner do
     Agent,
     AgentResult,
     DelegationResponse,
+    MCP.Session,
     ToolHarness,
     ToolPolicy,
     Usage,
@@ -122,7 +123,30 @@ defmodule AgentMachine.AgentRunner do
       events: []
     }
 
-    do_complete_agent(agent, opts, context, state)
+    with_mcp_session(agent, opts, fn opts ->
+      do_complete_agent(agent, opts, context, state)
+    end)
+  end
+
+  defp with_mcp_session(agent, opts, callback) do
+    if mcp_session_required?(agent, opts) do
+      {:ok, session} = Session.start_link(Keyword.fetch!(opts, :mcp_config))
+
+      try do
+        callback.(Keyword.put(opts, :mcp_session, session))
+      after
+        if Process.alive?(session) do
+          GenServer.stop(session)
+        end
+      end
+    else
+      callback.(opts)
+    end
+  end
+
+  defp mcp_session_required?(%Agent{} = agent, opts) do
+    Keyword.has_key?(opts, :mcp_config) and Keyword.has_key?(opts, :allowed_tools) and
+      not tools_disabled?(agent)
   end
 
   defp do_complete_agent(agent, opts, context, state) do
@@ -236,8 +260,7 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp maybe_disable_tools(%Agent{metadata: metadata}, opts) when is_map(metadata) do
-    if Map.get(metadata, :agent_machine_disable_tools) == true ||
-         Map.get(metadata, "agent_machine_disable_tools") == true do
+    if tools_disabled?(metadata) do
       opts
       |> put_disabled_tool_context()
       |> Keyword.delete(:allowed_tools)
@@ -251,6 +274,16 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp maybe_disable_tools(_agent, opts), do: opts
+
+  defp tools_disabled?(%Agent{metadata: metadata}) when is_map(metadata),
+    do: tools_disabled?(metadata)
+
+  defp tools_disabled?(%Agent{}), do: false
+
+  defp tools_disabled?(metadata) when is_map(metadata) do
+    Map.get(metadata, :agent_machine_disable_tools) == true ||
+      Map.get(metadata, "agent_machine_disable_tools") == true
+  end
 
   defp put_disabled_tool_context(opts) do
     case Keyword.fetch(opts, :allowed_tools) do

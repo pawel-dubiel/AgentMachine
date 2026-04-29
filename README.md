@@ -618,6 +618,49 @@ Local file tool rules:
 - MCP stdio servers are launched without a shell from the configured executable
   and args. MCP Streamable HTTP calls use JSON-RPC POST requests with the
   explicit tool timeout.
+- MCP stdio sessions are kept alive for the duration of one agent run, so
+  stateful servers such as Playwright MCP can handle multi-step tool loops like
+  `browser_navigate` followed by `browser_snapshot`.
+
+Example Playwright MCP config:
+
+```json
+{
+  "servers": [
+    {
+      "id": "playwright",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--cache",
+        "/tmp/agent-machine-playwright-mcp-npm-cache",
+        "@playwright/mcp@latest",
+        "--headless"
+      ],
+      "env": {},
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "permission": "mcp_playwright_browser_navigate",
+          "risk": "network"
+        },
+        {
+          "name": "browser_snapshot",
+          "permission": "mcp_playwright_browser_snapshot",
+          "risk": "read"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Playwright MCP requires Node.js 20 or newer. The `npx --yes --cache ... @playwright/mcp@latest`
+server downloads package/browser assets on first use into the explicit cache
+directory from the config. Because browser navigation is network-capable, use
+`--tool-approval-mode full-access` or an explicit approval callback for the
+allowlisted navigation tool.
 
 Read-style tools redact sensitive-looking text before returning file contents or
 search match lines to the provider. Mutation tools still apply the exact
@@ -728,7 +771,12 @@ Useful commands:
 /test-command add <command>
 /test-command list
 /test-command clear
-/mcp-config <path>
+/mcp add playwright <command> [args...]
+/mcp list
+/mcp status
+/mcp remove playwright
+/mcp off
+/mcp-config <path> [timeout-ms max-rounds approval-mode]
 /mcp-config off
 /allow-tools [auto-approved-safe|full-access]
 /yolo-tools
@@ -761,6 +809,35 @@ When a message asks for a local filesystem write and tools are off or pointed at
 the wrong root, the TUI stops before calling the model and asks for permission.
 Use `/allow-tools` to enable `local-files` for the requested root and retry the
 pending message, `/yolo-tools` to use `full-access`, or `/deny-tools` to decline.
+
+In a running TUI, configure the curated Playwright MCP preset with one command:
+
+```text
+/mcp add playwright npx @playwright/mcp@latest
+```
+
+That writes a managed MCP config under the TUI config directory, allowlists only
+`browser_navigate` and `browser_snapshot`, sets the MCP tool budget, and disables
+active filesystem tools so `full-access` is limited to the MCP preset.
+
+You can also start the TUI with an explicit MCP config and tool budget:
+
+```sh
+cd tui
+./agent-machine-tui \
+  --mcp-config ../examples/playwright.mcp.json \
+  --tool-timeout-ms 120000 \
+  --tool-max-rounds 6 \
+  --tool-approval-mode full-access
+```
+
+Then send a prompt that explicitly requests delegation, because browser
+navigation is a `network`-risk MCP tool and is not exposed through the fast
+read-only `tool` route:
+
+```text
+Use agents and Playwright MCP to open https://example.com and report the page title. Do not answer without using MCP.
+```
 
 Default config paths:
 
@@ -816,6 +893,14 @@ different OpenRouter model:
 
 ```sh
 OPENROUTER_API_KEY="..." AGENT_MACHINE_PAID_OPENROUTER_MODEL="openai/gpt-4o-mini" make test-openrouter-paid
+```
+
+There is also a narrower manual paid test for the real Playwright MCP stdio
+server. It requires `npx`, Node.js 20 or newer, and may download Playwright
+browser assets on first use:
+
+```sh
+OPENROUTER_API_KEY="..." make test-openrouter-playwright-mcp
 ```
 
 The paid Elixir tests use a 180 second ExUnit timeout because real OpenRouter

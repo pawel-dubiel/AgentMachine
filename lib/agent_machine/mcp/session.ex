@@ -1,51 +1,121 @@
-defmodule AgentMachine.MCP.Client do
+defmodule AgentMachine.MCP.Session do
   @moduledoc false
+
+  use GenServer
 
   alias AgentMachine.{JSON, MCP.Config}
 
-  def call_tool(%Config.Server{} = server, tool_name, arguments, timeout_ms) do
-    request_session(server, timeout_ms, fn request ->
-      initialize = request.("initialize", initialize_params())
-
-      tools = request.("tools/list", %{})
-      validate_initialize!(initialize)
-      validate_tool_list!(tools, tool_name)
-      request.("tools/call", %{"name" => tool_name, "arguments" => arguments})
-    end)
+  def start_link(%Config{} = config) do
+    GenServer.start_link(__MODULE__, config)
   end
 
-  defp request_session(%Config.Server{transport: :stdio} = server, timeout_ms, callback) do
+  def call_tool(pid, server_id, tool_name, arguments, timeout_ms)
+      when is_pid(pid) and is_binary(server_id) and is_binary(tool_name) and is_map(arguments) and
+             is_integer(timeout_ms) and timeout_ms > 0 do
+    GenServer.call(
+      pid,
+      {:call_tool, server_id, tool_name, arguments, timeout_ms},
+      timeout_ms + 1_000
+    )
+  end
+
+  @impl true
+  def init(%Config{} = config) do
+    {:ok, %{config: config, stdio: %{}, http: %{}}}
+  end
+
+  @impl true
+  def handle_call({:call_tool, server_id, tool_name, arguments, timeout_ms}, _from, state) do
+    server = Config.server_by_id!(state.config, server_id)
+
+    {response, state} =
+      case server.transport do
+        :stdio -> call_stdio_tool!(state, server, tool_name, arguments, timeout_ms)
+        :streamable_http -> call_http_tool!(state, server, tool_name, arguments, timeout_ms)
+      end
+
+    {:reply, response, state}
+  rescue
+    exception in [ArgumentError, ErlangError, System.EnvError] ->
+      {:reply, {:error, Exception.message(exception)}, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    state.stdio
+    |> Map.values()
+    |> Enum.each(fn %{port: port} -> Port.close(port) end)
+  end
+
+  defp call_stdio_tool!(state, server, tool_name, arguments, timeout_ms) do
+    {session, state} = stdio_session!(state, server, timeout_ms)
+    validate_tool_list!(session.tools, tool_name)
+
+    response =
+      stdio_request!(
+        session.port,
+        "tools/call",
+        %{"name" => tool_name, "arguments" => arguments},
+        timeout_ms
+      )
+
+    {response, state}
+  end
+
+  defp stdio_session!(state, server, timeout_ms) do
+    case Map.fetch(state.stdio, server.id) do
+      {:ok, session} ->
+        {session, state}
+
+      :error ->
+        session = open_stdio_session!(server, timeout_ms)
+        {session, %{state | stdio: Map.put(state.stdio, server.id, session)}}
+    end
+  end
+
+  defp open_stdio_session!(server, timeout_ms) do
     executable = executable!(server.command)
     env = resolve_env!(server.env)
     port = Port.open({:spawn_executable, executable}, [:binary, args: server.args, env: env])
 
-    try do
-      {result, _state} =
-        callback.(fn method, params ->
-          stdio_request!(port, method, params, timeout_ms)
-        end)
-        |> then(&{&1, nil})
+    initialize = stdio_request!(port, "initialize", initialize_params(), timeout_ms)
 
-      result
-    after
-      Port.close(port)
-    end
+    validate_initialize!(initialize)
+
+    tools = stdio_request!(port, "tools/list", %{}, timeout_ms)
+
+    %{port: port, tools: tool_names!(tools)}
   end
 
-  defp request_session(%Config.Server{transport: :streamable_http} = server, timeout_ms, callback) do
-    key = {__MODULE__, make_ref()}
-    Process.put(key, %{session_id: nil})
+  defp call_http_tool!(state, server, tool_name, arguments, timeout_ms) do
+    {session, state} = http_session!(state, server, timeout_ms)
+    validate_tool_list!(session.tools, tool_name)
 
-    try do
-      callback.(fn method, params ->
-        {response, next_state} =
-          http_request!(server, method, params, timeout_ms, Process.get(key))
+    {response, session} =
+      http_request!(
+        server,
+        "tools/call",
+        %{"name" => tool_name, "arguments" => arguments},
+        timeout_ms,
+        session
+      )
 
-        Process.put(key, next_state)
-        response
-      end)
-    after
-      Process.delete(key)
+    {response, %{state | http: Map.put(state.http, server.id, session)}}
+  end
+
+  defp http_session!(state, server, timeout_ms) do
+    case Map.fetch(state.http, server.id) do
+      {:ok, session} ->
+        {session, state}
+
+      :error ->
+        {initialize, session} =
+          http_request!(server, "initialize", initialize_params(), timeout_ms, %{session_id: nil})
+
+        validate_initialize!(initialize)
+        {tools, session} = http_request!(server, "tools/list", %{}, timeout_ms, session)
+        session = Map.put(session, :tools, tool_names!(tools))
+        {session, %{state | http: Map.put(state.http, server.id, session)}}
     end
   end
 
@@ -67,12 +137,12 @@ defmodule AgentMachine.MCP.Client do
     end
   end
 
-  defp http_request!(server, method, params, timeout_ms, state) do
+  defp http_request!(server, method, params, timeout_ms, session) do
     id = System.unique_integer([:positive])
     body = JSON.encode!(jsonrpc(id, method, params))
     headers = [{"content-type", "application/json"}, {"accept", "application/json"}]
     headers = headers ++ resolved_headers!(server.headers)
-    headers = maybe_put_session_header(headers, state.session_id)
+    headers = maybe_put_session_header(headers, session.session_id)
 
     request = {to_charlist(server.url), charlist_headers(headers), ~c"application/json", body}
     options = [timeout: timeout_ms]
@@ -80,8 +150,8 @@ defmodule AgentMachine.MCP.Client do
     case :httpc.request(:post, request, options, body_format: :binary) do
       {:ok, {{_version, status, _reason}, response_headers, response_body}}
       when status in 200..299 ->
-        session_id = response_session_id(response_headers) || state.session_id
-        {decode_response!(response_body, id), %{state | session_id: session_id}}
+        session_id = response_session_id(response_headers) || session.session_id
+        {decode_response!(response_body, id), %{session | session_id: session_id}}
 
       {:ok, {{_version, status, _reason}, _headers, response_body}} ->
         raise ArgumentError,
@@ -98,14 +168,21 @@ defmodule AgentMachine.MCP.Client do
     raise ArgumentError, "MCP initialize returned malformed response: #{inspect(response)}"
   end
 
-  defp validate_tool_list!(%{"result" => %{"tools" => tools}}, tool_name) when is_list(tools) do
-    unless Enum.any?(tools, &(Map.get(&1, "name") == tool_name)) do
-      raise ArgumentError, "MCP server did not list configured tool #{inspect(tool_name)}"
-    end
+  defp tool_names!(%{"result" => %{"tools" => tools}}) when is_list(tools) do
+    tools
+    |> Enum.map(&Map.get(&1, "name"))
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
   end
 
-  defp validate_tool_list!(response, _tool_name) do
+  defp tool_names!(response) do
     raise ArgumentError, "MCP tools/list returned malformed response: #{inspect(response)}"
+  end
+
+  defp validate_tool_list!(tools, tool_name) do
+    unless MapSet.member?(tools, tool_name) do
+      raise ArgumentError, "MCP server did not list configured tool #{inspect(tool_name)}"
+    end
   end
 
   defp decode_response!(body, id) do

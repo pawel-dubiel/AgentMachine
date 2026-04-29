@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -220,6 +222,17 @@ type savedConfig struct {
 	AllowSkillScripts bool     `json:"allow_skill_scripts,omitempty"`
 }
 
+type startupOptions struct {
+	MCPConfig        string
+	ToolTimeout      string
+	ToolMaxRounds    string
+	ToolApproval     string
+	HasMCPConfig     bool
+	HasToolTimeout   bool
+	HasToolMaxRounds bool
+	HasToolApproval  bool
+}
+
 type chatMessage struct {
 	Role string
 	Text string
@@ -294,6 +307,15 @@ var (
 )
 
 func initialModel() (model, error) {
+	return initialModelWithArgs(nil)
+}
+
+func initialModelWithArgs(args []string) (model, error) {
+	startup, err := parseStartupOptions(args)
+	if err != nil {
+		return model{}, err
+	}
+
 	configPath, err := tuiConfigPath()
 	if err != nil {
 		return model{}, err
@@ -302,6 +324,14 @@ func initialModel() (model, error) {
 	savedConfig, err := loadSavedConfig(configPath)
 	if err != nil {
 		return model{}, err
+	}
+	if err := applyStartupOptions(&savedConfig, startup); err != nil {
+		return model{}, err
+	}
+	if startup.hasOverrides() {
+		if err := saveSavedConfig(configPath, savedConfig); err != nil {
+			return model{}, err
+		}
 	}
 
 	input := textinput.New()
@@ -330,6 +360,79 @@ func initialModel() (model, error) {
 	}
 
 	return m, nil
+}
+
+func parseStartupOptions(args []string) (startupOptions, error) {
+	var options startupOptions
+	if len(args) == 0 {
+		return options, nil
+	}
+
+	flags := flag.NewFlagSet("agent-machine-tui", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&options.MCPConfig, "mcp-config", "", "MCP config path")
+	flags.StringVar(&options.ToolTimeout, "tool-timeout-ms", "", "tool timeout in milliseconds")
+	flags.StringVar(&options.ToolMaxRounds, "tool-max-rounds", "", "tool max provider/tool rounds")
+	flags.StringVar(&options.ToolApproval, "tool-approval-mode", "", "tool approval mode")
+
+	if err := flags.Parse(args); err != nil {
+		return options, err
+	}
+	if flags.NArg() != 0 {
+		return options, fmt.Errorf("unexpected TUI argument: %s", flags.Arg(0))
+	}
+
+	flags.Visit(func(flag *flag.Flag) {
+		switch flag.Name {
+		case "mcp-config":
+			options.HasMCPConfig = true
+		case "tool-timeout-ms":
+			options.HasToolTimeout = true
+		case "tool-max-rounds":
+			options.HasToolMaxRounds = true
+		case "tool-approval-mode":
+			options.HasToolApproval = true
+		}
+	})
+	return options, nil
+}
+
+func (options startupOptions) hasOverrides() bool {
+	return options.HasMCPConfig ||
+		options.HasToolTimeout ||
+		options.HasToolMaxRounds ||
+		options.HasToolApproval
+}
+
+func applyStartupOptions(config *savedConfig, options startupOptions) error {
+	if !options.hasOverrides() {
+		return nil
+	}
+
+	if !options.HasMCPConfig {
+		return errors.New("TUI startup tool budget flags require --mcp-config")
+	}
+	if strings.TrimSpace(options.MCPConfig) == "" {
+		return errors.New("TUI startup --mcp-config must not be empty")
+	}
+	if !options.HasToolTimeout || !options.HasToolMaxRounds || !options.HasToolApproval {
+		return errors.New("TUI startup --mcp-config requires --tool-timeout-ms, --tool-max-rounds, and --tool-approval-mode")
+	}
+
+	config.MCPConfig = strings.TrimSpace(options.MCPConfig)
+	config.ToolTimeout = options.ToolTimeout
+	config.ToolMaxRounds = options.ToolMaxRounds
+	config.ToolApproval = options.ToolApproval
+
+	return validateToolConfig(runConfig{
+		ToolHarness:   config.ToolHarness,
+		ToolRoot:      config.ToolRoot,
+		ToolTimeout:   config.ToolTimeout,
+		ToolMaxRounds: config.ToolMaxRounds,
+		ToolApproval:  config.ToolApproval,
+		TestCommands:  config.TestCommands,
+		MCPConfig:     config.MCPConfig,
+	})
 }
 
 func (m model) Init() tea.Cmd {
@@ -812,6 +915,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleTestCommand(args)
 	case "mcp-config":
 		return m.handleMCPConfigCommand(args)
+	case "mcp":
+		return m.handleMCPCommand(args)
 	case "allow-tools":
 		return m.handleAllowToolsCommand(args, "auto-approved-safe")
 	case "yolo-tools":
@@ -1318,20 +1423,43 @@ func (m model) handleTestCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
-	if len(args) != 1 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config <path>|off"})
+	if len(args) != 1 && len(args) != 4 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config <path> [timeout-ms max-rounds approval-mode]|off"})
 		return m, nil
 	}
 
 	if args[0] == "off" {
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config off"})
+			return m, nil
+		}
 		m.savedConfig.MCPConfig = ""
 	} else {
+		nextConfig := m.savedConfig
 		path := strings.TrimSpace(args[0])
 		if path == "" {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP config path must not be empty"})
 			return m, nil
 		}
-		m.savedConfig.MCPConfig = path
+		nextConfig.MCPConfig = path
+		if len(args) == 4 {
+			nextConfig.ToolTimeout = args[1]
+			nextConfig.ToolMaxRounds = args[2]
+			nextConfig.ToolApproval = args[3]
+		}
+		if err := validateToolConfig(runConfig{
+			ToolHarness:   nextConfig.ToolHarness,
+			ToolRoot:      nextConfig.ToolRoot,
+			ToolTimeout:   nextConfig.ToolTimeout,
+			ToolMaxRounds: nextConfig.ToolMaxRounds,
+			ToolApproval:  nextConfig.ToolApproval,
+			TestCommands:  nextConfig.TestCommands,
+			MCPConfig:     nextConfig.MCPConfig,
+		}); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		m.savedConfig = nextConfig
 	}
 
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
@@ -2889,7 +3017,7 @@ func (m model) viewName() string {
 }
 
 func main() {
-	model, err := initialModel()
+	model, err := initialModelWithArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

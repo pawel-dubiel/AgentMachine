@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Ignored local Playwright MCP runtime artifacts and common Playwright report/output directories.
+- Fixed the TUI Playwright MCP preset so `--headless` is passed to Playwright MCP instead of `npx`.
+- Added per-agent persistent MCP stdio sessions, MCP `clientInfo` initialization, stdio env reference handling, TUI `/mcp add playwright` preset/config commands, web-browse routing for Playwright MCP, a self-contained Playwright MCP example config, and an opt-in paid OpenRouter Playwright MCP integration test target.
 - Hide `assistant_delta` event rows in the TUI activity feed and show a content-free thinking animation while responses stream.
 - Added compact runtime facts to provider prompts so models see current UTC date/time and selected workflow route without needing a tool call.
 - Added an internal read-only `tool` route for `auto` so time and read-only tool requests skip the `basic` finalizer while exposing only read-risk tools.

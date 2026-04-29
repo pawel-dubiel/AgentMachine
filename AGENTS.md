@@ -187,6 +187,8 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   explicitly allowlisted MCP tools through namespaced provider-visible names.
   MCP stdio and Streamable HTTP protocol, env-secret resolution, permissions,
   transport calls, redaction, and result bounding belong in Elixir.
+- MCP stdio sessions are kept alive per agent run so stateful MCP servers such
+  as Playwright can handle multi-step tool loops.
 - Repeated `--test-command <command>` values may extend `code-edit` with
   `run_test_command` only under `full-access`. Command execution must stay in
   Elixir, use exact allowlist matching, avoid shells, keep cwd inside

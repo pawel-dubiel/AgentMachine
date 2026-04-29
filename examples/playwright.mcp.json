@@ -1,0 +1,29 @@
+{
+  "servers": [
+    {
+      "id": "playwright",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--cache",
+        "/tmp/agent-machine-playwright-mcp-npm-cache",
+        "@playwright/mcp@latest",
+        "--headless"
+      ],
+      "env": {},
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "permission": "mcp_playwright_browser_navigate",
+          "risk": "network"
+        },
+        {
+          "name": "browser_snapshot",
+          "permission": "mcp_playwright_browser_snapshot",
+          "risk": "read"
+        }
+      ]
+    }
+  ]
+}

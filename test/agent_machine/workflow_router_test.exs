@@ -247,6 +247,55 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.tool_intent == "tool_use"
   end
 
+  test "routes web browse intent to agentic with Playwright MCP browser tool" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "access example.com website",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :full_access,
+        test_commands: [],
+        mcp_config: playwright_mcp_config()
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "web_browse"
+    assert route.reason == "web_browse_intent_with_mcp_browser"
+    assert route.tools_exposed
+  end
+
+  test "fails fast for web browse intent without Playwright MCP browser tool" do
+    assert_raise ArgumentError, ~r/no MCP browser network tool/, fn ->
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "open https://example.com",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :full_access,
+        test_commands: [],
+        mcp_config: mcp_config("read")
+      })
+    end
+  end
+
+  test "fails fast for web browse intent without full access approval" do
+    assert_raise ArgumentError, ~r/tool_approval_mode must be :full_access/, fn ->
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "open https://example.com",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :read_only,
+        test_commands: [],
+        mcp_config: playwright_mcp_config()
+      })
+    end
+  end
+
   test "fails fast for generic tool intent without read-risk tools" do
     assert_raise ArgumentError, ~r/no read-only tool capability/, fn ->
       WorkflowRouter.route!(%WorkflowRouter{
@@ -435,6 +484,32 @@ defmodule AgentMachine.WorkflowRouterTest do
           "env" => %{},
           "tools" => [
             %{"name" => "search", "permission" => "mcp_docs_search", "risk" => risk}
+          ]
+        }
+      ]
+    })
+  end
+
+  defp playwright_mcp_config do
+    Config.from_map!(%{
+      "servers" => [
+        %{
+          "id" => "playwright",
+          "transport" => "stdio",
+          "command" => "npx",
+          "args" => ["--yes", "@playwright/mcp@latest", "--headless"],
+          "env" => %{},
+          "tools" => [
+            %{
+              "name" => "browser_navigate",
+              "permission" => "mcp_playwright_browser_navigate",
+              "risk" => "network"
+            },
+            %{
+              "name" => "browser_snapshot",
+              "permission" => "mcp_playwright_browser_snapshot",
+              "risk" => "read"
+            }
           ]
         }
       ]

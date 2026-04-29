@@ -154,6 +154,48 @@ defmodule AgentMachine.OpenRouterPaidTest do
     assert assistant.tool_results != %{}
   end
 
+  @tag :playwright_mcp
+  @tag timeout: 300_000
+  test "ClientRunner lets OpenRouter drive Playwright MCP against a local page" do
+    if System.get_env("AGENT_MACHINE_PAID_PLAYWRIGHT_MCP") == "1" do
+      if is_nil(System.find_executable("npx")) do
+        flunk("npx is required for the Playwright MCP paid integration test")
+      end
+
+      marker = "PLAYWRIGHT_MCP_PAID_MARKER_42"
+      url = marker_page_url!(marker)
+      config_path = playwright_mcp_config_file!()
+
+      summary =
+        ClientRunner.run!(%{
+          task:
+            "Use the MCP tools mcp_playwright_browser_navigate and mcp_playwright_browser_snapshot. First call mcp_playwright_browser_navigate with arguments {\"arguments\":{\"url\":\"#{url}\"}}. Then call mcp_playwright_browser_snapshot with arguments {\"arguments\":{}}. Reply with the exact marker text from the page and nothing else.",
+          workflow: :basic,
+          provider: :openrouter,
+          model: paid_model(),
+          timeout_ms: 240_000,
+          max_steps: 2,
+          max_attempts: 1,
+          http_timeout_ms: 120_000,
+          pricing: @pricing,
+          tool_harnesses: [:mcp],
+          tool_timeout_ms: 120_000,
+          tool_max_rounds: 6,
+          tool_approval_mode: :full_access,
+          mcp_config_path: config_path
+        })
+
+      assert summary.status == "completed"
+      assert summary.final_output =~ marker
+      assert event_with?(summary.events, :tool, "mcp_playwright_browser_navigate")
+      assert event_with?(summary.events, :tool, "mcp_playwright_browser_snapshot")
+    else
+      IO.puts(
+        "Skipping Playwright MCP paid integration test; set AGENT_MACHINE_PAID_PLAYWRIGHT_MCP=1"
+      )
+    end
+  end
+
   defp paid_model do
     case System.get_env("AGENT_MACHINE_PAID_OPENROUTER_MODEL") do
       nil ->
@@ -211,6 +253,86 @@ defmodule AgentMachine.OpenRouterPaidTest do
     )
 
     path
+  end
+
+  defp playwright_mcp_config_file! do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-paid-playwright-mcp-#{System.unique_integer([:positive])}.json"
+      )
+
+    cache_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-playwright-npm-cache-#{System.unique_integer([:positive])}"
+      )
+
+    File.write!(
+      path,
+      JSON.encode!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => "npx",
+            "args" => ["--yes", "--cache", cache_dir, "@playwright/mcp@latest", "--headless"],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "browser_navigate",
+                "permission" => "mcp_playwright_browser_navigate",
+                "risk" => "network"
+              },
+              %{
+                "name" => "browser_snapshot",
+                "permission" => "mcp_playwright_browser_snapshot",
+                "risk" => "read"
+              }
+            ]
+          }
+        ]
+      })
+    )
+
+    path
+  end
+
+  defp marker_page_url!(marker) do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, packet: :raw, reuseaddr: true])
+    {:ok, {_address, port}} = :inet.sockname(listener)
+
+    task =
+      Task.async(fn ->
+        serve_marker_page(listener, marker)
+      end)
+
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      Task.shutdown(task, :brutal_kill)
+    end)
+
+    "http://127.0.0.1:#{port}/"
+  end
+
+  defp serve_marker_page(listener, marker) do
+    case :gen_tcp.accept(listener, 240_000) do
+      {:ok, socket} ->
+        _request = :gen_tcp.recv(socket, 0, 1_000)
+
+        body =
+          "<!doctype html><html><head><title>AgentMachine MCP</title></head><body><main><h1>#{marker}</h1></main></body></html>"
+
+        response =
+          "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n#{body}"
+
+        :ok = :gen_tcp.send(socket, response)
+        :gen_tcp.close(socket)
+        serve_marker_page(listener, marker)
+
+      {:error, _reason} ->
+        :ok
+    end
   end
 
   defp fake_mcp_stdio_server!(marker) do

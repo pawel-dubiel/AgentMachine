@@ -54,6 +54,7 @@ defmodule AgentMachine.LocalIntentClassifierTest do
 
     assert length(candidates) == length(LocalIntentClassifier.intents())
     assert Enum.any?(candidates, &(&1.intent == :code_mutation))
+    assert Enum.any?(candidates, &(&1.intent == :web_browse))
     assert Enum.all?(candidates, &String.contains?(&1.premise, "Current request"))
     assert Enum.any?(candidates, &String.contains?(&1.hypothesis, "edit"))
   end
