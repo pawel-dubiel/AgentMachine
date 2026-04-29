@@ -4,6 +4,15 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Improved the TUI agent detail view with running-state placeholders,
+  sanitized stream activity, elapsed duration, and compact heartbeat rendering.
+- Converted auto-router write-capability failures in the TUI into the same
+  interactive filesystem permission selector instead of showing a raw Mix
+  stacktrace, and retry approved write requests through `agentic` to avoid
+  re-entering the router permission loop.
+- Added soft-lease timeouts for high-level client runs: `--timeout-ms` is now
+  the idle lease, a 3x hard cap cancels stuck runs, heartbeat/lease/timeout
+  events are logged, and the TUI shows an agent checklist with timeout state.
 - Added an interactive TUI selector for pending filesystem tool permissions so
   users can approve safe writes, full access, or deny without typing commands.
 - Added compact AgentMachine capability facts to runtime prompt context and

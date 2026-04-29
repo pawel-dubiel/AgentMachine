@@ -776,6 +776,34 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.results["assistant"].status == "error"
   end
 
+  test "timeout summaries include timeout status and explicit reason" do
+    summary =
+      ClientRunner.summarize_for_test!(%{
+        id: "run-timeout",
+        status: :timeout,
+        results: %{},
+        artifacts: %{},
+        usage: nil,
+        events: [
+          %{
+            type: :run_timed_out,
+            run_id: "run-timeout",
+            reason: "idle lease expired after 1000ms without runtime activity",
+            idle_timeout_ms: 1_000,
+            hard_timeout_ms: 3_000,
+            elapsed_ms: 1_001,
+            at: DateTime.utc_now()
+          }
+        ],
+        error: "idle lease expired after 1000ms without runtime activity"
+      })
+
+    assert summary.status == "timeout"
+    assert summary.error == "idle lease expired after 1000ms without runtime activity"
+    assert [%{type: "run_timed_out", summary: summary_text}] = summary.events
+    assert summary_text =~ "Run timed out"
+  end
+
   test "mix agent_machine.run prints JSON summary" do
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)

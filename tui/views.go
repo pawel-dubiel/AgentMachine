@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -106,6 +107,10 @@ func (m model) chatView() string {
 	if m.running {
 		b.WriteString(m.thinkingView())
 		b.WriteString("\n\n")
+		if checklist := m.agentChecklistView(); checklist != "" {
+			b.WriteString(checklist)
+			b.WriteString("\n\n")
+		}
 		b.WriteString(m.liveActivityView())
 		b.WriteString("\n")
 	}
@@ -169,6 +174,94 @@ func (m model) queueView() string {
 		lines = append(lines, fmt.Sprintf("%d. %s", index+1, compactQueueText(item.Text)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) agentChecklistView() string {
+	visible := m.visibleAgentIDs()
+	if len(visible) == 0 {
+		return ""
+	}
+
+	lines := []string{labelStyle.Render("Agents")}
+	for _, id := range visible {
+		lines = append(lines, m.agentChecklistLine(m.agents[id]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) agentChecklistLine(agent agentState) string {
+	depth := m.agentDepth(agent.ID)
+	indent := strings.Repeat("  ", depth)
+	status := emptyAs(agent.Status, "pending")
+	parts := []string{
+		indent + agentStatusMarker(status),
+		emptyAs(agent.ID, "(unknown)"),
+	}
+	if strings.TrimSpace(agent.ParentAgentID) != "" {
+		parts = append(parts, "parent="+agent.ParentAgentID)
+	}
+	parts = append(parts, agentDurationText(agent))
+	if latest := latestAgentEventText(agent); latest != "" {
+		parts = append(parts, latest)
+	}
+	return strings.Join(parts, " ")
+}
+
+func agentStatusMarker(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running", "retrying":
+		return "[-]"
+	case "ok", "done", "completed":
+		return "[x]"
+	case "error", "failed":
+		return "[!]"
+	case "timeout":
+		return "[T]"
+	default:
+		return "[ ]"
+	}
+}
+
+func agentDurationText(agent agentState) string {
+	if agent.DurationMS != nil {
+		return fmt.Sprintf("duration=%dms", *agent.DurationMS)
+	}
+	if strings.TrimSpace(agent.StartedAt) == "" {
+		return "elapsed=0s"
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, agent.StartedAt)
+	if err != nil {
+		return "elapsed=?"
+	}
+	if strings.TrimSpace(agent.FinishedAt) != "" {
+		finishedAt, err := time.Parse(time.RFC3339Nano, agent.FinishedAt)
+		if err == nil {
+			return fmt.Sprintf("duration=%s", compactDuration(finishedAt.Sub(startedAt)))
+		}
+	}
+	return fmt.Sprintf("elapsed=%s", compactDuration(time.Since(startedAt)))
+}
+
+func latestAgentEventText(agent agentState) string {
+	if len(agent.Events) == 0 {
+		return ""
+	}
+	event := agent.Events[len(agent.Events)-1]
+	text := event.Summary
+	if strings.TrimSpace(text) == "" {
+		text = event.Type
+	}
+	return compactQueueText(text)
+}
+
+func compactDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	if duration < time.Second {
+		return fmt.Sprintf("%dms", duration.Milliseconds())
+	}
+	return fmt.Sprintf("%ds", int(duration.Seconds()))
 }
 
 func (m model) liveActivityView() string {
@@ -303,8 +396,9 @@ func (m model) setupView() string {
 		m.skillsStatus(),
 		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
-		"run timeout ms: " + defaultRunTimeoutMS,
-		"agentic/auto timeout ms: " + defaultAgenticRunTimeoutMS,
+		"run idle timeout ms: " + defaultRunTimeoutMS,
+		"agentic/auto idle timeout ms: " + defaultAgenticRunTimeoutMS,
+		"hard cap: 3x idle timeout",
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
 		"Commands",
@@ -500,6 +594,8 @@ func (m model) agentDetailView() string {
 	duration := "(none)"
 	if agent.DurationMS != nil {
 		duration = fmt.Sprintf("%dms", *agent.DurationMS)
+	} else if agentRunning(agent) && strings.TrimSpace(agent.StartedAt) != "" {
+		duration = strings.TrimPrefix(agentDurationText(agent), "elapsed=")
 	}
 
 	return strings.Join([]string{
@@ -512,19 +608,67 @@ func (m model) agentDetailView() string {
 		"duration: " + duration,
 		"",
 		labelStyle.Render("Decision"),
-		decisionText(agent.Decision),
+		agentDecisionText(agent),
 		"",
 		labelStyle.Render("Output"),
-		emptyAsNone(agent.Output),
+		agentOutputText(agent),
 		"",
 		labelStyle.Render("Error"),
-		emptyAsNone(agent.Error),
+		agentErrorText(agent),
 		"",
 		labelStyle.Render("Events"),
 		agentEventLines(agent.Events),
 		"",
 		"Esc or /back",
 	}, "\n")
+}
+
+func agentDecisionText(agent agentState) string {
+	if strings.TrimSpace(agent.Decision.Mode) == "" && strings.TrimSpace(agent.Decision.Reason) == "" && agentRunning(agent) {
+		return "(pending until agent finishes)"
+	}
+	return decisionText(agent.Decision)
+}
+
+func agentOutputText(agent agentState) string {
+	if strings.TrimSpace(agent.Output) != "" {
+		return agent.Output
+	}
+	if agentRunning(agent) && providerRequestOpen(agent.Events) {
+		return "(provider request in progress; no streamed output yet)"
+	}
+	if agentRunning(agent) {
+		return "(waiting for agent output)"
+	}
+	return "(none)"
+}
+
+func agentErrorText(agent agentState) string {
+	if strings.TrimSpace(agent.Error) != "" {
+		return agent.Error
+	}
+	if agentRunning(agent) {
+		return "(none so far)"
+	}
+	return "(none)"
+}
+
+func agentRunning(agent agentState) bool {
+	status := strings.ToLower(strings.TrimSpace(agent.Status))
+	return status == "" || status == "running" || status == "retrying"
+}
+
+func providerRequestOpen(events []eventSummary) bool {
+	started := false
+	for _, event := range events {
+		switch event.Type {
+		case "provider_request_started":
+			started = true
+		case "provider_request_finished", "provider_request_failed":
+			started = false
+		}
+	}
+	return started
 }
 
 func (m model) helpView() string {
@@ -550,10 +694,31 @@ func agentEventLines(events []eventSummary) string {
 		return "(none)"
 	}
 	lines := make([]string, 0, len(events))
+	var heartbeat eventSummary
+	heartbeatCount := 0
 	for _, event := range events {
+		if event.Type == "agent_heartbeat" {
+			heartbeat = event
+			heartbeatCount++
+			continue
+		}
+		lines = appendHeartbeatLine(lines, heartbeat, heartbeatCount)
+		heartbeatCount = 0
 		lines = append(lines, eventDisplayLine(event))
 	}
+	lines = appendHeartbeatLine(lines, heartbeat, heartbeatCount)
 	return strings.Join(lines, "\n")
+}
+
+func appendHeartbeatLine(lines []string, event eventSummary, count int) []string {
+	if count == 0 {
+		return lines
+	}
+	line := eventDisplayLine(event)
+	if count > 1 {
+		line += hintStyle.Render(fmt.Sprintf(" x%d", count))
+	}
+	return append(lines, line)
 }
 
 func modelListText(models []modelOption, selected int) string {

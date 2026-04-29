@@ -8,6 +8,8 @@ defmodule AgentMachine.Orchestrator do
   alias AgentMachine.{Agent, RunServer, RunSupervisor}
 
   @poll_ms 25
+  @leased_poll_ms 250
+  @lease_extension_min_interval_ms 1_000
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
@@ -17,7 +19,7 @@ defmodule AgentMachine.Orchestrator do
     timeout = Keyword.fetch!(opts, :timeout)
 
     with {:ok, run_id} <- start_run(agent_specs, opts) do
-      await_run(run_id, timeout)
+      await_started_run(run_id, timeout, opts)
     end
   end
 
@@ -83,6 +85,9 @@ defmodule AgentMachine.Orchestrator do
       %{status: :failed} = run ->
         {:error, {:failed, run}}
 
+      %{status: :timeout} = run ->
+        {:error, {:timeout, run}}
+
       run ->
         now = System.monotonic_time(:millisecond)
 
@@ -92,6 +97,181 @@ defmodule AgentMachine.Orchestrator do
           Process.sleep(min(@poll_ms, deadline - now))
           await_loop(run_id, deadline)
         end
+    end
+  end
+
+  defp await_started_run(run_id, timeout_ms, opts) do
+    if Keyword.has_key?(opts, :idle_timeout_ms) or Keyword.has_key?(opts, :hard_timeout_ms) do
+      await_run(run_id, timeout_ms,
+        idle_timeout_ms: Keyword.fetch!(opts, :idle_timeout_ms),
+        hard_timeout_ms: Keyword.fetch!(opts, :hard_timeout_ms)
+      )
+    else
+      await_run(run_id, timeout_ms)
+    end
+  end
+
+  def await_run(run_id, timeout_ms, opts)
+      when is_binary(run_id) and is_integer(timeout_ms) and timeout_ms >= 0 and is_list(opts) do
+    validate_await_opts!(opts)
+    idle_timeout_ms = Keyword.fetch!(opts, :idle_timeout_ms)
+    hard_timeout_ms = Keyword.fetch!(opts, :hard_timeout_ms)
+    require_positive_integer!(idle_timeout_ms, :idle_timeout_ms)
+    require_positive_integer!(hard_timeout_ms, :hard_timeout_ms)
+
+    if hard_timeout_ms < idle_timeout_ms do
+      raise ArgumentError,
+            ":hard_timeout_ms must be greater than or equal to :idle_timeout_ms, got: #{inspect({idle_timeout_ms, hard_timeout_ms})}"
+    end
+
+    now = System.monotonic_time(:millisecond)
+    run = get_run(run_id)
+
+    state = %{
+      idle_timeout_ms: idle_timeout_ms,
+      hard_timeout_ms: hard_timeout_ms,
+      started_at_ms: now,
+      idle_deadline_ms: now + idle_timeout_ms,
+      hard_deadline_ms: now + hard_timeout_ms,
+      last_health_count: health_event_count(run),
+      last_extension_at_ms: now - @lease_extension_min_interval_ms
+    }
+
+    await_leased_loop(run_id, state)
+  end
+
+  def await_run(run_id, timeout_ms, opts) do
+    raise ArgumentError,
+          "await_run/3 requires a binary run_id, non-negative integer timeout_ms, and keyword opts, got: #{inspect({run_id, timeout_ms, opts})}"
+  end
+
+  defp await_leased_loop(run_id, lease) do
+    case get_run(run_id) do
+      nil ->
+        {:error, :not_found}
+
+      %{status: :completed} = run ->
+        {:ok, run}
+
+      %{status: :failed} = run ->
+        {:error, {:failed, run}}
+
+      %{status: :timeout} = run ->
+        {:error, {:timeout, run}}
+
+      run ->
+        now = System.monotonic_time(:millisecond)
+        lease = maybe_extend_lease(run_id, run, lease, now)
+
+        cond do
+          now >= lease.hard_deadline_ms ->
+            timeout_run(
+              run_id,
+              "hard timeout reached after #{lease.hard_timeout_ms}ms",
+              timeout_metadata(lease, now)
+            )
+
+          now >= lease.idle_deadline_ms ->
+            timeout_run(
+              run_id,
+              "idle lease expired after #{lease.idle_timeout_ms}ms without runtime activity",
+              timeout_metadata(lease, now)
+            )
+
+          true ->
+            sleep_ms = next_sleep_ms(lease, now)
+            Process.sleep(sleep_ms)
+            await_leased_loop(run_id, lease)
+        end
+    end
+  end
+
+  defp maybe_extend_lease(run_id, run, lease, now) do
+    health_count = health_event_count(run)
+
+    if is_integer(health_count) and health_count > lease.last_health_count do
+      idle_deadline_ms = min(now + lease.idle_timeout_ms, lease.hard_deadline_ms)
+
+      lease = %{
+        lease
+        | idle_deadline_ms: idle_deadline_ms,
+          last_health_count: health_count
+      }
+
+      if now - lease.last_extension_at_ms >= @lease_extension_min_interval_ms do
+        record_lease_extended(run_id, lease_metadata(lease, now))
+        %{lease | last_extension_at_ms: now}
+      else
+        lease
+      end
+    else
+      lease
+    end
+  end
+
+  defp next_sleep_ms(lease, now) do
+    lease
+    |> Map.take([:idle_deadline_ms, :hard_deadline_ms])
+    |> Map.values()
+    |> Enum.map(&max(&1 - now, 0))
+    |> Enum.min()
+    |> min(@leased_poll_ms)
+  end
+
+  defp timeout_run(run_id, reason, metadata) do
+    case lookup_run_server(run_id) do
+      nil ->
+        {:error, :not_found}
+
+      pid ->
+        run = RunServer.timeout(pid, reason, metadata)
+        {:error, {:timeout, run}}
+    end
+  end
+
+  defp record_lease_extended(run_id, metadata) do
+    case lookup_run_server(run_id) do
+      nil -> :ok
+      pid -> RunServer.extend_lease(pid, metadata)
+    end
+  end
+
+  defp lookup_run_server(run_id) do
+    case Registry.lookup(AgentMachine.RunRegistry, {:run, run_id}) do
+      [{pid, _value}] -> pid
+      [] -> nil
+    end
+  end
+
+  defp lease_metadata(lease, now) do
+    %{
+      reason: "runtime activity",
+      idle_timeout_ms: lease.idle_timeout_ms,
+      hard_timeout_ms: lease.hard_timeout_ms,
+      elapsed_ms: now - lease.started_at_ms,
+      remaining_idle_ms: max(lease.idle_deadline_ms - now, 0),
+      remaining_hard_ms: max(lease.hard_deadline_ms - now, 0)
+    }
+  end
+
+  defp timeout_metadata(lease, now) do
+    %{
+      idle_timeout_ms: lease.idle_timeout_ms,
+      hard_timeout_ms: lease.hard_timeout_ms,
+      elapsed_ms: now - lease.started_at_ms
+    }
+  end
+
+  defp health_event_count(nil), do: 0
+  defp health_event_count(%{health_event_count: count}) when is_integer(count), do: count
+  defp health_event_count(_run), do: 0
+
+  defp validate_await_opts!(opts) do
+    allowed_keys = [:idle_timeout_ms, :hard_timeout_ms]
+    unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
+
+    if unknown_keys != [] do
+      raise ArgumentError, "unknown await option(s): #{inspect(unknown_keys)}"
     end
   end
 

@@ -168,6 +168,9 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Runs collect in-memory `events` for lightweight observability and emit
   `:telemetry` events for run, agent, tool, MCP call, and workflow-route
   activity alongside JSONL logs.
+- High-level client runs treat `--timeout-ms` as an idle lease, derive a 3x hard
+  cap, emit heartbeat/lease/timeout events, and cancel active agent/tool work on
+  timeout.
 - Delegated agents receive `:run_context` with prior results and accumulated artifacts.
 - Tool calls require `allowed_tools`, `tool_policy`, `tool_timeout_ms`,
   `tool_max_rounds`, and `tool_approval_mode`.

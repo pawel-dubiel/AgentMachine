@@ -10,6 +10,8 @@ defmodule AgentMachine.EventSummary do
   defp summary(%{type: :run_started}), do: "Run started"
   defp summary(%{type: :run_completed}), do: "Run completed"
   defp summary(%{type: :run_failed, reason: reason}), do: "Run failed: #{reason}"
+  defp summary(%{type: :run_timed_out, reason: reason}), do: "Run timed out: #{reason}"
+  defp summary(%{type: :run_lease_extended}), do: "Run lease extended"
 
   defp summary(%{type: :workflow_routed, selected: selected}),
     do: "Workflow routed to #{selected}"
@@ -27,6 +29,8 @@ defmodule AgentMachine.EventSummary do
     duration = duration_text(event)
     "#{agent_id} finished with #{status}#{duration}"
   end
+
+  defp summary(%{type: :agent_heartbeat, agent_id: agent_id}), do: "#{agent_id} heartbeat"
 
   defp summary(%{type: :agent_retry_scheduled, agent_id: agent_id, next_attempt: attempt}) do
     "#{agent_id} scheduled retry attempt #{attempt}"
@@ -79,6 +83,11 @@ defmodule AgentMachine.EventSummary do
       :tool,
       :status,
       :duration_ms,
+      :idle_timeout_ms,
+      :hard_timeout_ms,
+      :elapsed_ms,
+      :remaining_idle_ms,
+      :remaining_hard_ms,
       :reason,
       :permission,
       :approval_risk,

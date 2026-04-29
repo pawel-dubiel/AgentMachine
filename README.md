@@ -744,6 +744,15 @@ session event log path to the Elixir collector, shown in `/setup` as
 file. Open `/agents` to see the requested and selected workflow route, or
 `/agent planner` when an agentic run created a planner.
 
+For high-level CLI/TUI runs, `--timeout-ms` is an idle lease. Runtime activity
+such as agent starts, provider/tool events, stream deltas, and agent heartbeats
+extends the lease, but never beyond the derived hard cap of `timeout_ms * 3`.
+If the idle lease or hard cap expires, the run is cancelled, active agent/tool
+sessions are stopped, and JSONL logs include `run_lease_extended`,
+`agent_heartbeat`, and `run_timed_out` events. The TUI chat view shows a compact
+agent checklist with `[ ]`, `[-]`, `[x]`, `[!]`, and `[T]` status markers while a
+run is active.
+
 The input remains active while a run is processing. Press `Enter` during a run
 to queue the message locally; the TUI starts queued messages one at a time after
 the active run finishes. Use `/queue` commands to inspect, edit, remove, clear,
@@ -865,7 +874,8 @@ values are:
 - A non-empty task prompt.
 - `--workflow chat|basic|agentic|auto`.
 - `--provider echo|openai|openrouter`.
-- `--timeout-ms`.
+- `--timeout-ms`, used by high-level clients as the idle lease. The hard cap is
+  derived as three times this value.
 - `--max-steps`.
 - `--max-attempts`.
 - `--router-mode local` requires `--router-model-dir`, `--router-timeout-ms`,
@@ -916,8 +926,9 @@ OPENROUTER_API_KEY="..." make test-openrouter-playwright-mcp
 
 The paid Elixir tests use a 180 second ExUnit timeout because real OpenRouter
 responses can exceed the default 60 second test timeout.
-The TUI uses a 240 second run timeout for `auto` and `agentic` runs so slower
-paid models can finish planner and worker phases.
+The TUI uses a 240 second idle lease for `auto` and `agentic` runs so slower
+paid models can finish planner and worker phases when they continue producing
+runtime health events; the hard cap is 720 seconds.
 
 The GitHub workflow `OpenRouter Paid Integration` is manual-only
 (`workflow_dispatch`) and expects the `OPENROUTER_API_KEY` repository secret.

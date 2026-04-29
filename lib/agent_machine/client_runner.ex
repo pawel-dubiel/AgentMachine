@@ -26,6 +26,7 @@ defmodule AgentMachine.ClientRunner do
     skill_selection = Selector.select!(spec)
     {agents, run_opts} = build_workflow(spec, workflow_route)
     run_opts = put_skill_opts(run_opts, spec, skill_selection)
+    run_opts = put_timeout_lease_opts(run_opts, spec)
     run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
     run_opts = put_event_sink(run_opts, opts)
 
@@ -169,6 +170,12 @@ defmodule AgentMachine.ClientRunner do
     |> Keyword.put(:selected_skills, selected)
     |> Keyword.put(:skills_context, Prompt.context(selection.selected))
     |> Keyword.put(:allow_skill_scripts, spec.allow_skill_scripts)
+  end
+
+  defp put_timeout_lease_opts(run_opts, %RunSpec{timeout_ms: timeout_ms}) do
+    run_opts
+    |> Keyword.put(:idle_timeout_ms, timeout_ms)
+    |> Keyword.put(:hard_timeout_ms, timeout_ms * 3)
   end
 
   defp summarize_run(run) do

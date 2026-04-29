@@ -129,6 +129,7 @@ type agentState struct {
 	Status        string
 	Attempt       int
 	Output        string
+	StreamChunks  int
 	Decision      plannerDecision
 	Error         string
 	StartedAt     string
@@ -579,6 +580,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = viewChat
 
 		if msg.Err != nil {
+			if updated, handled := m.withRunPermissionError(msg.Err); handled {
+				return updated, nil
+			}
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(msg.Summary)})
@@ -615,6 +619,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.view = viewChat
 		if msg.Err != nil {
+			if updated, handled := m.withRunPermissionError(msg.Err); handled {
+				return updated, nil
+			}
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
 		} else if strings.TrimSpace(m.lastSummary.FinalOutput) != "" || m.lastSummary.Status != "" {
 			if m.lastSummary.Status == "failed" {
@@ -725,6 +732,10 @@ func (m model) startNextQueuedRun() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
+	return m.startRunWithWorkflow(task, workflowAuto)
+}
+
+func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Model, tea.Cmd) {
 	if !m.providerSet {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider in Setup before running"})
 		m.view = viewSetup
@@ -747,6 +758,7 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		return m.withRunPreparationError(err), nil
 	}
+	config.Workflow = workflow
 	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
@@ -790,6 +802,94 @@ func (m model) withRunPreparationError(err error) model {
 		m.view = viewChat
 	}
 	return m
+}
+
+func (m model) withRunPermissionError(err error) (model, bool) {
+	if err == nil {
+		return m, false
+	}
+
+	prompt, root, harness, ok := m.permissionPromptFromRunError(err.Error())
+	if !ok {
+		return m, false
+	}
+
+	task := m.latestUserTask()
+	if strings.TrimSpace(task) == "" {
+		task = m.activeConfig.Task
+	}
+
+	m.pendingToolTask = task
+	m.pendingToolRoot = root
+	m.pendingToolHarness = harness
+	m.pendingToolChoice = 0
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: prompt})
+	m.view = viewChat
+	return m, true
+}
+
+func (m model) permissionPromptFromRunError(text string) (string, string, string, bool) {
+	if !routerWriteCapabilityError(text) {
+		return "", "", "", false
+	}
+
+	task := m.latestUserTask()
+	if strings.TrimSpace(task) == "" {
+		task = m.activeConfig.Task
+	}
+	if strings.TrimSpace(task) == "" {
+		return "", "", "", false
+	}
+
+	harness := requiredHarnessForRouterError(text, task)
+	root := inferredToolRoot(task)
+	if root == "" {
+		return "", "", "", false
+	}
+
+	reason := m.permissionReasonForHarness(harness)
+	return toolPermissionText(reason, harness, root, m.savedConfig.ToolRoot), root, harness, true
+}
+
+func routerWriteCapabilityError(text string) bool {
+	return strings.Contains(text, "auto workflow detected mutation intent but no write-capable tool harness is configured") ||
+		strings.Contains(text, "auto workflow detected code mutation intent but :code_edit tool harness is not configured") ||
+		strings.Contains(text, "auto workflow detected test intent but :code_edit tool harness is not configured") ||
+		strings.Contains(text, "auto workflow detected test intent but :tool_approval_mode must be :full_access")
+}
+
+func requiredHarnessForRouterError(text string, task string) string {
+	if strings.Contains(text, "code mutation intent") ||
+		strings.Contains(text, "test intent") ||
+		strings.Contains(text, ":code_edit") {
+		return "code-edit"
+	}
+	if harness := requiredWriteHarness(task); harness != "" {
+		return harness
+	}
+	return "local-files"
+}
+
+func (m model) permissionReasonForHarness(harness string) string {
+	switch {
+	case m.savedConfig.ToolHarness == "":
+		return "filesystem tools are off"
+	case m.savedConfig.ToolHarness != harness:
+		return "active tool harness cannot perform this filesystem action"
+	case m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access":
+		return "active tool approval mode cannot perform writes without an interactive approval bridge"
+	default:
+		return "runtime did not receive a write-capable tool harness"
+	}
+}
+
+func (m model) latestUserTask() string {
+	for index := len(m.messages) - 1; index >= 0; index-- {
+		if m.messages[index].Role == "user" && strings.TrimSpace(m.messages[index].Text) != "" {
+			return m.messages[index].Text
+		}
+	}
+	return ""
 }
 
 func (m model) taskWithConversationContext(task string) string {
@@ -1121,7 +1221,7 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	m.pendingToolHarness = ""
 	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " approval=" + approval})
-	return m.startRun(task)
+	return m.startRunWithWorkflow(task, workflowAgentic)
 }
 
 type pendingToolOption struct {
@@ -1895,6 +1995,9 @@ func (m *model) applyEvent(event eventSummary) {
 	if m.eventAutoScroll {
 		m.clampEventScroll()
 	}
+	if event.Type == "run_timed_out" {
+		m.markRunningAgentsTimedOut(event)
+	}
 
 	m.applyNonDeltaEvent(event)
 }
@@ -1931,6 +2034,8 @@ func (m *model) applyNonDeltaEvent(event eventSummary) {
 	case "agent_retry_scheduled":
 		agent.Status = "retrying"
 		agent.Error = event.Reason
+	case "agent_heartbeat":
+		agent.Status = "running"
 	case "provider_request_started":
 		if agent.Status == "" {
 			agent.Status = "running"
@@ -1965,6 +2070,20 @@ func (m *model) markAgentRunning(event eventSummary) {
 	m.agents[event.AgentID] = agent
 }
 
+func (m *model) markRunningAgentsTimedOut(event eventSummary) {
+	reason := emptyAs(event.Reason, "run timed out")
+	for id, agent := range m.agents {
+		status := strings.ToLower(strings.TrimSpace(agent.Status))
+		if status == "" || status == "running" || status == "retrying" {
+			agent.Status = "timeout"
+			agent.Error = reason
+			agent.FinishedAt = event.At
+			agent.Events = append(agent.Events, event)
+			m.agents[id] = agent
+		}
+	}
+}
+
 func (m *model) appendAgentDelta(event eventSummary) {
 	if event.AgentID == "" {
 		return
@@ -1975,7 +2094,14 @@ func (m *model) appendAgentDelta(event eventSummary) {
 		m.agentOrder = append(m.agentOrder, event.AgentID)
 	}
 	agent.Output += event.Delta
+	agent.StreamChunks++
+	agent.Events = append(agent.Events, sanitizedStreamEvent(event))
 	m.agents[event.AgentID] = agent
+}
+
+func sanitizedStreamEvent(event eventSummary) eventSummary {
+	event.Delta = ""
+	return event
 }
 
 func userFacingStreamAgent(agentID string) bool {
@@ -2662,7 +2788,16 @@ func (m model) toolsStatus() string {
 }
 
 func runningStatus(config runConfig) string {
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / timeout_ms=" + runTimeoutMS(config) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	idleTimeout := runTimeoutMS(config)
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+}
+
+func hardCapTimeoutMS(idleTimeout string) string {
+	timeout, err := strconv.Atoi(strings.TrimSpace(idleTimeout))
+	if err != nil || timeout <= 0 {
+		return "(invalid)"
+	}
+	return strconv.Itoa(timeout * 3)
 }
 
 func runWorkflowStatus(workflow runWorkflow) string {
@@ -2917,6 +3052,7 @@ func (m model) agentTreeLine(agent agentState) string {
 	depth := m.agentDepth(agent.ID)
 	indent := strings.Repeat("  ", depth)
 	status := emptyAs(agent.Status, "pending")
+	marker := agentStatusMarker(status)
 	attempt := agent.Attempt
 	if attempt == 0 {
 		attempt = 1
@@ -2925,7 +3061,7 @@ func (m model) agentTreeLine(agent agentState) string {
 	if strings.TrimSpace(agent.Decision.Mode) != "" {
 		decision = "  decision " + agent.Decision.Mode
 	}
-	return fmt.Sprintf("%s%s  %s  attempt %d%s", indent, agent.ID, status, attempt, decision)
+	return fmt.Sprintf("%s%s %s  %s  attempt %d%s", indent, marker, agent.ID, status, attempt, decision)
 }
 
 func (m model) agentDepth(id string) int {

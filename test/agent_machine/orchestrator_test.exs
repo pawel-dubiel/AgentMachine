@@ -125,6 +125,89 @@ defmodule AgentMachine.OrchestratorTest do
     assert Registry.lookup(AgentMachine.RunRegistry, {:run, run_id}) == []
   end
 
+  test "leased await cancels a run when the idle lease expires" do
+    run_id = "run-idle-timeout-#{System.unique_integer([:positive])}"
+
+    agents = [
+      %{
+        id: "slow",
+        provider: AgentMachine.TestProviders.LongRunning,
+        model: "test",
+        input: "sleep",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:timeout, run}} =
+             Orchestrator.run(agents,
+               run_id: run_id,
+               timeout: 40,
+               idle_timeout_ms: 40,
+               hard_timeout_ms: 200,
+               heartbeat_interval_ms: false
+             )
+
+    assert run.status == :timeout
+    assert run.error =~ "idle lease expired"
+    assert Enum.any?(run.events, &(&1.type == :run_timed_out))
+    assert run.tasks == %{}
+
+    assert [{task_supervisor, _}] =
+             Registry.lookup(AgentMachine.RunRegistry, {:task_supervisor, run_id})
+
+    assert Task.Supervisor.children(task_supervisor) == []
+  end
+
+  test "leased await completes past the idle lease when heartbeats show progress" do
+    agents = [
+      %{
+        id: "slow-but-healthy",
+        provider: AgentMachine.TestProviders.ShortSleeping,
+        model: "test",
+        input: "sleep",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 30,
+               idle_timeout_ms: 30,
+               hard_timeout_ms: 300,
+               heartbeat_interval_ms: 10
+             )
+
+    assert run.status == :completed
+    assert run.results["slow-but-healthy"].output == "finished"
+    assert Enum.any?(run.events, &(&1.type == :agent_heartbeat))
+    assert Enum.any?(run.events, &(&1.type == :run_lease_extended))
+  end
+
+  test "leased await cancels a healthy run at the hard cap" do
+    agents = [
+      %{
+        id: "slow",
+        provider: AgentMachine.TestProviders.LongRunning,
+        model: "test",
+        input: "sleep",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:timeout, run}} =
+             Orchestrator.run(agents,
+               timeout: 30,
+               idle_timeout_ms: 30,
+               hard_timeout_ms: 100,
+               heartbeat_interval_ms: 10
+             )
+
+    assert run.status == :timeout
+    assert run.error =~ "hard timeout reached"
+    assert Enum.any?(run.events, &(&1.type == :agent_heartbeat))
+    assert Enum.any?(run.events, &(&1.type == :run_timed_out))
+  end
+
   test "fails fast when required fields are missing" do
     agents = [
       %{
@@ -1200,6 +1283,50 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].status == :ok
   end
 
+  test "emits telemetry for run timeouts" do
+    parent = self()
+    handler_id = {:orchestrator_timeout_test, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [[:agent_machine, :run, :exception]],
+        &AgentMachine.TestTelemetryForwarder.handle/4,
+        parent
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    agents = [
+      %{
+        id: "slow",
+        provider: AgentMachine.TestProviders.LongRunning,
+        model: "test",
+        input: "sleep",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:timeout, _run}} =
+             Orchestrator.run(agents,
+               timeout: 30,
+               idle_timeout_ms: 30,
+               hard_timeout_ms: 120,
+               heartbeat_interval_ms: false
+             )
+
+    events = flush_telemetry([])
+
+    assert Enum.any?(
+             events,
+             &match?(
+               {[:agent_machine, :run, :exception], %{duration: _},
+                %{reason: "idle lease expired after 30ms without runtime activity"}},
+               &1
+             )
+           )
+  end
+
   defp tmp_root(prefix) do
     root = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer()}")
     File.mkdir_p!(root)
@@ -1840,6 +1967,23 @@ defmodule AgentMachine.TestProviders.LongRunning do
   @impl true
   def complete(%Agent{} = _agent, _opts) do
     Process.sleep(5_000)
+
+    {:ok,
+     %{
+       output: "finished",
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
+  end
+end
+
+defmodule AgentMachine.TestProviders.ShortSleeping do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = _agent, _opts) do
+    Process.sleep(80)
 
     {:ok,
      %{

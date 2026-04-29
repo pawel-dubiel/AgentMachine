@@ -31,6 +31,7 @@ defmodule AgentMachine.RunEventCollector do
   @impl true
   def handle_call({:emit, event}, _from, state) do
     state = emit_telemetry(event, state)
+    AgentMachine.RunServer.record_runtime_health(state.run_id, event)
 
     if is_function(state.event_sink, 1) do
       state.event_sink.(event)
@@ -56,6 +57,17 @@ defmodule AgentMachine.RunEventCollector do
   end
 
   defp emit_telemetry(%{type: :run_failed, run_id: run_id, reason: reason}, state) do
+    measurements = stop_measurements(state.run_started_at)
+
+    Telemetry.execute([:agent_machine, :run, :exception], measurements, %{
+      run_id: run_id,
+      reason: reason
+    })
+
+    state
+  end
+
+  defp emit_telemetry(%{type: :run_timed_out, run_id: run_id, reason: reason}, state) do
     measurements = stop_measurements(state.run_started_at)
 
     Telemetry.execute([:agent_machine, :run, :exception], measurements, %{

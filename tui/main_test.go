@@ -328,8 +328,8 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	if !strings.Contains(withoutTools, "router deterministic") {
 		t.Fatalf("expected deterministic router in running status, got %q", withoutTools)
 	}
-	if !strings.Contains(withoutTools, "timeout_ms="+defaultAgenticRunTimeoutMS) {
-		t.Fatalf("expected auto run timeout in running status, got %q", withoutTools)
+	if !strings.Contains(withoutTools, "idle_timeout_ms="+defaultAgenticRunTimeoutMS+" hard_cap_ms=720000") {
+		t.Fatalf("expected auto idle lease and hard cap in running status, got %q", withoutTools)
 	}
 
 	withTools := runningStatus(runConfig{
@@ -691,6 +691,47 @@ func TestAgentDetailRendersToolEvents(t *testing.T) {
 
 	if !strings.Contains(lines, "tool=write_file call=call-1 status=ok round=1") {
 		t.Fatalf("expected rendered tool event, got %q", lines)
+	}
+}
+
+func TestAgentDetailCompactsHeartbeatEvents(t *testing.T) {
+	lines := agentEventLines([]eventSummary{
+		{Type: "agent_started", AgentID: "builder", Summary: "builder started attempt 1"},
+		{Type: "agent_heartbeat", AgentID: "builder", Summary: "builder heartbeat", Status: "running"},
+		{Type: "agent_heartbeat", AgentID: "builder", Summary: "builder heartbeat", Status: "running"},
+		{Type: "agent_heartbeat", AgentID: "builder", Summary: "builder heartbeat", Status: "running"},
+	})
+
+	if strings.Count(lines, "builder heartbeat") != 1 || !strings.Contains(lines, "x3") {
+		t.Fatalf("expected compact heartbeat line, got %q", lines)
+	}
+}
+
+func TestAgentDetailShowsRunningPlaceholders(t *testing.T) {
+	m := model{
+		selectedAgent: "setup-nextjs",
+		agents: map[string]agentState{
+			"setup-nextjs": {
+				ID:        "setup-nextjs",
+				Status:    "running",
+				Attempt:   1,
+				StartedAt: "2026-04-25T10:00:00Z",
+				Events: []eventSummary{
+					{Type: "provider_request_started", AgentID: "setup-nextjs", Summary: "setup-nextjs sent provider request"},
+				},
+			},
+		},
+	}
+
+	view := m.agentDetailView()
+	for _, expected := range []string{
+		"(pending until agent finishes)",
+		"(provider request in progress; no streamed output yet)",
+		"(none so far)",
+	} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("expected %q in detail view, got %q", expected, view)
+		}
 	}
 }
 
@@ -1860,6 +1901,44 @@ func TestCodeEditFollowUpPromptRequiresCodeEditHarness(t *testing.T) {
 	}
 }
 
+func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "read-only",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "in home folder create me dir test1 and create a nice nextjs website"},
+		},
+	}
+
+	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected mutation intent but no write-capable tool harness is configured")
+	updated, handled := m.withRunPermissionError(err)
+
+	if !handled {
+		t.Fatal("expected router permission error to be handled")
+	}
+	if updated.pendingToolTask == "" {
+		t.Fatal("expected pending tool task")
+	}
+	if updated.pendingToolHarness != "local-files" {
+		t.Fatalf("expected local-files harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "filesystem permission required") ||
+		!strings.Contains(last, "required harness: local-files") ||
+		!strings.Contains(last, "active tool approval mode") {
+		t.Fatalf("expected permission prompt, got %q", last)
+	}
+}
+
 func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	home, err := os.UserHomeDir()
@@ -1889,6 +1968,9 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected permission retry to run agentic, got %q", result.activeConfig.Workflow)
+	}
 	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
 		t.Fatalf("expected pending tool request to be cleared, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
 	}
@@ -1916,6 +1998,9 @@ func TestAllowToolsApprovesPendingCodeEditRun(t *testing.T) {
 	}
 	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolRoot != "/tmp/agent-machine-home" || result.savedConfig.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
+	}
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected permission retry to run agentic, got %q", result.activeConfig.Workflow)
 	}
 	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
 		t.Fatalf("expected pending tool request to clear, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
@@ -2520,6 +2605,78 @@ func TestJSONLLineUpdatesLiveAgentTree(t *testing.T) {
 	}
 }
 
+func TestJSONLRunTimeoutMarksRunningAgentsTimedOut(t *testing.T) {
+	m := model{agents: map[string]agentState{}, eventAutoScroll: true}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"agent_started","run_id":"run-1","agent_id":"worker","parent_agent_id":"planner","attempt":1,"at":"2026-04-25T10:00:00Z"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"run_timed_out","run_id":"run-1","reason":"hard timeout reached after 3000ms","at":"2026-04-25T10:00:03Z"}}`)
+
+	agent := updated.agents["worker"]
+	if agent.Status != "timeout" {
+		t.Fatalf("expected timeout status, got %#v", agent)
+	}
+	if !strings.Contains(agent.Error, "hard timeout") {
+		t.Fatalf("expected timeout reason, got %#v", agent)
+	}
+}
+
+func TestAgentChecklistViewRendersStatusMarkers(t *testing.T) {
+	duration := 42
+	m := model{
+		running: true,
+		agents: map[string]agentState{
+			"planner": {
+				ID:        "planner",
+				Status:    "running",
+				Attempt:   1,
+				StartedAt: "2026-04-25T10:00:00Z",
+				Events: []eventSummary{
+					{Type: "agent_heartbeat", Summary: "planner heartbeat"},
+				},
+			},
+			"worker": {
+				ID:            "worker",
+				ParentAgentID: "planner",
+				Status:        "ok",
+				Attempt:       1,
+				DurationMS:    &duration,
+				Events: []eventSummary{
+					{Type: "agent_finished", Summary: "worker finished with ok"},
+				},
+			},
+			"failed": {
+				ID:            "failed",
+				ParentAgentID: "planner",
+				Status:        "error",
+				Attempt:       1,
+				Events: []eventSummary{
+					{Type: "agent_finished", Summary: "failed finished with error"},
+				},
+			},
+			"timed": {
+				ID:            "timed",
+				ParentAgentID: "planner",
+				Status:        "timeout",
+				Attempt:       1,
+				Events: []eventSummary{
+					{Type: "run_timed_out", Summary: "Run timed out: hard timeout reached"},
+				},
+			},
+		},
+		agentOrder: []string{"planner", "worker", "failed", "timed"},
+	}
+
+	view := m.agentChecklistView()
+	for _, expected := range []string{"[-] planner", "[x] worker", "[!] failed", "[T] timed"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("expected checklist to contain %q, got %q", expected, view)
+		}
+	}
+	if !strings.Contains(view, "parent=planner") {
+		t.Fatalf("expected parent context in checklist, got %q", view)
+	}
+}
+
 func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	m := model{agents: map[string]agentState{}}
 
@@ -2533,7 +2690,7 @@ func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	}
 }
 
-func TestJSONLAssistantDeltaUpdatesDraftWithoutEventLogNoise(t *testing.T) {
+func TestJSONLAssistantDeltaUpdatesDraftWithoutLiveFeedNoise(t *testing.T) {
 	m := model{agents: map[string]agentState{}, eventAutoScroll: true}
 
 	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"assistant_delta","run_id":"run-1","agent_id":"assistant","attempt":1,"delta":"hel","summary":"assistant streamed text","details":{"attempt":1},"at":"2026-04-25T10:00:00Z"}}`)
@@ -2548,8 +2705,13 @@ func TestJSONLAssistantDeltaUpdatesDraftWithoutEventLogNoise(t *testing.T) {
 	if len(updated.eventLog) != 0 {
 		t.Fatalf("expected assistant deltas to stay out of event log, got %d", len(updated.eventLog))
 	}
-	if len(updated.agents["assistant"].Events) != 0 {
-		t.Fatalf("expected assistant delta events to stay out of agent event list, got %#v", updated.agents["assistant"].Events)
+	if len(updated.agents["assistant"].Events) != 2 {
+		t.Fatalf("expected assistant delta activity in agent event list, got %#v", updated.agents["assistant"].Events)
+	}
+	for _, event := range updated.agents["assistant"].Events {
+		if event.Delta != "" {
+			t.Fatalf("expected stored stream event content to be hidden, got %#v", event)
+		}
 	}
 }
 

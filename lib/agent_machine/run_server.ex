@@ -7,6 +7,18 @@ defmodule AgentMachine.RunServer do
 
   alias AgentMachine.{AgentResult, AgentRunner}
 
+  @default_heartbeat_interval_ms 10_000
+  @runtime_health_events MapSet.new([
+                           :provider_request_started,
+                           :provider_request_finished,
+                           :provider_request_failed,
+                           :assistant_delta,
+                           :assistant_done,
+                           :tool_call_started,
+                           :tool_call_finished,
+                           :tool_call_failed
+                         ])
+
   def start_link({run_id, agents, finalizer, opts})
       when is_binary(run_id) and is_list(agents) and is_list(opts) do
     GenServer.start_link(__MODULE__, {run_id, agents, finalizer, opts}, name: via_name(run_id))
@@ -14,6 +26,25 @@ defmodule AgentMachine.RunServer do
 
   def snapshot(pid) when is_pid(pid) do
     GenServer.call(pid, :snapshot)
+  end
+
+  def timeout(pid, reason, metadata \\ %{}) when is_pid(pid) and is_binary(reason) do
+    GenServer.call(pid, {:timeout, reason, metadata})
+  end
+
+  def extend_lease(pid, metadata) when is_pid(pid) and is_map(metadata) do
+    GenServer.call(pid, {:extend_lease, metadata})
+  end
+
+  def record_runtime_health(run_id, event) when is_binary(run_id) and is_map(event) do
+    if runtime_health_event?(event) do
+      case Registry.lookup(AgentMachine.RunRegistry, {:run, run_id}) do
+        [{pid, _value}] -> GenServer.cast(pid, {:runtime_health, event})
+        [] -> :ok
+      end
+    else
+      :ok
+    end
   end
 
   def via_name(run_id) when is_binary(run_id) do
@@ -46,15 +77,38 @@ defmodule AgentMachine.RunServer do
       step_count: length(agents),
       error: nil,
       started_at: DateTime.utc_now(),
-      finished_at: nil
+      finished_at: nil,
+      heartbeat_interval_ms: heartbeat_interval_ms_from_opts(opts),
+      health_event_count: health_event_count(events),
+      last_health_at: last_event_time(events)
     }
 
+    schedule_heartbeat(run)
     {:ok, run}
   end
 
   @impl true
   def handle_call(:snapshot, _from, run) do
     {:reply, run, run}
+  end
+
+  def handle_call({:timeout, reason, metadata}, _from, run) do
+    run = timeout_run(run, reason, metadata)
+    {:reply, run, run}
+  end
+
+  def handle_call({:extend_lease, metadata}, _from, run) do
+    run = append_event(run, run_lease_extended_event(run.id, metadata))
+    {:reply, :ok, run}
+  end
+
+  @impl true
+  def handle_cast({:runtime_health, event}, %{status: :running} = run) do
+    {:noreply, record_health(run, event)}
+  end
+
+  def handle_cast({:runtime_health, _event}, run) do
+    {:noreply, run}
   end
 
   @impl true
@@ -66,6 +120,19 @@ defmodule AgentMachine.RunServer do
     else
       {:noreply, run}
     end
+  end
+
+  def handle_info(:agent_heartbeat, run) do
+    run =
+      if run.status == :running and map_size(run.tasks) > 0 do
+        run
+        |> append_events(agent_heartbeat_events(run))
+      else
+        run
+      end
+
+    schedule_heartbeat(run)
+    {:noreply, run}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, run) do
@@ -203,7 +270,8 @@ defmodule AgentMachine.RunServer do
   defp finish_or_fail({:ok, updated_run}, _run), do: finish_if_idle(updated_run)
   defp finish_or_fail({:error, reason}, run), do: fail_run(run, reason)
 
-  defp start_ready_pending_agents(%{status: :failed} = run), do: run
+  defp start_ready_pending_agents(%{status: status} = run) when status in [:failed, :timeout],
+    do: run
 
   defp start_ready_pending_agents(run) do
     {ready_agents, pending_agents} = split_ready_agents(run.pending_agents, run.results)
@@ -323,9 +391,7 @@ defmodule AgentMachine.RunServer do
   end
 
   defp fail_run(run, reason) do
-    Enum.each(run.tasks, fn {_ref, task} ->
-      Process.exit(task.pid, :kill)
-    end)
+    kill_active_work(run)
 
     %{
       run
@@ -336,6 +402,24 @@ defmodule AgentMachine.RunServer do
         finished_at: DateTime.utc_now()
     }
     |> append_event(run_failed_event(run.id, reason))
+  end
+
+  defp timeout_run(%{status: status} = run, _reason, _metadata)
+       when status in [:completed, :failed, :timeout],
+       do: run
+
+  defp timeout_run(run, reason, metadata) do
+    kill_active_work(run)
+
+    %{
+      run
+      | tasks: %{},
+        status: :timeout,
+        usage: aggregate_usage(run.results),
+        error: reason,
+        finished_at: DateTime.utc_now()
+    }
+    |> append_event(run_timed_out_event(run.id, reason, metadata))
   end
 
   defp has_next_agents?(%AgentResult{next_agents: agents}) when is_list(agents), do: agents != []
@@ -382,12 +466,18 @@ defmodule AgentMachine.RunServer do
 
   defp append_event(run, event) do
     emit_event!(run.opts, event)
-    %{run | events: run.events ++ [event]}
+
+    run
+    |> Map.update!(:events, &(&1 ++ [event]))
+    |> record_health(event)
   end
 
   defp append_events(run, events) do
     emit_events!(run.opts, events)
-    %{run | events: run.events ++ events}
+
+    run
+    |> Map.update!(:events, &(&1 ++ events))
+    |> record_health(events)
   end
 
   defp append_stored_events(run, events) do
@@ -407,6 +497,113 @@ defmodule AgentMachine.RunServer do
           {:ok, sink} -> sink.(event)
         end
     end
+  end
+
+  defp record_health(run, events) when is_list(events) do
+    Enum.reduce(events, run, &record_health(&2, &1))
+  end
+
+  defp record_health(run, event) when is_map(event) do
+    if health_event?(event) do
+      %{
+        run
+        | health_event_count: run.health_event_count + 1,
+          last_health_at: Map.get(event, :at) || DateTime.utc_now()
+      }
+    else
+      run
+    end
+  end
+
+  defp health_event?(%{type: :run_lease_extended}), do: false
+  defp health_event?(%{type: type}) when is_atom(type), do: true
+  defp health_event?(_event), do: false
+
+  defp runtime_health_event?(%{type: type}) when is_atom(type),
+    do: MapSet.member?(@runtime_health_events, type)
+
+  defp runtime_health_event?(_event), do: false
+
+  defp health_event_count(events) do
+    Enum.count(events, &health_event?/1)
+  end
+
+  defp last_event_time(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(&Map.get(&1, :at))
+    |> Kernel.||(DateTime.utc_now())
+  end
+
+  defp schedule_heartbeat(%{status: :running, heartbeat_interval_ms: interval_ms})
+       when is_integer(interval_ms) and interval_ms > 0 do
+    Process.send_after(self(), :agent_heartbeat, interval_ms)
+    :ok
+  end
+
+  defp schedule_heartbeat(_run), do: :ok
+
+  defp heartbeat_interval_ms_from_opts(opts) do
+    case Keyword.fetch(opts, :heartbeat_interval_ms) do
+      :error ->
+        @default_heartbeat_interval_ms
+
+      {:ok, false} ->
+        false
+
+      {:ok, interval_ms} when is_integer(interval_ms) and interval_ms > 0 ->
+        interval_ms
+
+      {:ok, interval_ms} ->
+        raise ArgumentError,
+              ":heartbeat_interval_ms must be a positive integer or false, got: #{inspect(interval_ms)}"
+    end
+  end
+
+  defp agent_heartbeat_events(run) do
+    Enum.map(run.tasks, fn {_ref, task} ->
+      %{
+        type: :agent_heartbeat,
+        run_id: run.id,
+        agent_id: task.agent_id,
+        parent_agent_id: task.parent_agent_id,
+        attempt: task.attempt,
+        status: :running,
+        at: DateTime.utc_now()
+      }
+    end)
+  end
+
+  defp kill_active_work(run) do
+    Enum.each(run.tasks, fn {_ref, task} ->
+      Process.exit(task.pid, :kill)
+    end)
+
+    stop_tool_sessions(run.opts)
+  end
+
+  defp stop_tool_sessions(opts) do
+    case Keyword.fetch(opts, :tool_session_supervisor) do
+      {:ok, supervisor} ->
+        supervisor
+        |> safe_supervisor_children()
+        |> Enum.each(&terminate_tool_session_child(supervisor, &1))
+
+      :error ->
+        :ok
+    end
+  end
+
+  defp terminate_tool_session_child(supervisor, {_id, pid, _type, _modules}) when is_pid(pid) do
+    DynamicSupervisor.terminate_child(supervisor, pid)
+  end
+
+  defp terminate_tool_session_child(_supervisor, _child), do: :ok
+
+  defp safe_supervisor_children(supervisor) do
+    DynamicSupervisor.which_children(supervisor)
+  catch
+    :exit, _reason -> []
   end
 
   defp run_started_event(run_id) do
@@ -504,6 +701,32 @@ defmodule AgentMachine.RunServer do
       type: :run_failed,
       run_id: run_id,
       reason: reason,
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp run_lease_extended_event(run_id, metadata) do
+    %{
+      type: :run_lease_extended,
+      run_id: run_id,
+      reason: Map.fetch!(metadata, :reason),
+      idle_timeout_ms: Map.fetch!(metadata, :idle_timeout_ms),
+      hard_timeout_ms: Map.fetch!(metadata, :hard_timeout_ms),
+      elapsed_ms: Map.fetch!(metadata, :elapsed_ms),
+      remaining_idle_ms: Map.fetch!(metadata, :remaining_idle_ms),
+      remaining_hard_ms: Map.fetch!(metadata, :remaining_hard_ms),
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp run_timed_out_event(run_id, reason, metadata) do
+    %{
+      type: :run_timed_out,
+      run_id: run_id,
+      reason: reason,
+      idle_timeout_ms: Map.fetch!(metadata, :idle_timeout_ms),
+      hard_timeout_ms: Map.fetch!(metadata, :hard_timeout_ms),
+      elapsed_ms: Map.fetch!(metadata, :elapsed_ms),
       at: DateTime.utc_now()
     }
   end
