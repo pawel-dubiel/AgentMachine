@@ -4,6 +4,11 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Switched provider SSE streaming from `:httpc` to Gun with HTTP/2 preferred
+  by default, HTTP/1.1 fallback/configuration, and local SSE transport coverage.
+- Added paid OpenRouter direct streaming probe tests for the provider SSE path
+  and a raw `:gun` path, measuring time-to-first-delta without
+  ClientRunner, workflows, tools, or the TUI.
 - Improved the TUI agent detail view with running-state placeholders,
   sanitized stream activity, elapsed duration, and compact heartbeat rendering.
 - Converted auto-router write-capability failures in the TUI into the same

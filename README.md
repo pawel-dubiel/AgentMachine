@@ -178,6 +178,10 @@ current UTC time/date, local timezone, selected workflow route, and concise
 AgentMachine capability facts. These facts ground normal chat answers without
 exposing tools or requiring a tool call.
 
+Remote provider SSE streaming uses Gun and prefers HTTP/2 for HTTPS endpoints
+by default. Set `AGENT_MACHINE_HTTP_PROTOCOL=http1`, `http2`, `http2-only`, or
+`auto` to compare or force a transport mode when diagnosing provider streaming.
+
 ## Workflows
 
 Choose one workflow for each run:

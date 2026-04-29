@@ -30,6 +30,7 @@ defmodule AgentMachine.MixProject do
   defp deps do
     [
       {:nx, "~> 0.6"},
+      {:gun, "~> 2.2"},
       {:ortex, "~> 0.1.10"},
       {:telemetry, "~> 1.0"},
       {:tokenizers, "~> 0.5.1"},
