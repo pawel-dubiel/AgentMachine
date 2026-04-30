@@ -325,6 +325,11 @@ approval level. A prompt should clearly request browser/MCP work, for example:
 Use agents and Playwright MCP to open https://example.com and report the page title.
 ```
 
+Auto mode also treats Google/search/news-style research prompts as browser work
+when the Playwright MCP browser tools are configured.
+If browser work is detected while approval is too narrow, the TUI prompts for
+MCP browser full-access and retries as an MCP-only run.
+
 For a standalone example config, see [examples/playwright.mcp.json](examples/playwright.mcp.json).
 
 ## Skills

@@ -247,6 +247,44 @@ defmodule AgentMachine.OpenRouterPaidTest do
     assert assistant.tool_results != %{}
   end
 
+  @tag :openrouter_auto_web_browse_mcp_paid
+  test "auto Google news request delegates to an MCP browser worker through OpenRouter" do
+    marker = "POLAND_NEWS_PAID_MARKER_42"
+    script = fake_playwright_mcp_stdio_server!(marker)
+    config_path = playwright_mcp_config_file!(script)
+
+    summary =
+      ClientRunner.run!(%{
+        task:
+          "research me in google the latest news in poland. If the browser results contain an uppercase marker string, include it exactly in your answer.",
+        workflow: :auto,
+        provider: :openrouter,
+        model: paid_model(),
+        timeout_ms: 180_000,
+        max_steps: 6,
+        max_attempts: 1,
+        http_timeout_ms: 120_000,
+        pricing: @pricing,
+        tool_harnesses: [:mcp],
+        tool_timeout_ms: 30_000,
+        tool_max_rounds: 6,
+        tool_approval_mode: :full_access,
+        mcp_config_path: config_path
+      })
+
+    assert summary.status == "completed"
+    assert summary.workflow_route.selected == "agentic"
+    assert summary.workflow_route.tool_intent == "web_browse"
+    assert summary.workflow_route.reason == "web_browse_intent_with_mcp_browser"
+    assert summary.final_output =~ marker
+    assert event_with?(summary.events, :tool, "mcp_playwright_browser_navigate")
+    assert event_with?(summary.events, :tool, "mcp_playwright_browser_snapshot")
+
+    planner = Map.fetch!(summary.results, "planner")
+    assert planner.decision.mode == "delegate"
+    assert planner.decision.delegated_agent_ids != []
+  end
+
   @tag :playwright_mcp
   @tag timeout: 300_000
   test "ClientRunner lets OpenRouter drive Playwright MCP against a local page" do
@@ -550,6 +588,43 @@ defmodule AgentMachine.OpenRouterPaidTest do
     path
   end
 
+  defp playwright_mcp_config_file!(script) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-paid-fake-playwright-mcp-#{System.unique_integer([:positive])}.json"
+      )
+
+    File.write!(
+      path,
+      JSON.encode!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "browser_navigate",
+                "permission" => "mcp_playwright_browser_navigate",
+                "risk" => "network"
+              },
+              %{
+                "name" => "browser_snapshot",
+                "permission" => "mcp_playwright_browser_snapshot",
+                "risk" => "read"
+              }
+            ]
+          }
+        ]
+      })
+    )
+
+    path
+  end
+
   defp playwright_mcp_config_file! do
     path =
       Path.join(
@@ -650,6 +725,39 @@ defmodule AgentMachine.OpenRouterPaidTest do
           ;;
         *'"method":"tools/call"'*)
           printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}],"structuredContent":{"marker":"%s"}}}\\n' "$id" "#{marker}" "#{marker}"
+          ;;
+      esac
+    done
+    """
+
+    File.write!(path, script)
+    File.chmod!(path, 0o700)
+    path
+  end
+
+  defp fake_playwright_mcp_stdio_server!(marker) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-paid-fake-playwright-#{System.unique_integer([:positive])}.sh"
+      )
+
+    script = """
+    #!/bin/sh
+    while IFS= read -r line; do
+      id=$(printf '%s\\n' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+      case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18"}}\\n' "$id"
+          ;;
+        *'"method":"tools/list"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"browser_navigate","inputSchema":{"type":"object"}},{"name":"browser_snapshot","inputSchema":{"type":"object"}}]}}\\n' "$id"
+          ;;
+        *'"method":"tools/call"'*'"name":"browser_navigate"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"navigated to Google news search for Poland"}],"structuredContent":{"status":"navigated"}}}\\n' "$id"
+          ;;
+        *'"method":"tools/call"'*'"name":"browser_snapshot"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"Google results snapshot. Latest Poland headline marker: %s"}],"structuredContent":{"marker":"%s","headline":"Latest Poland headline marker: %s"}}}\\n' "$id" "#{marker}" "#{marker}" "#{marker}"
           ;;
       esac
     done

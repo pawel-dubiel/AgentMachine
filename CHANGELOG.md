@@ -4,6 +4,12 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Converted web-browse full-access router failures in the TUI into an MCP
+  browser approval selector that retries with MCP-only full-access settings.
+- Routed Google/news research wording through Playwright MCP web browsing,
+  strengthened agentic web-browse delegation prompts, omitted assistant
+  refusals from TUI conversation context, and added a paid OpenRouter MCP
+  browser worker test for the auto route.
 - Added broader local intent classifier and router permission matrix tests with
   complex multilingual prompts, follow-up context, false-positive guards, and an
   opt-in real ONNX classifier scenario table.

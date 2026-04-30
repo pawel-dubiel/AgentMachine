@@ -97,7 +97,10 @@ defmodule AgentMachine.RunContextPromptTest do
     assert "write_file" in tools
     assert instruction =~ "inspect that exact relative path"
     assert instruction =~ "Use search_files only for content search under a narrow path"
-    assert instruction =~ "Do not claim file or directory changes unless tool_results confirm"
+    assert instruction =~ "Use MCP browser tools for web browsing"
+
+    assert instruction =~
+             "Do not claim file, directory, browser, or external changes unless tool_results confirm"
   end
 
   test "includes exact allowed test commands in tool context" do

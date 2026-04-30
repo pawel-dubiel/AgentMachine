@@ -2097,6 +2097,49 @@ func TestRouterTestIntentApprovalErrorShowsCodeEditSelector(t *testing.T) {
 	}
 }
 
+func TestRouterWebBrowseApprovalErrorShowsMCPBrowserSelector(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+			MCPConfig:     "/tmp/agent-machine.mcp.json",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "reearch me in google latest news in Poland"},
+		},
+	}
+
+	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected web browse intent but :tool_approval_mode must be :full_access for network-risk MCP browser tools")
+	updated, handled := m.withRunPermissionError(err)
+
+	if !handled {
+		t.Fatal("expected web browse approval error to be handled")
+	}
+	if updated.pendingToolHarness != pendingHarnessMCPBrowser {
+		t.Fatalf("expected MCP browser pending harness, got %q", updated.pendingToolHarness)
+	}
+	if updated.pendingToolRoot != "" {
+		t.Fatalf("expected no filesystem root for MCP browser approval, got %q", updated.pendingToolRoot)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "MCP browser permission required") ||
+		!strings.Contains(last, "full-access") ||
+		!strings.Contains(last, "/tmp/agent-machine.mcp.json") {
+		t.Fatalf("expected MCP browser permission prompt, got %q", last)
+	}
+	view := updated.View()
+	if !strings.Contains(view, "harness: "+pendingHarnessMCPBrowser) ||
+		!strings.Contains(view, "> Full access") ||
+		!strings.Contains(view, "Deny") {
+		t.Fatalf("expected MCP browser permission selector, got %q", view)
+	}
+}
+
 func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	home, err := os.UserHomeDir()
@@ -2131,6 +2174,53 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	}
 	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
 		t.Fatalf("expected pending tool request to be cleared, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
+	}
+}
+
+func TestAllowToolsApprovesPendingMCPBrowserRun(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	m := model{
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		pendingToolTask:    "reearch me in google latest news in Poland",
+		pendingToolHarness: pendingHarnessMCPBrowser,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+			MCPConfig:     "/tmp/agent-machine.mcp.json",
+		},
+	}
+
+	updated, cmd := m.handleCommand("/allow-tools")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command after allowing MCP browser tools")
+	}
+	if !result.running {
+		t.Fatal("expected run to start after allowing MCP browser tools")
+	}
+	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" {
+		t.Fatalf("expected MCP-only retry to disable filesystem tools, got %#v", result.savedConfig)
+	}
+	if result.savedConfig.MCPConfig != "/tmp/agent-machine.mcp.json" ||
+		result.savedConfig.ToolTimeout != defaultMCPToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultMCPToolMaxRounds ||
+		result.savedConfig.ToolApproval != "full-access" {
+		t.Fatalf("unexpected MCP browser tool config: %#v", result.savedConfig)
+	}
+	if result.activeConfig.Workflow != workflowAuto {
+		t.Fatalf("expected MCP browser approval retry to run auto workflow, got %q", result.activeConfig.Workflow)
+	}
+	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
+		t.Fatalf("expected pending MCP browser request to clear, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
 	}
 }
 
@@ -2436,12 +2526,31 @@ func TestRecentConversationMessagesSkipsSystemMessages(t *testing.T) {
 		{Role: "system", Text: "running..."},
 		{Role: "user", Text: "one"},
 		{Role: "assistant", Text: "two"},
+		{Role: "user", Text: "three"},
 	}
 
 	selected := recentConversationMessages(messages, 6)
 
-	if len(selected) != 2 || selected[0].Text != "one" || selected[1].Text != "two" {
+	if len(selected) != 2 || selected[0].Text != "one" || selected[1].Text != "three" {
 		t.Fatalf("unexpected selected messages: %#v", selected)
+	}
+}
+
+func TestTaskConversationContextOmitsAssistantRefusals(t *testing.T) {
+	m := model{
+		messages: []chatMessage{
+			{Role: "user", Text: "research me in google the latest news in poland"},
+			{Role: "assistant", Text: "this chat route itself has no tools or workers; use agents to gather news"},
+		},
+	}
+
+	task := m.taskWithConversationContext("you playwright mcp")
+
+	if strings.Contains(task, "chat route") || strings.Contains(task, "use agents") {
+		t.Fatalf("expected assistant refusal to be omitted from context, got %q", task)
+	}
+	if !strings.Contains(task, "research me in google the latest news in poland") {
+		t.Fatalf("expected prior user request in context, got %q", task)
 	}
 }
 

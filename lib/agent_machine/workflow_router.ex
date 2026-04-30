@@ -515,7 +515,16 @@ defmodule AgentMachine.WorkflowRouter do
         "read website",
         "read web",
         "inspect website",
-        "inspect web"
+        "inspect web",
+        "google",
+        "search google",
+        "search web",
+        "search the web",
+        "research",
+        "look up",
+        "latest news",
+        "news today",
+        "latest headlines"
       ])
 
     web_action? and web_browse_target?(normalized)
@@ -529,6 +538,9 @@ defmodule AgentMachine.WorkflowRouter do
       "url",
       "browser",
       "playwright",
+      "google",
+      "news",
+      "headlines",
       "http",
       "www.",
       "strona",

@@ -155,12 +155,14 @@ defmodule AgentMachine.Workflows.Agentic do
 
     Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
     Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
-    If the task needs external side effects such as writing files or creating directories, you MUST create a worker agent for that exact action and require it to use available tools.
+    If the task needs external side effects such as writing files, creating directories, browsing the web, calling MCP tools, or running commands, you MUST create a worker agent for that exact action and require it to use available tools.
+    If runtime facts show workflow_route.tool_intent is "web_browse", you MUST use decision mode "delegate" and create exactly one worker that uses the available MCP browser tools. Do not ask for a website when the user gives a search source or query such as Google, latest news, today, headlines, or a named topic; construct the browser task from that request.
 
     Worker briefing rules:
     - Include exact paths, requested outcome, relevant context, and success evidence in each worker input.
     - Preserve exact user-provided patch, command, path, and file content text in worker input when delegating.
     - State which tools the worker should use when side effects are required.
+    - For web_browse work, tell the worker to call MCP browser navigation first, then MCP browser snapshot, and then summarize only evidence from tool_results.
     - Tell workers to report partial failures and tool errors instead of pretending the task is complete.
     - Do not write vague prompts like "based on your findings, fix it"; synthesize the task before delegating.
 
@@ -178,6 +180,7 @@ defmodule AgentMachine.Workflows.Agentic do
     You are a worker agent running inside AgentMachine.
     Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
     Inspect named files or directories before changing them when the task depends on existing state.
+    For MCP browser work, navigate to the requested page or search URL first, then capture a browser snapshot before summarizing. For Google/news-style requests, construct a search URL from the user's query when no direct URL is provided.
     Do not claim that you created, changed, deleted, read, browsed, patched, or ran anything unless tool_results confirm it.
     If a tool fails, times out, lacks permission, or reaches a limit, report the exact partial state and stop inventing progress.
     Keep the final worker output concise: completed work, confirmed side effects, failures, and anything not verified.

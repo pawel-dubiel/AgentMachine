@@ -236,7 +236,7 @@ func (m model) pendingToolPermissionView() string {
 		"",
 	}
 
-	options := pendingToolOptions()
+	options := m.pendingToolOptions()
 	selected := m.pendingToolChoice
 	if selected < 0 || selected >= len(options) {
 		selected = 0

@@ -18,6 +18,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const pendingHarnessMCPBrowser = "mcp-browser"
+
 type summary struct {
 	RunID         string                      `json:"run_id"`
 	Status        string                      `json:"status"`
@@ -527,10 +529,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingToolChoice = 0
 				return m.applyPendingToolChoice()
 			case "y":
-				m.pendingToolChoice = 1
+				m.pendingToolChoice = pendingFullAccessChoice(m.pendingToolOptions())
 				return m.applyPendingToolChoice()
 			case "d", "esc":
-				m.pendingToolChoice = 2
+				m.pendingToolChoice = len(m.pendingToolOptions()) - 1
 				return m.applyPendingToolChoice()
 			}
 		}
@@ -862,6 +864,13 @@ func (m model) withRunPermissionError(err error) (model, bool) {
 }
 
 func (m model) permissionPromptFromRunError(text string) (string, string, string, bool) {
+	if routerWebBrowseApprovalError(text) {
+		if strings.TrimSpace(m.savedConfig.MCPConfig) == "" {
+			return "", "", "", false
+		}
+		return mcpBrowserPermissionText(m.savedConfig.MCPConfig), "", pendingHarnessMCPBrowser, true
+	}
+
 	if !routerWriteCapabilityError(text) {
 		return "", "", "", false
 	}
@@ -889,6 +898,10 @@ func routerWriteCapabilityError(text string) bool {
 		strings.Contains(text, "auto workflow detected code mutation intent but :code_edit tool harness is not configured") ||
 		strings.Contains(text, "auto workflow detected test intent but :code_edit tool harness is not configured") ||
 		strings.Contains(text, "auto workflow detected test intent but :tool_approval_mode must be :full_access")
+}
+
+func routerWebBrowseApprovalError(text string) bool {
+	return strings.Contains(text, "auto workflow detected web browse intent but :tool_approval_mode must be :full_access")
 }
 
 func requiredHarnessForRouterError(text string, task string) string {
@@ -959,7 +972,7 @@ func recentConversationMessages(messages []chatMessage, limit int) []chatMessage
 	selected := make([]chatMessage, 0, limit)
 	for i := len(messages) - 1; i >= 0 && len(selected) < limit; i-- {
 		message := messages[i]
-		if message.Role != "user" && message.Role != "assistant" {
+		if message.Role != "user" {
 			continue
 		}
 		if strings.TrimSpace(message.Text) == "" {
@@ -1222,6 +1235,10 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 		return m, nil
 	}
 
+	if m.pendingToolHarness == pendingHarnessMCPBrowser {
+		return m.handleAllowMCPBrowserToolsCommand(args, approval)
+	}
+
 	root := m.pendingToolRoot
 	if root == "" {
 		var err error
@@ -1257,6 +1274,48 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	return m.startRunWithWorkflow(task, workflowAgentic)
 }
 
+func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string) (tea.Model, tea.Cmd) {
+	if len(args) == 1 && approval != "full-access" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP browser tools require full-access approval"})
+		return m, nil
+	}
+
+	if strings.TrimSpace(m.savedConfig.MCPConfig) == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP browser tools require an MCP config"})
+		return m, nil
+	}
+
+	m.savedConfig.ToolHarness = ""
+	m.savedConfig.ToolRoot = ""
+	m.savedConfig.TestCommands = nil
+	m.savedConfig.ToolTimeout = defaultMCPToolTimeout
+	m.savedConfig.ToolMaxRounds = defaultMCPToolMaxRounds
+	m.savedConfig.ToolApproval = "full-access"
+
+	if err := validateToolConfig(runConfig{
+		ToolTimeout:   m.savedConfig.ToolTimeout,
+		ToolMaxRounds: m.savedConfig.ToolMaxRounds,
+		ToolApproval:  m.savedConfig.ToolApproval,
+		MCPConfig:     m.savedConfig.MCPConfig,
+	}); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	task := m.pendingToolTask
+	m.pendingToolTask = ""
+	m.pendingToolRoot = ""
+	m.pendingToolHarness = ""
+	m.pendingToolChoice = 0
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed MCP browser tools approval=full-access"})
+	return m.startRunWithWorkflow(task, workflowAuto)
+}
+
 type pendingToolOption struct {
 	Label       string
 	Description string
@@ -1284,13 +1343,40 @@ func pendingToolOptions() []pendingToolOption {
 	}
 }
 
+func (m model) pendingToolOptions() []pendingToolOption {
+	if m.pendingToolHarness == pendingHarnessMCPBrowser {
+		return []pendingToolOption{
+			{
+				Label:       "Full access",
+				Description: "Enable MCP browser network tools and retry now.",
+				Approval:    "full-access",
+			},
+			{
+				Label:       "Deny",
+				Description: "Decline this browser tool request; no run starts.",
+				Deny:        true,
+			},
+		}
+	}
+	return pendingToolOptions()
+}
+
+func pendingFullAccessChoice(options []pendingToolOption) int {
+	for index, option := range options {
+		if option.Approval == "full-access" {
+			return index
+		}
+	}
+	return 0
+}
+
 func (m *model) movePendingToolChoice(delta int) {
-	options := pendingToolOptions()
+	options := m.pendingToolOptions()
 	m.pendingToolChoice = (m.pendingToolChoice + delta + len(options)) % len(options)
 }
 
 func (m model) applyPendingToolChoice() (tea.Model, tea.Cmd) {
-	options := pendingToolOptions()
+	options := m.pendingToolOptions()
 	if m.pendingToolChoice < 0 || m.pendingToolChoice >= len(options) {
 		m.pendingToolChoice = 0
 	}
@@ -2763,6 +2849,16 @@ func toolPermissionText(reason string, harness string, root string, activeRoot s
 		"Run /deny-tools to decline.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func mcpBrowserPermissionText(configPath string) string {
+	return strings.Join([]string{
+		"MCP browser permission required: browser navigation uses network-risk tools and requires full-access approval.",
+		"mcp config: " + configPath,
+		"Use the selector below to approve or deny this request.",
+		"Run /allow-tools or /yolo-tools to enable MCP browser full-access and retry now.",
+		"Run /deny-tools to decline.",
+	}, "\n")
 }
 
 func requiredWriteHarness(task string) string {

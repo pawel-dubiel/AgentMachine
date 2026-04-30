@@ -75,7 +75,7 @@ defmodule AgentMachine.RunContextPrompt do
           available_tools: tool_names!(tools),
           test_commands: Keyword.get(opts, :test_commands, []),
           instruction:
-            "Use tools for external side effects. For filesystem tools, use paths relative to tool_root unless an absolute path is inside tool_root. When the user names a directory or file, inspect that exact relative path with list_files, file_info, or read_file before using search_files. Use search_files only for content search under a narrow path, not to locate file or directory names across the whole tool_root. If run_test_command is available, use only an exact command from test_commands. Do not claim file or directory changes unless tool_results confirm them."
+            "Use tools for external side effects. For filesystem tools, use paths relative to tool_root unless an absolute path is inside tool_root. When the user names a directory or file, inspect that exact relative path with list_files, file_info, or read_file before using search_files. Use search_files only for content search under a narrow path, not to locate file or directory names across the whole tool_root. Use MCP browser tools for web browsing: navigate to the requested page or search URL first, then capture a snapshot before summarizing. If run_test_command is available, use only an exact command from test_commands. Do not claim file, directory, browser, or external changes unless tool_results confirm them."
         }
 
       {:ok, []} ->

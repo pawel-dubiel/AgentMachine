@@ -454,8 +454,11 @@ defmodule AgentMachine.ClientRunnerTest do
     assert planner.instructions =~ "The Elixir runtime parses that JSON"
     assert planner.instructions =~ "Worker agents start from the worker input/instructions"
     assert planner.instructions =~ "Do not predict or fabricate worker results"
+    assert planner.instructions =~ "web_browse"
+    assert planner.instructions =~ "MCP browser"
     assert worker_instructions =~ "You are a worker agent running inside AgentMachine"
     assert worker_instructions =~ "tool_results confirm it"
+    assert worker_instructions =~ "MCP browser"
     assert Keyword.fetch!(opts, :max_steps) == 6
     finalizer = Keyword.fetch!(opts, :finalizer)
     assert finalizer.id == "finalizer"

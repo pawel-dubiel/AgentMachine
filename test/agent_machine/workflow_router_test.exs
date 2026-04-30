@@ -401,6 +401,25 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.tools_exposed
   end
 
+  test "routes Google news research wording to web browse with Playwright MCP" do
+    route =
+      WorkflowRouter.route!(%WorkflowRouter{
+        requested_workflow: :auto,
+        task: "research me in google the latest news in poland",
+        pending_action: nil,
+        recent_context: nil,
+        tool_harnesses: [:mcp],
+        approval_mode: :full_access,
+        test_commands: [],
+        mcp_config: playwright_mcp_config()
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "web_browse"
+    assert route.reason == "web_browse_intent_with_mcp_browser"
+    assert route.tools_exposed
+  end
+
   test "fails fast for web browse intent without Playwright MCP browser tool" do
     assert_raise ArgumentError, ~r/no MCP browser network tool/, fn ->
       WorkflowRouter.route!(%WorkflowRouter{
