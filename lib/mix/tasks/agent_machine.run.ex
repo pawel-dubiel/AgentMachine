@@ -34,6 +34,11 @@ defmodule Mix.Tasks.AgentMachine.Run do
     json: :boolean,
     jsonl: :boolean,
     stream_response: :boolean,
+    context_window_tokens: :integer,
+    context_warning_percent: :integer,
+    run_context_compaction: :string,
+    run_context_compact_percent: :integer,
+    max_context_compactions: :integer,
     router_mode: :string,
     router_model_dir: :string,
     router_timeout_ms: :integer,
@@ -194,6 +199,11 @@ defmodule Mix.Tasks.AgentMachine.Run do
       skill_names: Keyword.get_values(opts, :skill),
       allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false),
       stream_response: Keyword.get(opts, :stream_response, false),
+      context_window_tokens: Keyword.get(opts, :context_window_tokens),
+      context_warning_percent: Keyword.get(opts, :context_warning_percent),
+      run_context_compaction: run_context_compaction_from_opts!(opts),
+      run_context_compact_percent: Keyword.get(opts, :run_context_compact_percent),
+      max_context_compactions: Keyword.get(opts, :max_context_compactions),
       router_mode: router_mode_from_opts!(opts),
       router_model_dir: Keyword.get(opts, :router_model_dir),
       router_timeout_ms: Keyword.get(opts, :router_timeout_ms),
@@ -304,6 +314,22 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
       :error ->
         :deterministic
+    end
+  end
+
+  defp run_context_compaction_from_opts!(opts) do
+    case Keyword.fetch(opts, :run_context_compaction) do
+      {:ok, "on"} ->
+        :on
+
+      {:ok, "off"} ->
+        :off
+
+      {:ok, mode} ->
+        Mix.raise("--run-context-compaction must be on or off, got: #{inspect(mode)}")
+
+      :error ->
+        :off
     end
   end
 

@@ -5,7 +5,7 @@ defmodule AgentMachine.RunServer do
 
   use GenServer
 
-  alias AgentMachine.{AgentResult, AgentRunner}
+  alias AgentMachine.{AgentResult, AgentRunner, ContextBudget, ContextCompactor}
 
   @default_heartbeat_interval_ms 10_000
   @runtime_health_events MapSet.new([
@@ -53,7 +53,7 @@ defmodule AgentMachine.RunServer do
 
   @impl true
   def init({run_id, agents, finalizer, opts}) do
-    run_context = %{results: %{}, artifacts: %{}}
+    run_context = %{results: %{}, artifacts: %{}, artifact_sources: %{}, compacted_context: nil}
     {ready_agents, pending_agents} = split_ready_agents(agents, %{})
     initial_events = [run_started_event(run_id)] ++ skills_events(run_id, opts)
     emit_events!(opts, initial_events)
@@ -69,6 +69,10 @@ defmodule AgentMachine.RunServer do
       tasks: tasks,
       results: %{},
       artifacts: %{},
+      artifact_sources: %{},
+      compacted_context: nil,
+      context_compaction_count: 0,
+      context_compaction_usages: [],
       events: events,
       finalizer: finalizer,
       finalizer_started: false,
@@ -214,16 +218,22 @@ defmodule AgentMachine.RunServer do
     if should_retry?(run, task, result) do
       retry_agent(run, task, result)
     else
-      store_result(run, result)
+      store_result(run, task.agent, result)
     end
   end
 
-  defp store_result(run, result) do
+  defp store_result(run, agent, result) do
     run = %{run | results: Map.put(run.results, result.agent_id, result)}
 
     case merge_result_artifacts(run, result) do
-      {:ok, run} -> continue_run_after_result(run, result)
-      {:error, reason} -> fail_run(run, reason)
+      {:ok, run} ->
+        case maybe_compact_run_context(run, agent) do
+          {:ok, run} -> continue_run_after_result(run, result)
+          {:error, run} -> run
+        end
+
+      {:error, reason} ->
+        fail_run(run, reason)
     end
   end
 
@@ -238,7 +248,7 @@ defmodule AgentMachine.RunServer do
 
   defp retry_agent(run, task, result) do
     next_attempt = task.attempt + 1
-    run_context = %{results: run.results, artifacts: run.artifacts}
+    run_context = run_context(run)
 
     {tasks, events} =
       spawn_agents([task.agent], run.opts, run_context, task.parent_agent_id, next_attempt)
@@ -279,7 +289,7 @@ defmodule AgentMachine.RunServer do
     if ready_agents == [] do
       finish_if_idle(run)
     else
-      run_context = %{results: run.results, artifacts: run.artifacts}
+      run_context = run_context(run)
       {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, nil)
 
       run
@@ -297,7 +307,7 @@ defmodule AgentMachine.RunServer do
     with {:ok, max_steps} <- fetch_max_steps(run.opts),
          {:ok, next_agents} <- validate_next_agents(run, result.next_agents),
          {:ok, step_count} <- reserve_steps(run.step_count, length(next_agents), max_steps) do
-      run_context = %{results: run.results, artifacts: run.artifacts}
+      run_context = run_context(run)
 
       {new_tasks, events} = spawn_agents(next_agents, run.opts, run_context, result.agent_id)
       tasks = Map.merge(run.tasks, new_tasks)
@@ -336,7 +346,7 @@ defmodule AgentMachine.RunServer do
   defp complete_run(run) do
     %{
       run
-      | usage: aggregate_usage(run.results),
+      | usage: aggregate_usage(run),
         status: :completed,
         finished_at: DateTime.utc_now()
     }
@@ -363,7 +373,7 @@ defmodule AgentMachine.RunServer do
   defp start_finalizer(run) do
     case reserve_optional_step(run) do
       {:ok, step_count} ->
-        run_context = %{results: run.results, artifacts: run.artifacts}
+        run_context = run_context(run)
         {tasks, events} = spawn_agents([run.finalizer], run.opts, run_context, nil)
 
         run
@@ -397,7 +407,7 @@ defmodule AgentMachine.RunServer do
       run
       | tasks: %{},
         status: :failed,
-        usage: aggregate_usage(run.results),
+        usage: aggregate_usage(run),
         error: reason,
         finished_at: DateTime.utc_now()
     }
@@ -415,7 +425,7 @@ defmodule AgentMachine.RunServer do
       run
       | tasks: %{},
         status: :timeout,
-        usage: aggregate_usage(run.results),
+        usage: aggregate_usage(run),
         error: reason,
         finished_at: DateTime.utc_now()
     }
@@ -425,13 +435,20 @@ defmodule AgentMachine.RunServer do
   defp has_next_agents?(%AgentResult{next_agents: agents}) when is_list(agents), do: agents != []
   defp has_next_agents?(_result), do: false
 
-  defp merge_result_artifacts(run, %{status: :ok, artifacts: artifacts})
+  defp merge_result_artifacts(run, %{status: :ok, artifacts: artifacts} = result)
        when is_map(artifacts) and map_size(artifacts) > 0 do
     duplicate_keys = artifacts |> Map.keys() |> Enum.filter(&Map.has_key?(run.artifacts, &1))
 
     case duplicate_keys do
       [] ->
-        {:ok, %{run | artifacts: Map.merge(run.artifacts, artifacts)}}
+        source_updates = Map.new(Map.keys(artifacts), &{&1, result.agent_id})
+
+        {:ok,
+         %{
+           run
+           | artifacts: Map.merge(run.artifacts, artifacts),
+             artifact_sources: Map.merge(run.artifact_sources, source_updates)
+         }}
 
       keys ->
         {:error, "agent artifacts must not overwrite existing keys: #{inspect(keys)}"}
@@ -440,18 +457,156 @@ defmodule AgentMachine.RunServer do
 
   defp merge_result_artifacts(run, _result), do: {:ok, run}
 
-  defp build_agent_context(opts, agent, run_context, parent_agent_id) do
+  defp maybe_compact_run_context(run, agent) do
+    if run_context_compaction_enabled?(run) and
+         run.context_compaction_count < max_context_compactions!(run) do
+      usage = aggregate_usage(run)
+
+      if ContextBudget.threshold_reached?(
+           usage,
+           Keyword.fetch!(run.opts, :context_window_tokens),
+           Keyword.fetch!(run.opts, :run_context_compact_percent)
+         ) do
+        compact_run_context(run, agent)
+      else
+        {:ok, run}
+      end
+    else
+      {:ok, run}
+    end
+  end
+
+  defp run_context_compaction_enabled?(run),
+    do: Keyword.get(run.opts, :run_context_compaction) == :on
+
+  defp max_context_compactions!(run), do: Keyword.fetch!(run.opts, :max_context_compactions)
+
+  defp compact_run_context(run, agent) do
+    compactable_ids = compactable_result_ids(run)
+
+    if compactable_ids == [] do
+      {:ok, run}
+    else
+      started_event =
+        run_context_compaction_started_event(
+          run.id,
+          run.context_compaction_count + 1,
+          compactable_ids
+        )
+
+      run = append_event(run, started_event)
+
+      try do
+        result =
+          ContextCompactor.compact_run_context!(
+            run_context(run),
+            agent,
+            run.opts ++ [allowed_covered_items: compactable_ids]
+          )
+
+        covered_items = result.covered_items
+        compacted_context = merged_compacted_context(run, result)
+
+        finished_event =
+          run_context_compaction_finished_event(
+            run.id,
+            run.context_compaction_count + 1,
+            covered_items,
+            result.usage
+          )
+
+        run =
+          run
+          |> Map.put(:compacted_context, compacted_context)
+          |> Map.update!(:context_compaction_count, &(&1 + 1))
+          |> Map.update!(:context_compaction_usages, &(&1 ++ [result.usage]))
+          |> append_event(finished_event)
+
+        {:ok, run}
+      rescue
+        exception ->
+          reason = Exception.message(exception)
+
+          run =
+            run
+            |> append_event(
+              run_context_compaction_failed_event(
+                run.id,
+                run.context_compaction_count + 1,
+                compactable_ids,
+                reason
+              )
+            )
+            |> fail_run(reason)
+
+          {:error, run}
+      end
+    end
+  end
+
+  defp compactable_result_ids(run) do
+    covered = compacted_result_ids(run.compacted_context)
+
+    run.results
+    |> Map.keys()
+    |> Enum.reject(&MapSet.member?(covered, &1))
+  end
+
+  defp merged_compacted_context(run, result) do
+    previous_covered =
+      run.compacted_context
+      |> compacted_result_ids()
+      |> MapSet.to_list()
+
     %{
-      run_id: Keyword.fetch!(opts, :run_id),
-      agent_id: agent.id,
-      parent_agent_id: parent_agent_id,
-      results: context_results(run_context.results),
-      artifacts: run_context.artifacts
+      summary: result.summary,
+      covered_items: Enum.uniq(previous_covered ++ result.covered_items),
+      compaction_count: run.context_compaction_count + 1,
+      compacted_at: DateTime.utc_now()
     }
   end
 
-  defp context_results(results) do
-    Map.new(results, fn {agent_id, result} ->
+  defp compacted_result_ids(nil), do: MapSet.new()
+
+  defp compacted_result_ids(%{covered_items: items}) when is_list(items),
+    do: MapSet.new(items)
+
+  defp compacted_result_ids(%{"covered_items" => items}) when is_list(items),
+    do: MapSet.new(items)
+
+  defp compacted_result_ids(_context), do: MapSet.new()
+
+  defp run_context(run) do
+    covered = compacted_result_ids(run.compacted_context)
+
+    %{
+      results: context_results(run.results, covered),
+      artifacts: context_artifacts(run.artifacts, run.artifact_sources, covered),
+      artifact_sources: context_artifact_sources(run.artifact_sources, covered),
+      compacted_context: run.compacted_context
+    }
+  end
+
+  defp build_agent_context(opts, agent, run_context, parent_agent_id) do
+    context = %{
+      run_id: Keyword.fetch!(opts, :run_id),
+      agent_id: agent.id,
+      parent_agent_id: parent_agent_id,
+      results: run_context.results,
+      artifacts: run_context.artifacts
+    }
+
+    if is_nil(run_context.compacted_context) do
+      context
+    else
+      Map.put(context, :compacted_context, run_context.compacted_context)
+    end
+  end
+
+  defp context_results(results, covered) do
+    results
+    |> Enum.reject(fn {agent_id, _result} -> MapSet.member?(covered, agent_id) end)
+    |> Map.new(fn {agent_id, result} ->
       {agent_id,
        %{
          status: result.status,
@@ -461,6 +616,19 @@ defmodule AgentMachine.RunServer do
          artifacts: result.artifacts || %{},
          tool_results: result.tool_results || %{}
        }}
+    end)
+  end
+
+  defp context_artifacts(artifacts, sources, covered) do
+    Map.reject(artifacts, fn {key, _value} ->
+      source = Map.get(sources, key)
+      is_binary(source) and MapSet.member?(covered, source)
+    end)
+  end
+
+  defp context_artifact_sources(sources, covered) do
+    Map.reject(sources, fn {_key, source} ->
+      is_binary(source) and MapSet.member?(covered, source)
     end)
   end
 
@@ -688,6 +856,43 @@ defmodule AgentMachine.RunServer do
     }
   end
 
+  defp run_context_compaction_started_event(run_id, compaction_count, covered_items) do
+    %{
+      type: :run_context_compaction_started,
+      run_id: run_id,
+      compaction_count: compaction_count,
+      count: length(covered_items),
+      covered_items: covered_items,
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp run_context_compaction_finished_event(run_id, compaction_count, covered_items, usage) do
+    %{
+      type: :run_context_compaction_finished,
+      run_id: run_id,
+      compaction_count: compaction_count,
+      count: length(covered_items),
+      covered_items: covered_items,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      total_tokens: usage.total_tokens,
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp run_context_compaction_failed_event(run_id, compaction_count, covered_items, reason) do
+    %{
+      type: :run_context_compaction_failed,
+      run_id: run_id,
+      compaction_count: compaction_count,
+      count: length(covered_items),
+      covered_items: covered_items,
+      reason: reason,
+      at: DateTime.utc_now()
+    }
+  end
+
   defp run_completed_event(run_id) do
     %{
       type: :run_completed,
@@ -815,7 +1020,7 @@ defmodule AgentMachine.RunServer do
     |> Enum.map(fn {value, _count} -> value end)
   end
 
-  defp aggregate_usage(results) do
+  defp aggregate_usage(%{results: results, context_compaction_usages: compaction_usages}) do
     results
     |> Map.values()
     |> Enum.reduce(
@@ -840,5 +1045,18 @@ defmodule AgentMachine.RunServer do
           acc
       end
     )
+    |> add_compaction_usage(compaction_usages)
+  end
+
+  defp add_compaction_usage(usage, compaction_usages) do
+    Enum.reduce(compaction_usages, usage, fn compaction_usage, acc ->
+      %{
+        acc
+        | input_tokens: acc.input_tokens + compaction_usage.input_tokens,
+          output_tokens: acc.output_tokens + compaction_usage.output_tokens,
+          total_tokens: acc.total_tokens + compaction_usage.total_tokens,
+          cost_usd: acc.cost_usd + compaction_usage.cost_usd
+      }
+    end)
   end
 end

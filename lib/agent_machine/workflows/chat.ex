@@ -3,7 +3,7 @@ defmodule AgentMachine.Workflows.Chat do
   Minimal no-tool workflow for direct conversational responses.
   """
 
-  alias AgentMachine.RunSpec
+  alias AgentMachine.{RunSpec, WorkflowOptions}
 
   def build!(%RunSpec{} = spec) do
     provider = provider_module(spec)
@@ -29,6 +29,7 @@ defmodule AgentMachine.Workflows.Chat do
         stream_response: spec.stream_response
       ]
       |> put_http_opts(spec)
+      |> WorkflowOptions.put_context_opts(spec)
 
     {agents, opts}
   end

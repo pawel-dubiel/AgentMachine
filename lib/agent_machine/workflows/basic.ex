@@ -7,7 +7,7 @@ defmodule AgentMachine.Workflows.Basic do
   finalizer, usage, events, and retry paths.
   """
 
-  alias AgentMachine.RunSpec
+  alias AgentMachine.{RunSpec, WorkflowOptions}
 
   def build!(%RunSpec{} = spec) do
     provider = provider_module(spec)
@@ -44,6 +44,7 @@ defmodule AgentMachine.Workflows.Basic do
       ]
       |> put_http_opts(spec)
       |> put_tool_opts(spec)
+      |> WorkflowOptions.put_context_opts(spec)
 
     {agents, opts}
   end

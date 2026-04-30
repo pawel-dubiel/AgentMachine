@@ -24,6 +24,8 @@ were available, which agents ran, and what changed.
 - Load reusable skills that add task-specific instructions and references.
 - Route simple requests through a fast path and larger tasks through agentic
   planner/worker flows, using a local zero-shot intent model when installed.
+- Compact long conversations manually and compact run context automatically
+  when explicit context limits are configured.
 - Write JSONL logs for runs and TUI sessions so behavior can be debugged later.
 - Redact sensitive-looking values from logs, summaries, and tool results.
 
@@ -167,6 +169,10 @@ Useful first commands:
 /key <api-key>
 /models reload
 /model
+/compact
+/context status
+/context window <tokens> [warning-percent]
+/context run-compaction on <compact-percent> <max-compactions>
 /tools off
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
@@ -255,6 +261,52 @@ mix agent_machine.run \
   --log-file ./agent-machine-run.jsonl \
   "Review this project"
 ```
+
+Compact the current conversation history through the selected provider/model:
+
+```sh
+mix agent_machine.compact \
+  --provider echo \
+  --model echo \
+  --http-timeout-ms 30000 \
+  --input-price-per-million 0 \
+  --output-price-per-million 0 \
+  --input-file ./conversation.json \
+  --json
+```
+
+The input file must contain:
+
+```json
+{"type":"conversation","messages":[{"role":"user","text":"..."}]}
+```
+
+The compact command requires strict JSON output from the model and fails on
+missing provider/model/pricing/timeout options, invalid input, invalid provider
+JSON, or an empty summary.
+
+Context budget and run-context compaction options are explicit:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider echo \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --context-window-tokens 128000 \
+  --context-warning-percent 80 \
+  --run-context-compaction on \
+  --run-context-compact-percent 90 \
+  --max-context-compactions 2 \
+  --json \
+  "Plan and execute the task"
+```
+
+Unknown model context windows are not guessed. Runs emit `context_budget`
+events with `status: "unknown"` when no context window is configured. Automatic
+run-context compaction only runs when enabled with a context window, compact
+threshold, and maximum compaction count.
 
 Common Make targets:
 

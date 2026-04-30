@@ -239,6 +239,90 @@ defmodule AgentMachine.OrchestratorTest do
     assert normalized.cost_usd == 2.0
   end
 
+  test "emits unknown context budget events when context window is missing" do
+    agents = [
+      %{
+        id: "assistant",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000)
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :context_budget and event.agent_id == "assistant" and
+               event.status == "unknown" and event.reason == "missing_context_window_tokens"
+           end)
+  end
+
+  test "emits warning context budget events when usage reaches configured threshold" do
+    agents = [
+      %{
+        id: "assistant",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               context_window_tokens: 1,
+               context_warning_percent: 1
+             )
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :context_budget and event.agent_id == "assistant" and
+               event.status == "warning" and event.context_window_tokens == 1 and
+               event.warning_percent == 1 and event.used_percent >= 1
+           end)
+  end
+
+  test "run-context compaction hides covered raw results from later agents but preserves final raw results" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.RunContextCompacting,
+        model: "test",
+        input: "plan with large context",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 2,
+               context_window_tokens: 1,
+               run_context_compaction: :on,
+               run_context_compact_percent: 1,
+               max_context_compactions: 1
+             )
+
+    assert run.status == :completed
+    assert run.results["planner"].output == "raw planner output that should stay in summary"
+
+    assert run.results["worker"].output ==
+             "saw_raw=false saw_plan=false compacted=compacted planner context"
+
+    assert run.usage.agents == 2
+
+    assert run.usage.total_tokens >
+             run.results["planner"].usage.total_tokens + run.results["worker"].usage.total_tokens
+
+    assert Enum.any?(run.events, &(&1.type == :run_context_compaction_started))
+
+    assert Enum.any?(
+             run.events,
+             &(&1.type == :run_context_compaction_finished and &1.covered_items == ["planner"])
+           )
+  end
+
   test "lets an agent delegate follow-up agents with an explicit step limit" do
     agents = [
       %{
@@ -2411,6 +2495,73 @@ defmodule AgentMachine.TestProviders.ToolSleeping do
       output_tokens: output_tokens,
       total_tokens: input_tokens + output_tokens
     }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.RunContextCompacting do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    output = "raw planner output that should stay in summary"
+
+    {:ok,
+     %{
+       output: output,
+       artifacts: %{plan: "raw plan"},
+       usage: %{input_tokens: 50, output_tokens: 50, total_tokens: 100},
+       next_agents: [
+         %{
+           id: "worker",
+           provider: __MODULE__,
+           model: "test",
+           input: "inspect compacted context",
+           pricing: agent.pricing
+         }
+       ]
+     }}
+  end
+
+  def complete(%Agent{id: "__context_compactor__"} = agent, _opts) do
+    output =
+      AgentMachine.JSON.encode!(%{
+        summary: "compacted planner context",
+        covered_items: ["planner"]
+      })
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  def complete(%Agent{id: "worker"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+    saw_raw = Map.has_key?(context.results, "planner")
+    saw_plan = Map.has_key?(context.artifacts, :plan)
+    compacted = context.compacted_context.summary
+    output = "saw_raw=#{saw_raw} saw_plan=#{saw_plan} compacted=#{compacted}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input = token_count(agent.input)
+    output = token_count(output)
+    %{input_tokens: input, output_tokens: output, total_tokens: input + output}
   end
 
   defp token_count(text) do

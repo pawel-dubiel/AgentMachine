@@ -40,8 +40,9 @@ type modelPricing struct {
 }
 
 type modelOption struct {
-	ID      string
-	Pricing modelPricing
+	ID                  string
+	Pricing             modelPricing
+	ContextWindowTokens int
 }
 
 type modelListMsg struct {
@@ -55,8 +56,9 @@ type openRouterModelsResponse struct {
 }
 
 type openRouterModel struct {
-	ID      string            `json:"id"`
-	Pricing openRouterPricing `json:"pricing"`
+	ID            string            `json:"id"`
+	Pricing       openRouterPricing `json:"pricing"`
+	ContextLength int               `json:"context_length"`
 }
 
 type openRouterPricing struct {
@@ -157,7 +159,11 @@ func fetchOpenRouterModelOptions() ([]modelOption, error) {
 	for _, model := range payload.Data {
 		pricing, err := openRouterModelPricing(model)
 		if err == nil {
-			options = append(options, modelOption{ID: model.ID, Pricing: pricing})
+			options = append(options, modelOption{
+				ID:                  model.ID,
+				Pricing:             pricing,
+				ContextWindowTokens: model.ContextLength,
+			})
 		}
 	}
 	sortModelOptions(options)

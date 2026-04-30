@@ -52,6 +52,26 @@ defmodule AgentMachine.EventSummary do
     "#{agent_id} provider request failed: #{reason}"
   end
 
+  defp summary(%{type: :context_budget, agent_id: agent_id, status: "unknown"}),
+    do: "#{agent_id} context budget unknown"
+
+  defp summary(%{type: :context_budget, agent_id: agent_id, status: status} = event) do
+    used = Map.get(event, :used_percent)
+    "#{agent_id} context budget #{status}#{if(is_nil(used), do: "", else: " used=#{used}%")}"
+  end
+
+  defp summary(%{type: :run_context_compaction_started, count: count}) do
+    "Run context compaction started for #{count} item(s)"
+  end
+
+  defp summary(%{type: :run_context_compaction_finished, count: count}) do
+    "Run context compaction finished for #{count} item(s)"
+  end
+
+  defp summary(%{type: :run_context_compaction_failed, reason: reason}) do
+    "Run context compaction failed: #{reason}"
+  end
+
   defp summary(%{type: :assistant_delta, agent_id: agent_id}), do: "#{agent_id} streamed text"
 
   defp summary(%{type: :assistant_done, agent_id: agent_id}),
@@ -106,7 +126,17 @@ defmodule AgentMachine.EventSummary do
       :confidence,
       :active_harnesses,
       :path,
-      :session_id
+      :session_id,
+      :model,
+      :input_tokens,
+      :output_tokens,
+      :total_tokens,
+      :context_window_tokens,
+      :used_percent,
+      :remaining_percent,
+      :warning_percent,
+      :covered_items,
+      :compaction_count
     ])
     |> reject_empty_values()
   end

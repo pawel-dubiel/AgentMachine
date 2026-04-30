@@ -75,19 +75,57 @@ defmodule AgentMachine.Providers.Echo do
   end
 
   defp output(%Agent{} = agent) do
-    if structured_delegation_response?(agent) do
-      JSON.encode!(%{
-        "decision" => %{
-          "mode" => "direct",
-          "reason" => "Echo provider completes structured planner requests directly."
-        },
-        "output" => "agent #{agent.id}: #{agent.input}",
-        "next_agents" => []
-      })
-    else
-      "agent #{agent.id}: #{agent.input}"
+    cond do
+      compaction_response?(agent) ->
+        compaction_output(agent)
+
+      structured_delegation_response?(agent) ->
+        JSON.encode!(%{
+          "decision" => %{
+            "mode" => "direct",
+            "reason" => "Echo provider completes structured planner requests directly."
+          },
+          "output" => "agent #{agent.id}: #{agent.input}",
+          "next_agents" => []
+        })
+
+      true ->
+        "agent #{agent.id}: #{agent.input}"
     end
   end
+
+  defp compaction_response?(%Agent{metadata: metadata}) when is_map(metadata) do
+    Map.get(metadata, :agent_machine_response) == "compaction" ||
+      Map.get(metadata, "agent_machine_response") == "compaction"
+  end
+
+  defp compaction_response?(_agent), do: false
+
+  defp compaction_output(%Agent{} = agent) do
+    payload = JSON.decode!(agent.input)
+
+    JSON.encode!(%{
+      "summary" => "Echo compacted #{compaction_type(payload)} context.",
+      "covered_items" => covered_items(payload)
+    })
+  end
+
+  defp compaction_type(%{"type" => type}) when is_binary(type), do: type
+  defp compaction_type(_payload), do: "unknown"
+
+  defp covered_items(%{"type" => "conversation", "messages" => messages})
+       when is_list(messages) do
+    messages
+    |> length()
+    |> then(fn count -> 1..count end)
+    |> Enum.map(&Integer.to_string/1)
+  end
+
+  defp covered_items(%{"type" => "run_context", "results" => results}) when is_map(results) do
+    Map.keys(results)
+  end
+
+  defp covered_items(_payload), do: []
 
   defp structured_delegation_response?(%Agent{metadata: metadata}) when is_map(metadata) do
     Map.get(metadata, :agent_machine_response) == "delegation" ||

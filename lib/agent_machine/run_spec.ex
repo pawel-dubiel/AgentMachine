@@ -8,6 +8,7 @@ defmodule AgentMachine.RunSpec do
   alias AgentMachine.Tools.RunTestCommand
 
   @enforce_keys [:task, :workflow, :provider, :timeout_ms, :max_steps, :max_attempts]
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :task,
     :workflow,
@@ -32,6 +33,11 @@ defmodule AgentMachine.RunSpec do
     :skill_names,
     :allow_skill_scripts,
     :stream_response,
+    :context_window_tokens,
+    :context_warning_percent,
+    :run_context_compaction,
+    :run_context_compact_percent,
+    :max_context_compactions,
     :router_mode,
     :router_model_dir,
     :router_timeout_ms,
@@ -63,6 +69,11 @@ defmodule AgentMachine.RunSpec do
           skill_names: [binary()],
           allow_skill_scripts: boolean(),
           stream_response: boolean(),
+          context_window_tokens: pos_integer() | nil,
+          context_warning_percent: pos_integer() | nil,
+          run_context_compaction: :off | :on,
+          run_context_compact_percent: pos_integer() | nil,
+          max_context_compactions: pos_integer() | nil,
           router_mode: :deterministic | :local,
           router_model_dir: binary() | nil,
           router_timeout_ms: pos_integer() | nil,
@@ -99,6 +110,7 @@ defmodule AgentMachine.RunSpec do
     require_boolean!(spec.stream_response, :stream_response)
     validate_skill_options!(spec)
     validate_tool_options!(spec)
+    validate_context_options!(spec)
     validate_router_options!(spec)
     spec
   end
@@ -198,8 +210,47 @@ defmodule AgentMachine.RunSpec do
     |> Map.put_new(:skill_names, [])
     |> Map.put_new(:allow_skill_scripts, false)
     |> Map.put_new(:stream_response, false)
+    |> Map.put_new(:run_context_compaction, :off)
     |> Map.put_new(:router_mode, :deterministic)
     |> normalize_skill_names!()
+  end
+
+  defp validate_context_options!(%__MODULE__{} = spec) do
+    require_optional_positive_integer!(spec.context_window_tokens, :context_window_tokens)
+    require_optional_percent!(spec.context_warning_percent, :context_warning_percent)
+    require_run_context_compaction!(spec.run_context_compaction)
+    validate_warning_requires_window!(spec)
+    validate_run_context_compaction_options!(spec)
+  end
+
+  defp validate_warning_requires_window!(%__MODULE__{
+         context_window_tokens: nil,
+         context_warning_percent: percent
+       })
+       when not is_nil(percent) do
+    raise ArgumentError, "run spec :context_warning_percent requires :context_window_tokens"
+  end
+
+  defp validate_warning_requires_window!(_spec), do: :ok
+
+  defp validate_run_context_compaction_options!(%__MODULE__{run_context_compaction: :off} = spec) do
+    if spec.run_context_compact_percent != nil or spec.max_context_compactions != nil do
+      raise ArgumentError,
+            "run spec run-context compaction options require :run_context_compaction :on"
+    end
+  end
+
+  defp validate_run_context_compaction_options!(%__MODULE__{run_context_compaction: :on} = spec) do
+    require_positive_integer!(spec.context_window_tokens, :context_window_tokens)
+    require_percent!(spec.run_context_compact_percent, :run_context_compact_percent)
+    require_positive_integer!(spec.max_context_compactions, :max_context_compactions)
+  end
+
+  defp require_run_context_compaction!(value) when value in [:off, :on], do: :ok
+
+  defp require_run_context_compaction!(value) do
+    raise ArgumentError,
+          "run spec :run_context_compaction must be :off or :on, got: #{inspect(value)}"
   end
 
   defp validate_router_options!(%__MODULE__{
@@ -426,6 +477,22 @@ defmodule AgentMachine.RunSpec do
     raise ArgumentError,
           "run spec #{inspect(field)} must be a positive integer, got: #{inspect(value)}"
   end
+
+  defp require_optional_positive_integer!(nil, _field), do: :ok
+
+  defp require_optional_positive_integer!(value, field),
+    do: require_positive_integer!(value, field)
+
+  defp require_percent!(value, _field) when is_integer(value) and value >= 1 and value <= 100,
+    do: :ok
+
+  defp require_percent!(value, field) do
+    raise ArgumentError,
+          "run spec #{inspect(field)} must be an integer between 1 and 100, got: #{inspect(value)}"
+  end
+
+  defp require_optional_percent!(nil, _field), do: :ok
+  defp require_optional_percent!(value, field), do: require_percent!(value, field)
 
   defp require_probability!(value, _field)
        when is_float(value) and value > 0.0 and value <= 1.0 do

@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added explicit conversation and run-context compaction with a compact CLI,
+  TUI `/compact` and `/context` commands, context budget events, and
+  opt-in automatic run-context compaction.
 - Converted web-browse full-access router failures in the TUI into an MCP
   browser approval selector that retries with MCP-only full-access settings.
 - Routed Google/news research wording through Playwright MCP web browsing,

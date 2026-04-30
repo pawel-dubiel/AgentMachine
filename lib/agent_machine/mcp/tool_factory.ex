@@ -31,24 +31,21 @@ defmodule AgentMachine.MCP.ToolFactory do
     Module.create(module, quoted, Macro.Env.location(__ENV__))
   rescue
     exception in CompileError ->
-      if Exception.message(exception) =~ "currently being defined" do
-        wait_for_module!(module, 50)
+      if wait_for_module?(module, 50) do
+        :ok
       else
         reraise exception, __STACKTRACE__
       end
   end
 
-  defp wait_for_module!(_module, 0) do
-    raise CompileError,
-      description: "timed out waiting for MCP dynamic tool module compilation"
-  end
+  defp wait_for_module?(_module, 0), do: false
 
-  defp wait_for_module!(module, attempts_left) do
+  defp wait_for_module?(module, attempts_left) do
     if Code.ensure_loaded?(module) do
-      :ok
+      true
     else
       Process.sleep(10)
-      wait_for_module!(module, attempts_left - 1)
+      wait_for_module?(module, attempts_left - 1)
     end
   end
 

@@ -3,7 +3,7 @@ defmodule AgentMachine.Workflows.Tool do
   Internal auto-selected workflow for single-agent read-only tool requests.
   """
 
-  alias AgentMachine.RunSpec
+  alias AgentMachine.{RunSpec, WorkflowOptions}
 
   def build!(%RunSpec{} = spec, %{tool_intent: intent}) do
     provider = provider_module(spec)
@@ -29,6 +29,7 @@ defmodule AgentMachine.Workflows.Tool do
       ]
       |> put_http_opts(spec)
       |> put_read_only_tool_opts(spec, intent)
+      |> WorkflowOptions.put_context_opts(spec)
 
     {agents, opts}
   end

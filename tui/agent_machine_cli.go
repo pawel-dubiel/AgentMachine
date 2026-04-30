@@ -21,6 +21,8 @@ type streamSession struct {
 	stderr  *bytes.Buffer
 }
 
+var compactRunner = runAgentMachineCompact
+
 func runCommand(config runConfig) tea.Cmd {
 	return func() tea.Msg {
 		summary, raw, err := runAgentMachine(config)
@@ -58,6 +60,13 @@ func readStreamCommand(session *streamSession) tea.Cmd {
 	}
 }
 
+func compactCommand(config runConfig, messages []chatMessage) tea.Cmd {
+	return func() tea.Msg {
+		summary, raw, err := compactRunner(config, messages)
+		return compactResultMsg{Summary: summary, Raw: raw, Err: err}
+	}
+}
+
 func runSkillsCLICommand(args []string) tea.Cmd {
 	return func() tea.Msg {
 		cmdArgs := append([]string{"agent_machine.skills"}, args...)
@@ -72,6 +81,91 @@ func runSkillsCLICommand(args []string) tea.Cmd {
 			return skillsCommandMsg{Err: fmt.Errorf("mix command failed: %w", err)}
 		}
 		return skillsCommandMsg{Output: raw}
+	}
+}
+
+func runAgentMachineCompact(config runConfig, messages []chatMessage) (compactSummary, string, error) {
+	if len(messages) == 0 {
+		return compactSummary{}, "", errors.New("conversation compaction requires messages")
+	}
+
+	inputFile, cleanup, err := writeCompactInput(messages)
+	if err != nil {
+		return compactSummary{}, "", err
+	}
+	defer cleanup()
+
+	args := buildCompactArgs(config, inputFile)
+	cmd := exec.Command("mix", args...)
+	cmd.Dir = projectRoot()
+	cmd.Env = commandEnv(os.Environ(), config)
+
+	output, err := cmd.CombinedOutput()
+	raw := strings.TrimSpace(string(output))
+	if err != nil {
+		return compactSummary{}, raw, fmt.Errorf("mix command failed: %w", err)
+	}
+
+	parsed, parseErr := parseCompactSummary(raw)
+	if parseErr != nil {
+		return compactSummary{}, raw, parseErr
+	}
+	if parsed.Status != "ok" {
+		return parsed, raw, fmt.Errorf("AgentMachine compact failed: %s", emptyAs(parsed.Status, "unknown status"))
+	}
+	return parsed, raw, nil
+}
+
+func writeCompactInput(messages []chatMessage) (string, func(), error) {
+	file, err := os.CreateTemp("", "agent-machine-compact-*.json")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("failed to create compact input file: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(file.Name())
+	}
+
+	payload := map[string]any{
+		"type":     "conversation",
+		"messages": compactInputMessages(messages),
+	}
+
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(payload); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", func() {}, fmt.Errorf("failed to write compact input file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("failed to close compact input file: %w", err)
+	}
+
+	return file.Name(), cleanup, nil
+}
+
+func compactInputMessages(messages []chatMessage) []map[string]string {
+	out := make([]map[string]string, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, map[string]string{
+			"role": message.Role,
+			"text": message.Text,
+		})
+	}
+	return out
+}
+
+func buildCompactArgs(config runConfig, inputFile string) []string {
+	return []string{
+		"agent_machine.compact",
+		"--provider", string(config.Provider),
+		"--model", config.Model,
+		"--http-timeout-ms", config.HTTPTimeout,
+		"--input-price-per-million", config.InputPrice,
+		"--output-price-per-million", config.OutputPrice,
+		"--input-file", inputFile,
+		"--json",
 	}
 }
 
@@ -218,6 +312,22 @@ func buildRunArgs(config runConfig) []string {
 		args = append(args, "--event-session-id", config.EventSessionID)
 	}
 
+	if config.ContextWindow != "" {
+		args = append(args, "--context-window-tokens", config.ContextWindow)
+	}
+	if config.ContextWarning != "" {
+		args = append(args, "--context-warning-percent", config.ContextWarning)
+	}
+	if config.RunContextCompact != "" {
+		args = append(args, "--run-context-compaction", config.RunContextCompact)
+	}
+	if config.ContextCompactPct != "" {
+		args = append(args, "--run-context-compact-percent", config.ContextCompactPct)
+	}
+	if config.MaxContextCompact != "" {
+		args = append(args, "--max-context-compactions", config.MaxContextCompact)
+	}
+
 	return append(args, config.Task)
 }
 
@@ -264,6 +374,21 @@ func parseSummary(raw string) (summary, error) {
 		if ok && envelope.Type == "summary" {
 			return envelope.Summary, nil
 		}
+	}
+	return parsed, nil
+}
+
+func parseCompactSummary(raw string) (compactSummary, error) {
+	var parsed compactSummary
+	jsonLine := lastJSONLine(raw)
+	if jsonLine == "" {
+		return compactSummary{}, errors.New("AgentMachine compact output did not contain a JSON summary")
+	}
+	if err := json.Unmarshal([]byte(jsonLine), &parsed); err != nil {
+		return compactSummary{}, fmt.Errorf("failed to parse AgentMachine compact JSON output: %w", err)
+	}
+	if strings.TrimSpace(parsed.Summary) == "" {
+		return compactSummary{}, errors.New("AgentMachine compact output did not contain a summary")
 	}
 	return parsed, nil
 }

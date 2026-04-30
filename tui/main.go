@@ -73,6 +73,13 @@ type usageSummary struct {
 	CostUSD      float64 `json:"cost_usd"`
 }
 
+type compactSummary struct {
+	Status       string       `json:"status"`
+	Summary      string       `json:"summary"`
+	CoveredItems []string     `json:"covered_items"`
+	Usage        usageSummary `json:"usage"`
+}
+
 type eventSummary struct {
 	Type              string         `json:"type"`
 	RunID             string         `json:"run_id"`
@@ -132,6 +139,12 @@ type streamTickMsg struct{}
 type skillsCommandMsg struct {
 	Output string
 	Err    error
+}
+
+type compactResultMsg struct {
+	Summary compactSummary
+	Raw     string
+	Err     error
 }
 
 type jsonlEnvelope struct {
@@ -213,6 +226,11 @@ type runConfig struct {
 	SkillsDir         string
 	SkillNames        []string
 	AllowSkillScripts bool
+	ContextWindow     string
+	ContextWarning    string
+	RunContextCompact string
+	ContextCompactPct string
+	MaxContextCompact string
 	LogFile           string
 	EventLogFile      string
 	EventSessionID    string
@@ -240,6 +258,11 @@ type savedConfig struct {
 	SkillsDir         string   `json:"skills_dir,omitempty"`
 	SkillNames        []string `json:"skill_names,omitempty"`
 	AllowSkillScripts bool     `json:"allow_skill_scripts,omitempty"`
+	ContextWindow     string   `json:"context_window_tokens,omitempty"`
+	ContextWarning    string   `json:"context_warning_percent,omitempty"`
+	RunContextCompact string   `json:"run_context_compaction,omitempty"`
+	ContextCompactPct string   `json:"run_context_compact_percent,omitempty"`
+	MaxContextCompact string   `json:"max_context_compactions,omitempty"`
 }
 
 type startupOptions struct {
@@ -675,6 +698,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case compactResultMsg:
+		m.view = viewChat
+		if msg.Err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "compact failed:\n" + msg.Err.Error()})
+			return m, nil
+		}
+		m.messages = []chatMessage{{Role: "summary", Text: compactConversationSummaryText(msg.Summary)}}
+		return m, nil
+
 	case modelListMsg:
 		if msg.Provider != m.provider {
 			return m, nil
@@ -946,6 +978,10 @@ func (m model) taskWithConversationContext(task string) string {
 
 	lines := []string{"Conversation context:"}
 	for _, message := range history {
+		if message.Role == "summary" {
+			lines = append(lines, "Compacted conversation summary: "+compactContextText(stripCompactedConversationPrefix(message.Text)))
+			continue
+		}
 		lines = append(lines, message.Role+": "+compactContextText(message.Text))
 	}
 	lines = append(lines, "", "Current user request:", task)
@@ -970,6 +1006,15 @@ func sessionEventLogPath(configPath string, sessionID string) string {
 
 func recentConversationMessages(messages []chatMessage, limit int) []chatMessage {
 	selected := make([]chatMessage, 0, limit)
+	var latestSummary *chatMessage
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Role == "summary" && strings.TrimSpace(message.Text) != "" {
+			copied := message
+			latestSummary = &copied
+			break
+		}
+	}
 	for i := len(messages) - 1; i >= 0 && len(selected) < limit; i-- {
 		message := messages[i]
 		if message.Role != "user" {
@@ -983,6 +1028,9 @@ func recentConversationMessages(messages []chatMessage, limit int) []chatMessage
 	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
 		selected[left], selected[right] = selected[right], selected[left]
 	}
+	if latestSummary != nil {
+		selected = append([]chatMessage{*latestSummary}, selected...)
+	}
 	return selected
 }
 
@@ -992,6 +1040,19 @@ func compactContextText(text string) string {
 		return text
 	}
 	return text[:500] + "..."
+}
+
+func compactConversationSummaryText(summary compactSummary) string {
+	return "Compacted conversation summary:\n" + strings.TrimSpace(summary.Summary)
+}
+
+func stripCompactedConversationPrefix(text string) string {
+	trimmed := strings.TrimSpace(text)
+	prefix := "Compacted conversation summary:"
+	if strings.HasPrefix(trimmed, prefix) {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	}
+	return trimmed
 }
 
 func summaryDisplayText(summary summary) string {
@@ -1077,6 +1138,10 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleProviderCommand(args)
 	case "key":
 		return m.handleKeyCommand(args)
+	case "compact":
+		return m.handleCompactCommand(args)
+	case "context":
+		return m.handleContextCommand(args)
 	case "tools":
 		return m.handleToolsCommand(args)
 	case "skills":
@@ -1116,6 +1181,148 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown command: /" + name})
 	}
 
+	return m, nil
+}
+
+func (m model) handleCompactCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /compact"})
+		return m, nil
+	}
+	if !m.providerSet {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before compacting conversation"})
+		m.view = viewSetup
+		return m, nil
+	}
+
+	messages := compactableConversationMessages(m.messages)
+	if len(messages) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "conversation compaction requires user, assistant, or summary messages"})
+		return m, nil
+	}
+
+	config, err := resolveConfig(m.runConfig("compact conversation"))
+	if err != nil {
+		return m.withRunPreparationError(err), nil
+	}
+	if err := validateCompactConfig(config); err != nil {
+		return m.withRunPreparationError(err), nil
+	}
+
+	m.rememberAPIKey(config.Provider, config.APIKey)
+	if config.Provider != providerEcho {
+		if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+	}
+
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "compacting conversation..."})
+	m.view = viewChat
+	return m, compactCommand(config, messages)
+}
+
+func compactableConversationMessages(messages []chatMessage) []chatMessage {
+	out := make([]chatMessage, 0, len(messages))
+	for _, message := range messages {
+		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		switch message.Role {
+		case "user", "assistant", "summary":
+			out = append(out, chatMessage{
+				Role: message.Role,
+				Text: stripCompactedConversationPrefix(message.Text),
+			})
+		}
+	}
+	return out
+}
+
+func (m model) handleContextCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 || args[0] == "status" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.contextStatus()})
+		return m, nil
+	}
+
+	switch args[0] {
+	case "window":
+		return m.handleContextWindowCommand(args[1:])
+	case "run-compaction":
+		return m.handleRunContextCompactionCommand(args[1:])
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context [status]|window <tokens> [warning-percent]|window off|run-compaction on <compact-percent> <max-compactions>|run-compaction off"})
+		return m, nil
+	}
+}
+
+func (m model) handleContextWindowCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.ContextWindow = ""
+		m.savedConfig.ContextWarning = ""
+		m.savedConfig.RunContextCompact = ""
+		m.savedConfig.ContextCompactPct = ""
+		m.savedConfig.MaxContextCompact = ""
+		return m.saveContextConfig("context window cleared")
+	}
+	if len(args) != 1 && len(args) != 2 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context window <tokens> [warning-percent]|off"})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[0], "context window tokens"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	warning := ""
+	if len(args) == 2 {
+		if err := validatePercent(args[1], "context warning percent"); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		warning = args[1]
+	}
+
+	m.savedConfig.ContextWindow = args[0]
+	m.savedConfig.ContextWarning = warning
+	return m.saveContextConfig("context window set to " + args[0] + " tokens")
+}
+
+func (m model) handleRunContextCompactionCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.RunContextCompact = ""
+		m.savedConfig.ContextCompactPct = ""
+		m.savedConfig.MaxContextCompact = ""
+		return m.saveContextConfig("run-context compaction off")
+	}
+	if len(args) != 3 || args[0] != "on" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context run-compaction on <compact-percent> <max-compactions>|off"})
+		return m, nil
+	}
+	if err := validatePercent(args[1], "run-context compact percent"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[2], "max context compactions"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	m.savedConfig.RunContextCompact = "on"
+	m.savedConfig.ContextCompactPct = args[1]
+	m.savedConfig.MaxContextCompact = args[2]
+	return m.saveContextConfig("run-context compaction on at " + args[1] + "%")
+}
+
+func (m model) saveContextConfig(message string) (tea.Model, tea.Cmd) {
+	if err := validateSavedContextConfig(m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: message})
 	return m, nil
 }
 
@@ -2436,6 +2643,10 @@ func (m model) runConfig(task string) runConfig {
 		SkillsDir:         m.savedConfig.SkillsDir,
 		SkillNames:        append([]string(nil), m.savedConfig.SkillNames...),
 		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
+		ContextWarning:    m.savedConfig.ContextWarning,
+		RunContextCompact: m.savedConfig.RunContextCompact,
+		ContextCompactPct: m.savedConfig.ContextCompactPct,
+		MaxContextCompact: m.savedConfig.MaxContextCompact,
 		EventLogFile:      m.eventLogFile,
 		EventSessionID:    m.eventSessionID,
 	}
@@ -2445,6 +2656,7 @@ func (m model) runConfig(task string) runConfig {
 		config.OutputPrice = formatPrice(pricing.OutputPerMillion)
 		config.HTTPTimeout = defaultHTTPTimeoutMS
 	}
+	config.ContextWindow = m.contextWindowForModel(config.Model)
 
 	return config
 }
@@ -2473,6 +2685,18 @@ func (m model) selectedModelPricing(modelID string) (modelPricing, bool) {
 		}
 	}
 	return modelPricing{}, false
+}
+
+func (m model) contextWindowForModel(modelID string) string {
+	if strings.TrimSpace(m.savedConfig.ContextWindow) != "" {
+		return strings.TrimSpace(m.savedConfig.ContextWindow)
+	}
+	for _, option := range m.modelOptions {
+		if option.ID == modelID && option.ContextWindowTokens > 0 {
+			return strconv.Itoa(option.ContextWindowTokens)
+		}
+	}
+	return ""
 }
 
 func (m *model) rememberAPIKey(provider provider, apiKey string) {
@@ -2573,6 +2797,9 @@ func validateConfig(config runConfig) error {
 	if err := validateRouterConfig(config); err != nil {
 		return err
 	}
+	if err := validateContextConfig(config); err != nil {
+		return err
+	}
 
 	switch config.Provider {
 	case providerEcho:
@@ -2606,6 +2833,135 @@ func validateConfig(config runConfig) error {
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+func validateCompactConfig(config runConfig) error {
+	switch config.Provider {
+	case providerEcho:
+		return nil
+	case providerOpenAI, providerOpenRouter:
+		if config.Model == "" {
+			return errors.New("model must not be empty for remote providers")
+		}
+		if config.APIKey == "" {
+			return fmt.Errorf("%s must not be empty", apiKeyName(config.Provider))
+		}
+		if config.InputPrice == "" {
+			return fmt.Errorf("input pricing is missing for model %q", config.Model)
+		}
+		if config.OutputPrice == "" {
+			return fmt.Errorf("output pricing is missing for model %q", config.Model)
+		}
+		if config.HTTPTimeout == "" {
+			return errors.New("HTTP timeout is missing")
+		}
+		if err := validateNonNegativeFloat(config.InputPrice, "input price per million"); err != nil {
+			return err
+		}
+		if err := validateNonNegativeFloat(config.OutputPrice, "output price per million"); err != nil {
+			return err
+		}
+		return validatePositiveInt(config.HTTPTimeout, "HTTP timeout ms")
+	default:
+		return fmt.Errorf("unsupported provider: %s", config.Provider)
+	}
+}
+
+func validateContextConfig(config runConfig) error {
+	if strings.TrimSpace(config.ContextWindow) != "" {
+		if err := validatePositiveInt(config.ContextWindow, "context window tokens"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.ContextWarning) != "" {
+		if strings.TrimSpace(config.ContextWindow) == "" {
+			return errors.New("context warning percent requires context window tokens")
+		}
+		if err := validatePercent(config.ContextWarning, "context warning percent"); err != nil {
+			return err
+		}
+	}
+
+	switch strings.TrimSpace(config.RunContextCompact) {
+	case "":
+		if strings.TrimSpace(config.ContextCompactPct) != "" || strings.TrimSpace(config.MaxContextCompact) != "" {
+			return errors.New("run-context compaction thresholds require run-context compaction on")
+		}
+		return nil
+	case "on":
+		if strings.TrimSpace(config.ContextWindow) == "" {
+			return errors.New("run-context compaction requires context window tokens")
+		}
+		if strings.TrimSpace(config.ContextCompactPct) == "" {
+			return errors.New("run-context compaction requires run-context compact percent")
+		}
+		if strings.TrimSpace(config.MaxContextCompact) == "" {
+			return errors.New("run-context compaction requires max context compactions")
+		}
+		if err := validatePercent(config.ContextCompactPct, "run-context compact percent"); err != nil {
+			return err
+		}
+		return validatePositiveInt(config.MaxContextCompact, "max context compactions")
+	case "off":
+		if strings.TrimSpace(config.ContextCompactPct) != "" || strings.TrimSpace(config.MaxContextCompact) != "" {
+			return errors.New("run-context compaction off does not accept compaction thresholds")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported run-context compaction mode: %s", config.RunContextCompact)
+	}
+}
+
+func validateSavedContextConfig(config savedConfig) error {
+	return validateContextSyntax(runConfig{
+		ContextWindow:     config.ContextWindow,
+		ContextWarning:    config.ContextWarning,
+		RunContextCompact: config.RunContextCompact,
+		ContextCompactPct: config.ContextCompactPct,
+		MaxContextCompact: config.MaxContextCompact,
+	})
+}
+
+func validateContextSyntax(config runConfig) error {
+	if strings.TrimSpace(config.ContextWindow) != "" {
+		if err := validatePositiveInt(config.ContextWindow, "context window tokens"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.ContextWarning) != "" {
+		if strings.TrimSpace(config.ContextWindow) == "" {
+			return errors.New("context warning percent requires explicit context window tokens")
+		}
+		if err := validatePercent(config.ContextWarning, "context warning percent"); err != nil {
+			return err
+		}
+	}
+	switch strings.TrimSpace(config.RunContextCompact) {
+	case "":
+		if strings.TrimSpace(config.ContextCompactPct) != "" || strings.TrimSpace(config.MaxContextCompact) != "" {
+			return errors.New("run-context compaction thresholds require run-context compaction on")
+		}
+	case "on":
+		if strings.TrimSpace(config.ContextCompactPct) == "" {
+			return errors.New("run-context compaction requires run-context compact percent")
+		}
+		if strings.TrimSpace(config.MaxContextCompact) == "" {
+			return errors.New("run-context compaction requires max context compactions")
+		}
+		if err := validatePercent(config.ContextCompactPct, "run-context compact percent"); err != nil {
+			return err
+		}
+		if err := validatePositiveInt(config.MaxContextCompact, "max context compactions"); err != nil {
+			return err
+		}
+	case "off":
+		if strings.TrimSpace(config.ContextCompactPct) != "" || strings.TrimSpace(config.MaxContextCompact) != "" {
+			return errors.New("run-context compaction off does not accept compaction thresholds")
+		}
+	default:
+		return fmt.Errorf("unsupported run-context compaction mode: %s", config.RunContextCompact)
+	}
+	return nil
 }
 
 func validateRouterConfig(config runConfig) error {
@@ -2792,6 +3148,14 @@ func validateProbability(value string, label string) error {
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil || parsed <= 0 || parsed > 1 {
 		return fmt.Errorf("%s must be greater than 0 and less than or equal to 1", label)
+	}
+	return nil
+}
+
+func validatePercent(value string, label string) error {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > 100 {
+		return fmt.Errorf("%s must be an integer from 1 to 100", label)
 	}
 	return nil
 }
@@ -3088,9 +3452,31 @@ func (m model) toolsStatus() string {
 	}
 }
 
+func (m model) contextStatus() string {
+	window := m.contextWindowForModel(m.modelID())
+	warning := strings.TrimSpace(m.savedConfig.ContextWarning)
+	compaction := strings.TrimSpace(m.savedConfig.RunContextCompact)
+	if compaction == "" {
+		compaction = "off"
+	}
+
+	parts := []string{
+		"context: window_tokens=" + emptyAsNone(window),
+		"warning_percent=" + emptyAsNone(warning),
+		"run_compaction=" + compaction,
+	}
+	if compaction == "on" {
+		parts = append(parts,
+			"compact_percent="+emptyAsNone(m.savedConfig.ContextCompactPct),
+			"max_compactions="+emptyAsNone(m.savedConfig.MaxContextCompact),
+		)
+	}
+	return strings.Join(parts, " ")
+}
+
 func runningStatus(config runConfig) string {
 	idleTimeout := runTimeoutMS(config)
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func hardCapTimeoutMS(idleTimeout string) string {
@@ -3130,6 +3516,21 @@ func runToolsStatus(config runConfig) string {
 	default:
 		return "tools unsupported " + config.ToolHarness
 	}
+}
+
+func runContextStatus(config runConfig) string {
+	parts := []string{"context window_tokens=" + emptyAsNone(config.ContextWindow)}
+	if strings.TrimSpace(config.ContextWarning) != "" {
+		parts = append(parts, "warning_percent="+config.ContextWarning)
+	}
+	if strings.TrimSpace(config.RunContextCompact) == "on" {
+		parts = append(parts,
+			"run_compaction=on",
+			"compact_percent="+config.ContextCompactPct,
+			"max_compactions="+config.MaxContextCompact,
+		)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m model) routerStatus() string {
@@ -3249,6 +3650,10 @@ func (m *model) applySavedSettings() error {
 		RouterConfidence: m.savedConfig.RouterConfidence,
 	}); err != nil {
 		return fmt.Errorf("invalid saved router in TUI config: %w", err)
+	}
+
+	if err := validateSavedContextConfig(m.savedConfig); err != nil {
+		return fmt.Errorf("invalid saved context settings in TUI config: %w", err)
 	}
 
 	if m.providerSet {

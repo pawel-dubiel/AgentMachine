@@ -79,6 +79,72 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "validates explicit context options without guessed defaults" do
+    assert %RunSpec{
+             context_window_tokens: 10_000,
+             context_warning_percent: 80,
+             run_context_compaction: :on,
+             run_context_compact_percent: 90,
+             max_context_compactions: 2
+           } =
+             RunSpec.new!(%{
+               task: "do work",
+               workflow: :agentic,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 3,
+               max_attempts: 1,
+               context_window_tokens: 10_000,
+               context_warning_percent: 80,
+               run_context_compaction: :on,
+               run_context_compact_percent: 90,
+               max_context_compactions: 2
+             })
+
+    assert_raise ArgumentError,
+                 ~r/:context_warning_percent requires :context_window_tokens/,
+                 fn ->
+                   RunSpec.new!(%{
+                     task: "do work",
+                     workflow: :agentic,
+                     provider: :echo,
+                     timeout_ms: 1_000,
+                     max_steps: 3,
+                     max_attempts: 1,
+                     context_warning_percent: 80
+                   })
+                 end
+
+    assert_raise ArgumentError, ~r/:context_window_tokens/, fn ->
+      RunSpec.new!(%{
+        task: "do work",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 3,
+        max_attempts: 1,
+        run_context_compaction: :on,
+        run_context_compact_percent: 90,
+        max_context_compactions: 2
+      })
+    end
+
+    assert_raise ArgumentError,
+                 ~r/run-context compaction options require :run_context_compaction :on/,
+                 fn ->
+                   RunSpec.new!(%{
+                     task: "do work",
+                     workflow: :agentic,
+                     provider: :echo,
+                     timeout_ms: 1_000,
+                     max_steps: 3,
+                     max_attempts: 1,
+                     context_window_tokens: 10_000,
+                     run_context_compact_percent: 90
+                   })
+                 end
+  end
+
   test "builds the basic workflow with OpenRouter provider options" do
     spec =
       RunSpec.new!(%{
@@ -1130,6 +1196,33 @@ defmodule AgentMachine.ClientRunnerTest do
         "2",
         "--tool-approval-mode",
         "read-only",
+        "--json",
+        "hello"
+      ])
+    end
+  end
+
+  test "mix agent_machine.run rejects run-context compaction without required limits" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:context_window_tokens/, fn ->
+      Run.run([
+        "--workflow",
+        "agentic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "3",
+        "--max-attempts",
+        "1",
+        "--run-context-compaction",
+        "on",
+        "--run-context-compact-percent",
+        "90",
+        "--max-context-compactions",
+        "1",
         "--json",
         "hello"
       ])

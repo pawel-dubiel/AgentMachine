@@ -7,7 +7,7 @@ defmodule AgentMachine.Workflows.Agentic do
   the user-facing result after all other agents complete.
   """
 
-  alias AgentMachine.RunSpec
+  alias AgentMachine.{RunSpec, WorkflowOptions}
 
   def build!(%RunSpec{} = spec) do
     provider = provider_module(spec)
@@ -47,6 +47,7 @@ defmodule AgentMachine.Workflows.Agentic do
       ]
       |> put_http_opts(spec)
       |> put_tool_opts(spec)
+      |> WorkflowOptions.put_context_opts(spec)
 
     {[planner], opts}
   end

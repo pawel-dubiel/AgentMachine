@@ -77,6 +77,9 @@ func (m model) statusLine() string {
 	if m.skillsEnabled() {
 		parts = append(parts, "skills="+m.skillsModeLabel())
 	}
+	if strings.TrimSpace(m.contextWindowForModel(m.modelID())) != "" || strings.TrimSpace(m.savedConfig.RunContextCompact) == "on" {
+		parts = append(parts, "context=configured")
+	}
 	if m.modelStatus != "" {
 		parts = append(parts, "models="+m.modelStatus)
 	}
@@ -687,6 +690,7 @@ func (m model) setupView() string {
 		"key: " + keyStatus(m.apiKey()),
 		m.routerStatus(),
 		m.toolsStatus(),
+		m.contextStatus(),
 		m.skillsStatus(),
 		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
@@ -703,6 +707,11 @@ func (m model) setupView() string {
 		"/router-timeout <ms>",
 		"/router-confidence <float>",
 		"/router-status",
+		"/context status",
+		"/context window <tokens> [warning-percent]",
+		"/context run-compaction on <compact-percent> <max-compactions>",
+		"/context run-compaction off",
+		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",
@@ -1031,6 +1040,9 @@ func helpText() string {
 		"/router-timeout <ms>",
 		"/router-confidence <float>",
 		"/router-status",
+		"/context status|window <tokens> [warning-percent]|window off",
+		"/context run-compaction on <compact-percent> <max-compactions>|off",
+		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>",

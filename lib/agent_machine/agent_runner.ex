@@ -4,6 +4,7 @@ defmodule AgentMachine.AgentRunner do
   alias AgentMachine.{
     Agent,
     AgentResult,
+    ContextBudget,
     DelegationResponse,
     MCP.Session,
     ToolHarness,
@@ -257,11 +258,18 @@ defmodule AgentMachine.AgentRunner do
     stream_events = drain_stream_events(ref, [])
 
     case result do
-      {:ok, %{output: output, usage: _provider_usage} = payload} when is_binary(output) ->
+      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
         finished_at = DateTime.utc_now()
         finished_event = provider_request_finished_event(context, agent, started_at, finished_at)
+        budget_event = ContextBudget.event(agent, context, provider_usage, opts)
         emit_event!(opts, finished_event)
-        {:ok, %{payload: payload, events: [started_event] ++ stream_events ++ [finished_event]}}
+        emit_event!(opts, budget_event)
+
+        {:ok,
+         %{
+           payload: payload,
+           events: [started_event] ++ stream_events ++ [finished_event, budget_event]
+         }}
 
       {:ok, other} ->
         finished_at = DateTime.utc_now()

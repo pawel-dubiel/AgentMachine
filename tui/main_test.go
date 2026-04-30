@@ -161,6 +161,25 @@ func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
 	assertContainsSequence(t, args, []string{"--event-session-id", "session-1"})
 }
 
+func TestBuildRunArgsIncludesContextOptions(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:              "review this project",
+		Workflow:          workflowAgentic,
+		Provider:          providerEcho,
+		ContextWindow:     "128000",
+		ContextWarning:    "80",
+		RunContextCompact: "on",
+		ContextCompactPct: "90",
+		MaxContextCompact: "2",
+	})
+
+	assertContainsSequence(t, args, []string{"--context-window-tokens", "128000"})
+	assertContainsSequence(t, args, []string{"--context-warning-percent", "80"})
+	assertContainsSequence(t, args, []string{"--run-context-compaction", "on"})
+	assertContainsSequence(t, args, []string{"--run-context-compact-percent", "90"})
+	assertContainsSequence(t, args, []string{"--max-context-compactions", "2"})
+}
+
 func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "fix the existing app",
@@ -1030,6 +1049,103 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 
 	if config.HTTPTimeout != defaultHTTPTimeoutMS {
 		t.Fatalf("unexpected HTTP timeout: %q", config.HTTPTimeout)
+	}
+}
+
+func TestRunConfigUsesModelContextWindowUnlessExplicitConfigOverridesIt(t *testing.T) {
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		selectedModel: "openai/gpt-4o-mini",
+		modelOptions: []modelOption{
+			{
+				ID:                  "openai/gpt-4o-mini",
+				Pricing:             modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
+				ContextWindowTokens: 128000,
+			},
+		},
+		savedConfig: savedConfig{OpenRouterAPIKey: "test-key"},
+	}
+
+	config := m.runConfig("review this project")
+	if config.ContextWindow != "128000" {
+		t.Fatalf("expected model metadata context window, got %q", config.ContextWindow)
+	}
+
+	m.savedConfig.ContextWindow = "64000"
+	config = m.runConfig("review this project")
+	if config.ContextWindow != "64000" {
+		t.Fatalf("expected explicit context window override, got %q", config.ContextWindow)
+	}
+}
+
+func TestCompactCommandCallsCompactCLIAndReplacesActiveMessages(t *testing.T) {
+	originalRunner := compactRunner
+	var capturedMessages []chatMessage
+	compactRunner = func(config runConfig, messages []chatMessage) (compactSummary, string, error) {
+		if config.Provider != providerEcho || config.Model != "echo" {
+			t.Fatalf("unexpected compact config: %#v", config)
+		}
+		capturedMessages = append([]chatMessage(nil), messages...)
+		return compactSummary{Status: "ok", Summary: "User asked for Poland news; assistant needed browsing approval.", CoveredItems: []string{"1", "2"}}, "{}", nil
+	}
+	t.Cleanup(func() {
+		compactRunner = originalRunner
+	})
+
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  filepath.Join(t.TempDir(), "config.json"),
+		messages: []chatMessage{
+			{Role: "system", Text: "loaded"},
+			{Role: "user", Text: "research latest Poland news"},
+			{Role: "assistant", Text: "I need browsing approval"},
+		},
+	}
+
+	updated, cmd := m.handleCommand("/compact")
+	if cmd == nil {
+		t.Fatal("expected compact command")
+	}
+
+	msg := cmd().(compactResultMsg)
+	updated, _ = updated.(model).Update(msg)
+	result := updated.(model)
+
+	if len(capturedMessages) != 2 {
+		t.Fatalf("expected user and assistant messages to compact, got %#v", capturedMessages)
+	}
+	if len(result.messages) != 1 {
+		t.Fatalf("expected compacted history to replace active messages, got %#v", result.messages)
+	}
+	if result.messages[0].Role != "summary" {
+		t.Fatalf("expected summary role, got %#v", result.messages[0])
+	}
+	if !strings.Contains(result.messages[0].Text, "Poland news") {
+		t.Fatalf("expected compact summary text, got %q", result.messages[0].Text)
+	}
+}
+
+func TestTaskContextIncludesCompactedSummaryAndNewerUserMessages(t *testing.T) {
+	m := model{
+		messages: []chatMessage{
+			{Role: "summary", Text: "Compacted conversation summary:\nUser wants Poland news."},
+			{Role: "user", Text: "newer follow-up"},
+			{Role: "assistant", Text: "previous answer"},
+		},
+	}
+
+	task := m.taskWithConversationContext("current request")
+
+	if !strings.Contains(task, "Compacted conversation summary: User wants Poland news.") {
+		t.Fatalf("expected compacted summary in task context, got %q", task)
+	}
+	if !strings.Contains(task, "user: newer follow-up") {
+		t.Fatalf("expected newer user message in task context, got %q", task)
+	}
+	if !strings.Contains(task, "Current user request:\ncurrent request") {
+		t.Fatalf("expected current request in task context, got %q", task)
 	}
 }
 
