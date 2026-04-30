@@ -2033,6 +2033,70 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 	}
 }
 
+func TestRouterFileMutationCapabilityErrorShowsLocalFilesSelector(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness: "",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "in home folder create folder reports"},
+		},
+	}
+
+	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected mutation intent but no write-capable tool harness is configured")
+	updated, handled := m.withRunPermissionError(err)
+
+	if !handled {
+		t.Fatal("expected router permission error to be handled")
+	}
+	if updated.pendingToolHarness != "local-files" {
+		t.Fatalf("expected local-files harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "required harness: local-files") ||
+		!strings.Contains(last, "filesystem tools are off") {
+		t.Fatalf("expected local-files permission prompt, got %q", last)
+	}
+}
+
+func TestRouterTestIntentApprovalErrorShowsCodeEditSelector(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "code-edit",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "in home folder run mix test"},
+		},
+	}
+
+	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected test intent but :tool_approval_mode must be :full_access")
+	updated, handled := m.withRunPermissionError(err)
+
+	if !handled {
+		t.Fatal("expected router permission error to be handled")
+	}
+	if updated.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "required harness: code-edit") ||
+		!strings.Contains(last, "full-access") {
+		t.Fatalf("expected code-edit full-access permission prompt, got %q", last)
+	}
+}
+
 func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	home, err := os.UserHomeDir()

@@ -552,7 +552,9 @@ defmodule AgentMachine.WorkflowRouter do
       "remove",
       "rename",
       "patch",
-      "fix"
+      "fix",
+      "repair",
+      "rewrite"
     ])
   end
 
@@ -562,11 +564,15 @@ defmodule AgentMachine.WorkflowRouter do
       "patch",
       "lib/",
       "test/",
+      ".py",
       ".ex",
       ".exs",
       ".go",
       ".js",
       ".ts",
+      "python",
+      "script",
+      "weather_app.py",
       "nextjs",
       "next.js",
       "react",

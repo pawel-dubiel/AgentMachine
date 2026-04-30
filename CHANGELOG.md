@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added broader local intent classifier and router permission matrix tests with
+  complex multilingual prompts, follow-up context, false-positive guards, and an
+  opt-in real ONNX classifier scenario table.
 - Improved agentic planner/worker/finalizer prompts, added safe tool-specific
   display summaries, and introduced a runtime-derived work checklist for clearer
   TUI progress on long runs.

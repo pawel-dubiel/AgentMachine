@@ -59,6 +59,13 @@ defmodule AgentMachine.WorkflowRouterTest do
     def classify!(_input), do: %{intent: :not_real}
   end
 
+  defmodule LocalProcessClassifier do
+    def classify!(_input) do
+      Process.get(:workflow_router_classifier_result) ||
+        raise "missing :workflow_router_classifier_result"
+    end
+  end
+
   test "routes auto chat intent to chat without exposing configured tools" do
     route =
       route!(%{
@@ -291,6 +298,71 @@ defmodule AgentMachine.WorkflowRouterTest do
 
     assert followup.selected == "chat"
     assert followup.tool_intent == "none"
+  end
+
+  test "routes complex read-only inspection prompt to tool without write permission" do
+    route =
+      route!(%{
+        task:
+          "Please inspect README.md and lib/agent_machine/workflow_router.ex, summarize the auto mode behavior, and do not change any files.",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "tool"
+    assert route.tool_intent == "file_read"
+    assert route.tools_exposed
+  end
+
+  test "routes complex documentation write prompt to local-files mutation" do
+    route =
+      route!(%{
+        task:
+          "In the project folder create docs/router-notes.md with a short operational summary; this is documentation only.",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "file_mutation"
+    assert route.reason == "filesystem_mutation_intent_with_local_files_harness"
+  end
+
+  test "routes complex app repair prompt to code mutation" do
+    route =
+      route!(%{
+        task:
+          "Projekt1 has a corrupted weather_app.py. Read it, rewrite the Python code so the app can run, and keep configuration placeholders.",
+        workflow: :auto,
+        tool_harness: :code_edit,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "code_mutation"
+  end
+
+  test "routes complex explicit multi-agent request to delegation" do
+    route =
+      route!(%{
+        task:
+          "Use agents for this: one worker should inspect router behavior, another should inspect TUI progress rendering, then summarize risks.",
+        workflow: :auto
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "delegation"
   end
 
   test "routes generic tool intent to tool with read-risk MCP tool" do
@@ -569,6 +641,250 @@ defmodule AgentMachine.WorkflowRouterTest do
     end
   end
 
+  describe "local classifier permission and routing matrix" do
+    test "none intent stays chat even when tools are configured" do
+      route =
+        local_route!(:none,
+          tool_harnesses: [:code_edit],
+          approval_mode: :auto_approved_safe
+        )
+
+      assert route.selected == "chat"
+      assert route.tool_intent == "none"
+      refute route.tools_exposed
+      assert route.classified_intent == "none"
+    end
+
+    test "file_read needs a read-capable filesystem harness" do
+      for harnesses <- [[:local_files], [:code_edit]] do
+        route = local_route!(:file_read, tool_harnesses: harnesses, approval_mode: :read_only)
+
+        assert route.selected == "tool"
+        assert route.tool_intent == "file_read"
+        assert route.tools_exposed
+      end
+
+      assert_raise ArgumentError, ~r/read-capable tool harness/, fn ->
+        local_route!(:file_read)
+      end
+    end
+
+    test "file_mutation asks for a write-capable filesystem harness" do
+      for harnesses <- [[:local_files], [:code_edit]] do
+        route =
+          local_route!(:file_mutation,
+            tool_harnesses: harnesses,
+            approval_mode: :auto_approved_safe
+          )
+
+        assert route.selected == "agentic"
+        assert route.tool_intent == "file_mutation"
+        assert route.tools_exposed
+      end
+
+      assert_raise ArgumentError, ~r/write-capable tool harness/, fn ->
+        local_route!(:file_mutation)
+      end
+    end
+
+    test "code_mutation asks specifically for code-edit" do
+      route =
+        local_route!(:code_mutation,
+          tool_harnesses: [:code_edit],
+          approval_mode: :auto_approved_safe
+        )
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "code_mutation"
+      assert route.tools_exposed
+
+      assert_raise ArgumentError, ~r/:code_edit tool harness/, fn ->
+        local_route!(:code_mutation,
+          tool_harnesses: [:local_files],
+          approval_mode: :auto_approved_safe
+        )
+      end
+    end
+
+    test "test_command requires code-edit, full-access, and an allowlisted command" do
+      route =
+        local_route!(:test_command,
+          tool_harnesses: [:code_edit],
+          approval_mode: :full_access,
+          test_commands: ["mix test"]
+        )
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "test_command"
+      assert route.tools_exposed
+
+      assert_raise ArgumentError, ~r/:code_edit tool harness/, fn ->
+        local_route!(:test_command,
+          tool_harnesses: [:local_files],
+          approval_mode: :full_access,
+          test_commands: ["mix test"]
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:tool_approval_mode must be :full_access/, fn ->
+        local_route!(:test_command,
+          tool_harnesses: [:code_edit],
+          approval_mode: :auto_approved_safe,
+          test_commands: ["mix test"]
+        )
+      end
+
+      assert_raise ArgumentError, ~r/no allowlisted :test_commands/, fn ->
+        local_route!(:test_command,
+          tool_harnesses: [:code_edit],
+          approval_mode: :full_access,
+          test_commands: []
+        )
+      end
+    end
+
+    test "time intent uses a read-only tool when any tool harness is configured" do
+      route =
+        local_route!(:time,
+          tool_harnesses: [:local_files],
+          approval_mode: :read_only
+        )
+
+      assert route.selected == "tool"
+      assert route.tool_intent == "time"
+      assert route.reason == "time_intent_with_read_only_tool"
+
+      no_tool_route = local_route!(:time)
+      assert no_tool_route.selected == "chat"
+      assert no_tool_route.reason == "time_intent_without_time_harness"
+      refute no_tool_route.tools_exposed
+    end
+
+    test "tool_use needs at least one read-risk tool" do
+      route =
+        local_route!(:tool_use,
+          tool_harnesses: [:mcp],
+          approval_mode: :read_only,
+          mcp_config: mcp_config("read")
+        )
+
+      assert route.selected == "tool"
+      assert route.tool_intent == "tool_use"
+
+      assert_raise ArgumentError, ~r/no tool harness/, fn ->
+        local_route!(:tool_use)
+      end
+
+      assert_raise ArgumentError, ~r/read-only tool capability/, fn ->
+        local_route!(:tool_use,
+          tool_harnesses: [:mcp],
+          approval_mode: :read_only,
+          mcp_config: mcp_config("write")
+        )
+      end
+    end
+
+    test "web_browse needs Playwright MCP browser tool and full access" do
+      route =
+        local_route!(:web_browse,
+          task: "open https://example.com",
+          tool_harnesses: [:mcp],
+          approval_mode: :full_access,
+          mcp_config: playwright_mcp_config()
+        )
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "web_browse"
+
+      assert_raise ArgumentError, ~r/no MCP browser network tool/, fn ->
+        local_route!(:web_browse,
+          task: "open https://example.com",
+          tool_harnesses: [:mcp],
+          approval_mode: :full_access,
+          mcp_config: mcp_config("read")
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:tool_approval_mode must be :full_access/, fn ->
+        local_route!(:web_browse,
+          task: "open https://example.com",
+          tool_harnesses: [:mcp],
+          approval_mode: :read_only,
+          mcp_config: playwright_mcp_config()
+        )
+      end
+    end
+
+    test "web_browse from local classifier does not ask permission without a concrete target" do
+      route =
+        local_route!(:web_browse,
+          task: "hello",
+          tool_harnesses: [:mcp],
+          approval_mode: :full_access,
+          mcp_config: playwright_mcp_config()
+        )
+
+      assert route.selected == "chat"
+      assert route.tool_intent == "none"
+      assert route.reason == "local_classifier_web_browse_without_web_target"
+      refute route.tools_exposed
+    end
+
+    test "delegation routes to agentic without requiring tools" do
+      route = local_route!(:delegation)
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "delegation"
+      refute route.tools_exposed
+    end
+
+    test "deterministic guard prevents a local false-positive code mutation permission prompt" do
+      route =
+        local_route!(:code_mutation,
+          task:
+            "Please read README.md and explain why the instructions are confusing. Do not change anything.",
+          tool_harnesses: [:local_files],
+          approval_mode: :read_only
+        )
+
+      assert route.selected == "tool"
+      assert route.tool_intent == "file_read"
+      assert route.classified_intent == "code_mutation"
+      assert route.reason == "read_intent_with_read_only_tool"
+    end
+
+    test "deterministic guard escalates complex mutation even if local classifier says none" do
+      route =
+        local_route!(:none,
+          task:
+            "Create a polished Next.js dashboard in the project with package.json, app page, and styles.",
+          tool_harnesses: [:code_edit],
+          approval_mode: :auto_approved_safe,
+          classified_intent: :none
+        )
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "code_mutation"
+      assert route.classified_intent == "none"
+      assert route.reason == "code_mutation_intent_with_code_edit_harness"
+    end
+
+    test "affirmative follow-up uses pending action instead of the short reply" do
+      route =
+        local_route!(:none,
+          task: "yes, do it",
+          pending_action: "Repair the corrupted weather_app.py Python script.",
+          tool_harnesses: [:code_edit],
+          approval_mode: :auto_approved_safe,
+          classified_intent: :none
+        )
+
+      assert route.selected == "agentic"
+      assert route.tool_intent == "code_mutation"
+      assert route.classified_intent == "none"
+    end
+  end
+
   test "fails fast for mutation intent without write-capable harness" do
     assert_raise ArgumentError, ~r/mutation intent/, fn ->
       route!(%{task: "create hello.md", workflow: :auto})
@@ -641,6 +957,42 @@ defmodule AgentMachine.WorkflowRouterTest do
     })
     |> RunSpec.new!()
     |> WorkflowRouter.route!()
+  end
+
+  defp local_route!(intent, attrs \\ []) do
+    Process.put(:workflow_router_classifier_result, classifier_result(intent, attrs))
+
+    %WorkflowRouter{
+      requested_workflow: :auto,
+      task: Keyword.get(attrs, :task, "please handle this request"),
+      pending_action: Keyword.get(attrs, :pending_action),
+      recent_context: Keyword.get(attrs, :recent_context),
+      tool_harnesses: Keyword.get(attrs, :tool_harnesses, []),
+      approval_mode: Keyword.get(attrs, :approval_mode),
+      test_commands: Keyword.get(attrs, :test_commands, []),
+      mcp_config: Keyword.get(attrs, :mcp_config),
+      router_mode: :local,
+      router_model_dir: "/tmp/router-model",
+      router_timeout_ms: 100,
+      router_confidence_threshold: 0.5,
+      classifier_module: LocalProcessClassifier
+    }
+    |> WorkflowRouter.route!()
+  after
+    Process.delete(:workflow_router_classifier_result)
+  end
+
+  defp classifier_result(intent, attrs) do
+    classified_intent = Keyword.get(attrs, :classified_intent, intent)
+
+    %{
+      intent: intent,
+      classified_intent: classified_intent,
+      classifier: "local",
+      classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+      confidence: Keyword.get(attrs, :confidence, 0.91),
+      reason: "test_classifier_#{intent}"
+    }
   end
 
   defp mcp_config(risk) do
