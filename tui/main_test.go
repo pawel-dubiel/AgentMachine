@@ -707,6 +707,22 @@ func TestAgentDetailCompactsHeartbeatEvents(t *testing.T) {
 	}
 }
 
+func TestLiveActivityCompactsReadOnlyToolEvents(t *testing.T) {
+	lines := compactEventDisplayLines([]eventSummary{
+		{Type: "tool_call_finished", AgentID: "worker", Tool: "read_file", Status: "ok", Summary: "worker read README.md"},
+		{Type: "tool_call_finished", AgentID: "worker", Tool: "read_file", Status: "ok", Summary: "worker read lib/app.ex"},
+		{Type: "tool_call_failed", AgentID: "worker", Tool: "read_file", Status: "error", Summary: "worker failed read_file: denied"},
+	})
+
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "worker read lib/app.ex") || !strings.Contains(rendered, "x2") {
+		t.Fatalf("expected repeated read events to collapse, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "worker failed read_file: denied") {
+		t.Fatalf("expected errors to remain visible, got %q", rendered)
+	}
+}
+
 func TestAgentDetailShowsRunningPlaceholders(t *testing.T) {
 	m := model{
 		selectedAgent: "setup-nextjs",
@@ -2810,6 +2826,40 @@ func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	}
 	if updated.agents["assistant"].Output != "hello" {
 		t.Fatalf("expected assistant output, got %#v", updated.agents["assistant"])
+	}
+}
+
+func TestJSONLSummaryAppliesChecklist(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-1","status":"completed","final_output":"done","results":{},"checklist":[{"id":"agent:planner","kind":"agent","label":"planner","status":"done","latest_summary":"planner finished"},{"id":"tool:worker:call-1","kind":"tool","label":"worker read README.md","parent_id":"agent:worker","status":"done","latest_summary":"worker read README.md"}],"usage":{"agents":1},"events":[]}}`)
+
+	if len(updated.workOrder) != 2 {
+		t.Fatalf("expected checklist rows, got %#v", updated.workOrder)
+	}
+	view := updated.workChecklistView()
+	if !strings.Contains(view, "[x] planner") || !strings.Contains(view, "worker read README.md") {
+		t.Fatalf("expected work checklist to render summary rows, got %q", view)
+	}
+}
+
+func TestJSONLEventsMaintainWorkChecklist(t *testing.T) {
+	m := model{agents: map[string]agentState{}, workItems: map[string]workItem{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"agent_delegation_scheduled","run_id":"run-1","agent_id":"planner","delegated_agent_ids":["worker"],"summary":"planner scheduled 1 delegated agent(s)"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"agent_started","run_id":"run-1","agent_id":"worker","parent_agent_id":"planner","summary":"worker started attempt 1","at":"2026-04-25T10:00:00Z"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"tool_call_started","run_id":"run-1","agent_id":"worker","tool_call_id":"call-1","tool":"read_file","summary":"worker started read_file README.md","at":"2026-04-25T10:00:01Z"}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"tool_call_finished","run_id":"run-1","agent_id":"worker","tool_call_id":"call-1","tool":"read_file","status":"ok","summary":"worker read README.md","duration_ms":12,"at":"2026-04-25T10:00:02Z"}}`)
+
+	if updated.workItems["agent:worker"].Status != "running" {
+		t.Fatalf("expected worker running row, got %#v", updated.workItems["agent:worker"])
+	}
+	if updated.workItems["tool:worker:call-1"].Status != "done" {
+		t.Fatalf("expected tool done row, got %#v", updated.workItems["tool:worker:call-1"])
+	}
+	view := updated.workChecklistView()
+	if !strings.Contains(view, "worker read README.md") || !strings.Contains(view, "duration=12ms") {
+		t.Fatalf("expected tool checklist row, got %q", view)
 	}
 }
 

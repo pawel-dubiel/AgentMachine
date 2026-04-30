@@ -101,7 +101,7 @@ func (m model) chatView() string {
 	if m.running {
 		b.WriteString(m.thinkingView())
 		b.WriteString("\n\n")
-		if checklist := m.agentChecklistView(); checklist != "" {
+		if checklist := m.workChecklistView(); checklist != "" {
 			b.WriteString(checklist)
 			b.WriteString("\n\n")
 		}
@@ -273,6 +273,10 @@ func (m model) queueView() string {
 }
 
 func (m model) agentChecklistView() string {
+	if len(m.workOrder) > 0 {
+		return m.workChecklistView()
+	}
+
 	visible := m.visibleAgentIDs()
 	if len(visible) == 0 {
 		return ""
@@ -301,6 +305,91 @@ func (m model) agentChecklistLine(agent agentState) string {
 		parts = append(parts, latest)
 	}
 	return strings.Join(parts, " ")
+}
+
+func (m model) workChecklistView() string {
+	if len(m.workOrder) == 0 {
+		return m.agentChecklistViewFallback()
+	}
+
+	lines := []string{labelStyle.Render("Work")}
+	for _, id := range m.workOrder {
+		item, ok := m.workItems[id]
+		if !ok {
+			continue
+		}
+		lines = append(lines, m.workChecklistLine(item))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) agentChecklistViewFallback() string {
+	visible := m.visibleAgentIDs()
+	if len(visible) == 0 {
+		return ""
+	}
+
+	lines := []string{labelStyle.Render("Work")}
+	for _, id := range visible {
+		lines = append(lines, m.agentChecklistLine(m.agents[id]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) workChecklistLine(item workItem) string {
+	depth := m.workDepth(item.ID)
+	indent := strings.Repeat("  ", depth)
+	status := emptyAs(item.Status, "pending")
+	parts := []string{
+		indent + agentStatusMarker(status),
+		emptyAs(item.Label, item.ID),
+	}
+	if strings.TrimSpace(item.ParentID) != "" && depth == 0 {
+		parts = append(parts, "parent="+strings.TrimPrefix(item.ParentID, "agent:"))
+	}
+	if duration := workDurationText(item); duration != "" {
+		parts = append(parts, duration)
+	}
+	if strings.TrimSpace(item.LatestSummary) != "" && item.LatestSummary != item.Label {
+		parts = append(parts, item.LatestSummary)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m model) workDepth(id string) int {
+	depth := 0
+	seen := map[string]bool{}
+	current := id
+	for {
+		if seen[current] {
+			return depth
+		}
+		seen[current] = true
+		item, ok := m.workItems[current]
+		if !ok || item.ParentID == "" {
+			return depth
+		}
+		depth++
+		current = item.ParentID
+	}
+}
+
+func workDurationText(item workItem) string {
+	if item.DurationMS != nil {
+		return fmt.Sprintf("duration=%dms", *item.DurationMS)
+	}
+	if strings.TrimSpace(item.StartedAt) == "" || item.Status != "running" {
+		return ""
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, item.StartedAt)
+	if err != nil {
+		return "elapsed=?"
+	}
+	duration := time.Since(startedAt)
+	if duration < 0 {
+		duration = 0
+	}
+	return fmt.Sprintf("elapsed=%ds", int(duration.Seconds()))
 }
 
 func agentStatusMarker(status string) string {
@@ -365,24 +454,24 @@ func (m model) liveActivityView() string {
 		return hintStyle.Render(liveActivityHeader(m) + "\nwaiting for events...")
 	}
 
+	displayLines := compactEventDisplayLines(m.eventLog)
+
 	start := m.eventScroll
 	if start < 0 {
 		start = 0
 	}
-	if start > maxEventScroll(len(m.eventLog), liveEventWindowSize) {
-		start = maxEventScroll(len(m.eventLog), liveEventWindowSize)
+	if start > maxEventScroll(len(displayLines), liveEventWindowSize) {
+		start = maxEventScroll(len(displayLines), liveEventWindowSize)
 	}
 	end := start + liveEventWindowSize
-	if end > len(m.eventLog) {
-		end = len(m.eventLog)
+	if end > len(displayLines) {
+		end = len(displayLines)
 	}
 
 	lines := []string{liveActivityHeader(m)}
-	for _, event := range m.eventLog[start:end] {
-		lines = append(lines, eventDisplayLine(event))
-	}
-	if len(m.eventLog) > liveEventWindowSize {
-		lines = append(lines, hintStyle.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(m.eventLog))))
+	lines = append(lines, displayLines[start:end]...)
+	if len(displayLines) > liveEventWindowSize {
+		lines = append(lines, hintStyle.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(displayLines))))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -399,7 +488,100 @@ func recentEventLine(event eventSummary) string {
 	return eventDisplayLine(event)
 }
 
+func compactEventDisplayLines(events []eventSummary) []string {
+	lines := make([]string, 0, len(events))
+	var heartbeat eventSummary
+	heartbeatCount := 0
+	var groupedRead eventSummary
+	groupedReadCount := 0
+
+	flushHeartbeat := func() {
+		if heartbeatCount == 0 {
+			return
+		}
+		line := eventDisplayLine(heartbeat)
+		if heartbeatCount > 1 {
+			line += hintStyle.Render(fmt.Sprintf(" x%d", heartbeatCount))
+		}
+		lines = append(lines, line)
+		heartbeat = eventSummary{}
+		heartbeatCount = 0
+	}
+
+	flushGroupedRead := func() {
+		if groupedReadCount == 0 {
+			return
+		}
+		line := eventDisplayLine(groupedRead)
+		if groupedReadCount > 1 {
+			line += hintStyle.Render(fmt.Sprintf(" x%d", groupedReadCount))
+		}
+		lines = append(lines, line)
+		groupedRead = eventSummary{}
+		groupedReadCount = 0
+	}
+
+	for index := 0; index < len(events); index++ {
+		event := events[index]
+
+		if event.Type == "provider_request_started" && index+1 < len(events) {
+			next := events[index+1]
+			if next.Type == "provider_request_finished" && next.AgentID == event.AgentID {
+				flushHeartbeat()
+				flushGroupedRead()
+				lines = append(lines, eventDisplayLine(next))
+				index++
+				continue
+			}
+		}
+
+		if event.Type == "agent_heartbeat" {
+			flushGroupedRead()
+			heartbeat = event
+			heartbeatCount++
+			continue
+		}
+
+		if collapsibleReadEvent(event) {
+			flushHeartbeat()
+			if groupedReadCount > 0 && groupedRead.AgentID == event.AgentID && groupedRead.Tool == event.Tool {
+				groupedRead = event
+				groupedReadCount++
+			} else {
+				flushGroupedRead()
+				groupedRead = event
+				groupedReadCount = 1
+			}
+			continue
+		}
+
+		flushHeartbeat()
+		flushGroupedRead()
+		lines = append(lines, eventDisplayLine(event))
+	}
+
+	flushHeartbeat()
+	flushGroupedRead()
+	return lines
+}
+
+func collapsibleReadEvent(event eventSummary) bool {
+	if event.Type != "tool_call_finished" || event.Status != "ok" {
+		return false
+	}
+	switch event.Tool {
+	case "file_info", "list_files", "read_file", "search_files", "now":
+		return true
+	default:
+		return false
+	}
+}
+
 func eventDisplayLine(event eventSummary) string {
+	if text := toolEventDisplayLine(event); text != "" {
+		return text
+	}
+
 	text := event.Summary
 	if strings.TrimSpace(text) == "" {
 		text = event.Type
@@ -412,6 +594,22 @@ func eventDisplayLine(event eventSummary) string {
 		text += "  " + hintStyle.Render(extras)
 	}
 	return text
+}
+
+func toolEventDisplayLine(event eventSummary) string {
+	if event.Type != "tool_call_started" && event.Type != "tool_call_finished" && event.Type != "tool_call_failed" {
+		return ""
+	}
+	if event.Type == "tool_call_failed" {
+		return event.Summary
+	}
+	if event.Type == "tool_call_started" {
+		return event.Summary
+	}
+	if strings.TrimSpace(event.Summary) != "" {
+		return event.Summary
+	}
+	return ""
 }
 
 func eventDetailText(event eventSummary) string {
@@ -448,7 +646,7 @@ func compactDetails(details map[string]any) []string {
 	keys := make([]string, 0, len(details))
 	for key := range details {
 		switch key {
-		case "agent_id", "attempt", "duration_ms", "reason", "round", "tool":
+		case "agent_id", "attempt", "duration_ms", "reason", "round", "tool", "input_summary", "result_summary":
 			continue
 		default:
 			keys = append(keys, key)
@@ -789,32 +987,7 @@ func agentEventLines(events []eventSummary) string {
 	if len(events) == 0 {
 		return "(none)"
 	}
-	lines := make([]string, 0, len(events))
-	var heartbeat eventSummary
-	heartbeatCount := 0
-	for _, event := range events {
-		if event.Type == "agent_heartbeat" {
-			heartbeat = event
-			heartbeatCount++
-			continue
-		}
-		lines = appendHeartbeatLine(lines, heartbeat, heartbeatCount)
-		heartbeatCount = 0
-		lines = append(lines, eventDisplayLine(event))
-	}
-	lines = appendHeartbeatLine(lines, heartbeat, heartbeatCount)
-	return strings.Join(lines, "\n")
-}
-
-func appendHeartbeatLine(lines []string, event eventSummary, count int) []string {
-	if count == 0 {
-		return lines
-	}
-	line := eventDisplayLine(event)
-	if count > 1 {
-		line += hintStyle.Render(fmt.Sprintf(" x%d", count))
-	}
-	return append(lines, line)
+	return strings.Join(compactEventDisplayLines(events), "\n")
 }
 
 func modelListText(models []modelOption, selected int) string {

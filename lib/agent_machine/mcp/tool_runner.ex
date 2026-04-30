@@ -59,7 +59,14 @@ defmodule AgentMachine.MCP.ToolRunner do
       result_truncated: truncated,
       redacted: redacted.redacted,
       redaction_count: redacted.count,
-      redaction_reasons: redacted.reasons
+      redaction_reasons: redacted.reasons,
+      summary: %{
+        tool: "mcp",
+        status: "ok",
+        server_id: server_id,
+        mcp_tool: tool_name,
+        result_truncated: truncated
+      }
     }
   end
 

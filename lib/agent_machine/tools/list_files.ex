@@ -56,7 +56,14 @@ defmodule AgentMachine.Tools.ListFiles do
      %{
        path: target,
        entries: Enum.map(visible_names, &entry!(target, &1)),
-       truncated: truncated
+       truncated: truncated,
+       summary: %{
+         tool: "list_files",
+         status: "ok",
+         path: Path.relative_to(target, root),
+         entry_count: length(visible_names),
+         truncated: truncated
+       }
      }}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}

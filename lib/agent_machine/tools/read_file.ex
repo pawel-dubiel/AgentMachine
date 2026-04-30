@@ -57,7 +57,15 @@ defmodule AgentMachine.Tools.ReadFile do
       path: target,
       content: redaction.value,
       bytes: byte_size(redaction.value),
-      truncated: truncated
+      truncated: truncated,
+      summary: %{
+        tool: "read_file",
+        status: "ok",
+        path: Path.relative_to(target, root),
+        bytes: byte_size(redaction.value),
+        line_count: line_count(redaction.value),
+        truncated: truncated
+      }
     }
 
     {:ok, Redactor.put_tool_metadata(result, redaction)}
@@ -127,4 +135,7 @@ defmodule AgentMachine.Tools.ReadFile do
       end
     end
   end
+
+  defp line_count(""), do: 0
+  defp line_count(content), do: content |> String.split("\n") |> length()
 end

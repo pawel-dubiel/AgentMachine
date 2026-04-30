@@ -442,18 +442,26 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert planner.id == "planner"
 
-    assert planner.metadata == %{
+    assert %{
              agent_machine_response: "delegation",
-             agent_machine_disable_tools: true
-           }
+             agent_machine_disable_tools: true,
+             agent_machine_worker_instructions: worker_instructions
+           } = planner.metadata
 
     assert planner.instructions =~ "Return only JSON"
     assert planner.instructions =~ "\"direct\""
     assert planner.instructions =~ "\"delegate\""
+    assert planner.instructions =~ "The Elixir runtime parses that JSON"
+    assert planner.instructions =~ "Worker agents start from the worker input/instructions"
+    assert planner.instructions =~ "Do not predict or fabricate worker results"
+    assert worker_instructions =~ "You are a worker agent running inside AgentMachine"
+    assert worker_instructions =~ "tool_results confirm it"
     assert Keyword.fetch!(opts, :max_steps) == 6
     finalizer = Keyword.fetch!(opts, :finalizer)
     assert finalizer.id == "finalizer"
     assert finalizer.metadata == %{agent_machine_disable_tools: true}
+    assert finalizer.instructions =~ "what completed"
+    assert finalizer.instructions =~ "what was not verified"
   end
 
   test "runs the basic echo workflow and returns a client summary" do
@@ -472,6 +480,42 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(summary.results) |> Enum.sort() == ["assistant", "finalizer"]
     assert summary.usage.agents == 2
     assert Enum.map(summary.events, & &1.type) |> List.last() == "run_completed"
+  end
+
+  test "summary includes runtime checklist" do
+    at = DateTime.from_naive!(~N[2026-04-30 10:00:00], "Etc/UTC")
+
+    summary =
+      ClientRunner.summarize_for_test!(%{
+        id: "run-1",
+        status: :completed,
+        error: nil,
+        results: %{
+          "assistant" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "assistant",
+            status: :ok,
+            output: "done",
+            attempt: 1
+          }
+        },
+        artifacts: %{},
+        usage: nil,
+        opts: [],
+        events: [
+          %{type: :agent_started, run_id: "run-1", agent_id: "assistant", attempt: 1, at: at},
+          %{
+            type: :agent_finished,
+            run_id: "run-1",
+            agent_id: "assistant",
+            status: :ok,
+            duration_ms: 10,
+            at: at
+          }
+        ]
+      })
+
+    assert [%{id: "agent:assistant", status: "done", duration_ms: 10}] = summary.checklist
   end
 
   test "runs the chat echo workflow and returns assistant output directly" do

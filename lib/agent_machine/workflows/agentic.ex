@@ -20,7 +20,11 @@ defmodule AgentMachine.Workflows.Agentic do
       instructions: planner_instructions(),
       input: spec.task,
       pricing: pricing,
-      metadata: %{agent_machine_response: "delegation", agent_machine_disable_tools: true}
+      metadata: %{
+        agent_machine_response: "delegation",
+        agent_machine_disable_tools: true,
+        agent_machine_worker_instructions: worker_runtime_instructions()
+      }
     }
 
     finalizer = %{
@@ -138,6 +142,12 @@ defmodule AgentMachine.Workflows.Agentic do
     """
     You are the planning agent for AgentMachine.
 
+    AgentMachine runtime model:
+    - You return structured delegation JSON.
+    - The Elixir runtime parses that JSON and starts delegated worker agents.
+    - You do not directly spawn OS processes, run tools, or edit files.
+    - Worker agents start from the worker input/instructions you provide plus runtime context; do not assume they remember unstated details.
+
     Decide whether the task needs worker agents. Return only JSON with this shape:
     {"decision":{"mode":"direct","reason":"non-empty reason"},"output":"final answer","next_agents":[]}
     or:
@@ -146,11 +156,31 @@ defmodule AgentMachine.Workflows.Agentic do
     Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
     Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
     If the task needs external side effects such as writing files or creating directories, you MUST create a worker agent for that exact action and require it to use available tools.
+
+    Worker briefing rules:
+    - Include exact paths, requested outcome, relevant context, and success evidence in each worker input.
+    - Preserve exact user-provided patch, command, path, and file content text in worker input when delegating.
+    - State which tools the worker should use when side effects are required.
+    - Tell workers to report partial failures and tool errors instead of pretending the task is complete.
+    - Do not write vague prompts like "based on your findings, fix it"; synthesize the task before delegating.
+
     For a single filesystem change request, create one worker that inspects, reads, and mutates files sequentially. Do not split exploration and file mutation into parallel workers unless the worker specs include explicit depends_on ordering.
     Do not use direct mode for filesystem create, write, edit, delete, or rename requests.
-    Preserve exact user-provided patch, command, path, and file content text in worker input when delegating.
     Do not claim side effects happened unless tool_results confirm them.
+    Do not predict or fabricate worker results. The finalizer will use actual worker outputs and tool_results.
     Do not call tools yourself. You are only planning and delegating.
+    """
+    |> String.trim()
+  end
+
+  defp worker_runtime_instructions do
+    """
+    You are a worker agent running inside AgentMachine.
+    Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
+    Inspect named files or directories before changing them when the task depends on existing state.
+    Do not claim that you created, changed, deleted, read, browsed, patched, or ran anything unless tool_results confirm it.
+    If a tool fails, times out, lacks permission, or reaches a limit, report the exact partial state and stop inventing progress.
+    Keep the final worker output concise: completed work, confirmed side effects, failures, and anything not verified.
     """
     |> String.trim()
   end
@@ -162,6 +192,7 @@ defmodule AgentMachine.Workflows.Agentic do
     If the planner decision mode is "delegate", use worker outputs and tool_results to create the final answer.
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
+    Say what completed, what failed or remained partial, which side effects are confirmed by tool_results, and what was not verified.
     Do not call tools. Summarize only the run context.
     """
     |> String.trim()

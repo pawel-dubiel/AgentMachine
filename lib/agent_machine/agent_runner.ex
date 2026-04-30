@@ -62,6 +62,19 @@ defmodule AgentMachine.AgentRunner do
           finished_at: DateTime.utc_now()
         }
 
+      {:error, reason, events, tool_results} ->
+        %AgentResult{
+          run_id: run_id,
+          agent_id: agent.id,
+          status: :error,
+          attempt: attempt,
+          error: reason,
+          tool_results: tool_results,
+          events: events,
+          started_at: started_at,
+          finished_at: DateTime.utc_now()
+        }
+
       {:invalid, other} ->
         error(
           agent,
@@ -70,6 +83,19 @@ defmodule AgentMachine.AgentRunner do
           started_at,
           "provider returned invalid success payload: #{inspect(other)}"
         )
+
+      {:provider_error, %{reason: reason, events: events, tool_results: tool_results}} ->
+        %AgentResult{
+          run_id: run_id,
+          agent_id: agent.id,
+          status: :error,
+          attempt: attempt,
+          error: inspect(reason),
+          tool_results: tool_results,
+          events: events,
+          started_at: started_at,
+          finished_at: DateTime.utc_now()
+        }
 
       {:provider_error, %{reason: reason, events: events}} ->
         %AgentResult{
@@ -191,7 +217,12 @@ defmodule AgentMachine.AgentRunner do
         {:invalid, %{payload: other, events: provider_events}}
 
       {:error, reason, provider_events} ->
-        {:provider_error, %{reason: reason, events: provider_events}}
+        {:provider_error,
+         %{
+           reason: reason,
+           events: state.events ++ provider_events,
+           tool_results: state.tool_results
+         }}
 
       other ->
         {:invalid, other}
@@ -347,7 +378,7 @@ defmodule AgentMachine.AgentRunner do
     max_rounds = tool_max_rounds_from_opts!(opts)
 
     if state.round >= max_rounds do
-      {:error, "provider exceeded :tool_max_rounds #{max_rounds}", state.events}
+      error_completion("provider exceeded :tool_max_rounds #{max_rounds}", state)
     else
       with {:ok, tool_state} <- tool_state_from_payload(payload),
            {:ok, tool_call_ids} <- validate_new_tool_call_ids(tool_calls, state.tool_call_ids),
@@ -373,10 +404,14 @@ defmodule AgentMachine.AgentRunner do
 
         do_complete_agent(agent, opts, context, state)
       else
-        {:error, reason} -> {:error, reason, state.events}
-        {:error, reason, round_events} -> {:error, reason, state.events ++ round_events}
+        {:error, reason} -> error_completion(reason, state)
+        {:error, reason, round_events} -> error_completion(reason, state, round_events)
       end
     end
+  end
+
+  defp error_completion(reason, state, extra_events \\ []) do
+    {:error, reason, state.events ++ extra_events, state.tool_results}
   end
 
   defp next_agents_from_payload!(payload) when is_map(payload) do
@@ -1014,16 +1049,19 @@ defmodule AgentMachine.AgentRunner do
   defp safe_tool_approval_risk(_tool), do: nil
 
   defp summarize_tool_input(input) when is_map(input) do
-    %{
+    input
+    |> safe_tool_input_fields()
+    |> Map.merge(%{
       keys: input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort(),
       bytes: input |> AgentMachine.JSON.encode!() |> byte_size()
-    }
+    })
   end
 
   defp summarize_tool_input(_input), do: nil
 
   defp summarize_tool_result(result) when is_map(result) do
-    Map.get(result, :summary) || Map.get(result, "summary") || changed_summary(result)
+    (Map.get(result, :summary) || Map.get(result, "summary") || changed_summary(result))
+    |> merge_result_display_metadata(result)
   end
 
   defp summarize_tool_result(_result), do: nil
@@ -1045,4 +1083,75 @@ defmodule AgentMachine.AgentRunner do
       true -> :error
     end
   end
+
+  defp merge_result_display_metadata(nil, _result), do: nil
+
+  defp merge_result_display_metadata(summary, result) when is_map(summary) do
+    summary
+    |> maybe_put_result_path(result)
+    |> maybe_put_changed_paths(result)
+  end
+
+  defp merge_result_display_metadata(summary, _result), do: summary
+
+  defp maybe_put_result_path(summary, result) do
+    case Map.get(result, :path) || Map.get(result, "path") do
+      path when is_binary(path) and byte_size(path) <= 500 -> Map.put_new(summary, :path, path)
+      _other -> summary
+    end
+  end
+
+  defp maybe_put_changed_paths(summary, result) do
+    changed_paths =
+      result
+      |> changed_path_entries()
+      |> Enum.take(20)
+
+    if changed_paths == [] do
+      summary
+    else
+      Map.put_new(summary, :changed_paths, changed_paths)
+    end
+  end
+
+  defp changed_path_entries(result) do
+    (Map.get(result, :changed_paths) || Map.get(result, "changed_paths") || [])
+    |> Enum.concat(Map.get(result, :changed_files) || Map.get(result, "changed_files") || [])
+    |> Enum.flat_map(&changed_path_entry/1)
+  end
+
+  defp changed_path_entry(%{path: path} = entry) when is_binary(path) do
+    [%{path: path, action: Map.get(entry, :action)}]
+  end
+
+  defp changed_path_entry(%{"path" => path} = entry) when is_binary(path) do
+    [%{path: path, action: Map.get(entry, "action")}]
+  end
+
+  defp changed_path_entry(_entry), do: []
+
+  defp safe_tool_input_fields(input) do
+    [
+      {"path", :path, :path},
+      {"cwd", :cwd, :cwd},
+      {"query", :query, :query},
+      {"pattern", :pattern, :pattern},
+      {"command", :command, :command},
+      {"max_entries", :max_entries, :max_entries},
+      {"max_results", :max_results, :max_results}
+    ]
+    |> Enum.reduce(%{}, fn {string_key, atom_key, output_key}, acc ->
+      value = Map.get(input, string_key, Map.get(input, atom_key))
+
+      if safe_tool_input_value?(value) do
+        Map.put(acc, output_key, value)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp safe_tool_input_value?(value) when is_binary(value), do: byte_size(value) <= 500
+  defp safe_tool_input_value?(value) when is_integer(value), do: true
+  defp safe_tool_input_value?(_value), do: false
 end

@@ -57,12 +57,12 @@ defmodule AgentMachine.EventSummary do
   defp summary(%{type: :assistant_done, agent_id: agent_id}),
     do: "#{agent_id} finished streaming text"
 
-  defp summary(%{type: :tool_call_started, agent_id: agent_id, tool: tool}) do
-    "#{agent_id} started #{tool}"
+  defp summary(%{type: :tool_call_started, agent_id: agent_id, tool: tool} = event) do
+    "#{agent_id} started #{tool_started_text(tool, Map.get(event, :input_summary))}"
   end
 
   defp summary(%{type: :tool_call_finished, agent_id: agent_id, tool: tool} = event) do
-    "#{agent_id} finished #{tool}#{duration_text(event)}"
+    "#{agent_id} #{tool_finished_text(tool, Map.get(event, :result_summary))}#{duration_text(event)}"
   end
 
   defp summary(%{type: :tool_call_failed, agent_id: agent_id, tool: tool, reason: reason}) do
@@ -126,4 +126,107 @@ defmodule AgentMachine.EventSummary do
   end
 
   defp duration_text(_event), do: ""
+
+  defp tool_started_text(tool, input_summary) do
+    case path_from(input_summary) do
+      nil -> tool
+      path -> "#{tool} #{path}"
+    end
+  end
+
+  defp tool_finished_text("now", result_summary) do
+    case value_from(result_summary, :utc) do
+      nil -> "checked time"
+      utc -> "checked time utc=#{utc}"
+    end
+  end
+
+  defp tool_finished_text("file_info", result_summary) do
+    path = path_from(result_summary) || "path"
+    type = value_from(result_summary, :type)
+    size = value_from(result_summary, :size)
+    compact_parts("inspected #{path}", [{"type", type}, {"size", size}])
+  end
+
+  defp tool_finished_text("list_files", result_summary) do
+    path = path_from(result_summary) || "path"
+    count = value_from(result_summary, :entry_count)
+    compact_parts("listed #{path}", [{"entries", count}])
+  end
+
+  defp tool_finished_text("read_file", result_summary) do
+    path = path_from(result_summary) || "file"
+    bytes = value_from(result_summary, :bytes)
+    lines = value_from(result_summary, :line_count)
+    compact_parts("read #{path}", [{"bytes", bytes}, {"lines", lines}])
+  end
+
+  defp tool_finished_text("search_files", result_summary) do
+    path = path_from(result_summary) || "path"
+    count = value_from(result_summary, :match_count)
+    compact_parts("searched #{path}", [{"matches", count}])
+  end
+
+  defp tool_finished_text("create_dir", result_summary) do
+    path = first_changed_path(result_summary) || path_from(result_summary) || "directory"
+    status = value_from(result_summary, :status)
+
+    if status == "unchanged" do
+      "kept dir #{path}"
+    else
+      "created dir #{path}"
+    end
+  end
+
+  defp tool_finished_text("write_file", result_summary),
+    do: changed_tool_text("wrote", result_summary)
+
+  defp tool_finished_text("append_file", result_summary),
+    do: changed_tool_text("appended", result_summary)
+
+  defp tool_finished_text("replace_in_file", result_summary),
+    do: changed_tool_text("replaced", result_summary)
+
+  defp tool_finished_text("apply_edits", result_summary),
+    do: changed_tool_text("edited", result_summary)
+
+  defp tool_finished_text("apply_patch", result_summary),
+    do: changed_tool_text("patched", result_summary)
+
+  defp tool_finished_text(tool, result_summary) do
+    path = path_from(result_summary)
+    count = value_from(result_summary, :changed_count)
+    compact_parts("finished #{tool}", [{"path", path}, {"changed", count}])
+  end
+
+  defp changed_tool_text(verb, result_summary) do
+    path = first_changed_path(result_summary) || path_from(result_summary)
+    changed = value_from(result_summary, :changed_count)
+    compact_parts(verb <> if(path, do: " #{path}", else: ""), [{"changed", changed}])
+  end
+
+  defp compact_parts(base, parts) do
+    suffix =
+      parts
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
+
+    if suffix == "", do: base, else: base <> " " <> suffix
+  end
+
+  defp path_from(map), do: value_from(map, :path)
+
+  defp first_changed_path(map) do
+    case value_from(map, :changed_paths) || value_from(map, :changed_files) do
+      [%{path: path} | _] -> path
+      [%{"path" => path} | _] -> path
+      _other -> nil
+    end
+  end
+
+  defp value_from(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp value_from(_map, _key), do: nil
 end

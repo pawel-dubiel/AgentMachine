@@ -814,6 +814,10 @@ defmodule AgentMachine.OrchestratorTest do
 
     assert run.results["tool-user"].status == :error
     assert run.results["tool-user"].error =~ "exceeded :tool_max_rounds 1"
+
+    assert run.results["tool-user"].tool_results == %{
+             "uppercase-1" => %{value: "HELLO", attempt: 1}
+           }
   end
 
   test "fails when provider tool calls omit tool_state" do

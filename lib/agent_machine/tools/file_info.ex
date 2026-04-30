@@ -46,7 +46,14 @@ defmodule AgentMachine.Tools.FileInfo do
        type: Atom.to_string(stat.type),
        size: stat.size,
        mode: stat.mode,
-       mtime: format_datetime(stat.mtime)
+       mtime: format_datetime(stat.mtime),
+       summary: %{
+         tool: "file_info",
+         status: "ok",
+         path: Path.relative_to(target, root),
+         type: Atom.to_string(stat.type),
+         size: stat.size
+       }
      }}
   rescue
     exception in [ArgumentError, File.Error] -> {:error, Exception.message(exception)}

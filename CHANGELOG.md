@@ -4,6 +4,12 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Improved agentic planner/worker/finalizer prompts, added safe tool-specific
+  display summaries, and introduced a runtime-derived work checklist for clearer
+  TUI progress on long runs.
+- Preserved partial tool results on agent errors such as `tool_max_rounds`
+  exhaustion so finalizers and agent detail views can report confirmed side
+  effects instead of treating them as invisible.
 - Kept router details out of the README and taught the TUI to use the installed
   standard zero-shot router model automatically when its files are present.
 - Rewrote the README as a product-oriented overview with concise setup,

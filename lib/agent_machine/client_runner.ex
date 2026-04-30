@@ -8,6 +8,7 @@ defmodule AgentMachine.ClientRunner do
     EventSummary,
     JSON,
     Orchestrator,
+    RunChecklist,
     RunSpec,
     Telemetry,
     WorkflowRouter
@@ -190,6 +191,7 @@ defmodule AgentMachine.ClientRunner do
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
       skills: summarize_skills(run),
+      checklist: RunChecklist.from_events(run.events),
       usage: run.usage || empty_usage(),
       events: Enum.map(run.events, &summarize_event/1)
     }

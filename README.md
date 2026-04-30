@@ -53,8 +53,10 @@ test work requires an approved write-capable harness. Larger delegated work can
 use planner and worker agents.
 
 That routing is intentionally visible. The TUI shows the requested mode, the
-selected route, the active tools, a compact agent checklist, and the log path
-for the run.
+selected route, the active tools, a compact work checklist, and the log path
+for the run. Tool activity is summarized in plain language so read/search/write
+steps are easier to follow without exposing full file contents in the activity
+feed.
 
 ## Core Concepts
 
@@ -82,7 +84,7 @@ risk. Missing required configuration fails fast with an explicit error.
 
 When a task needs delegation, the runtime can create a planner and worker
 agents. The TUI shows each agent's status, parent, elapsed time, recent events,
-and final output when available.
+tool activity, and final output when available.
 
 **Everything important is logged**
 

@@ -43,6 +43,50 @@ defmodule AgentMachine.DelegationResponseTest do
            }
   end
 
+  test "prepends runtime worker instructions while preserving planner instructions" do
+    payload =
+      normalize(
+        %{
+          "decision" => %{"mode" => "delegate", "reason" => "A worker should edit files."},
+          "output" => "Delegating one worker.",
+          "next_agents" => [
+            %{"id" => "worker", "input" => "Edit the file.", "instructions" => "Use tools."}
+          ]
+        },
+        %{agent_machine_worker_instructions: "Runtime worker rules."}
+      )
+
+    assert [%{instructions: instructions}] = payload.next_agents
+    assert instructions == "Runtime worker rules.\n\nUse tools."
+  end
+
+  test "uses runtime worker instructions when planner omits worker instructions" do
+    payload =
+      normalize(
+        %{
+          "decision" => %{"mode" => "delegate", "reason" => "A worker should edit files."},
+          "output" => "Delegating one worker.",
+          "next_agents" => [%{"id" => "worker", "input" => "Edit the file."}]
+        },
+        %{agent_machine_worker_instructions: "Runtime worker rules."}
+      )
+
+    assert [%{instructions: "Runtime worker rules."}] = payload.next_agents
+  end
+
+  test "rejects invalid runtime worker instruction metadata" do
+    assert_raise ArgumentError, ~r/agent_machine_worker_instructions metadata/, fn ->
+      normalize(
+        %{
+          "decision" => %{"mode" => "delegate", "reason" => "A worker should edit files."},
+          "output" => "Delegating one worker.",
+          "next_agents" => [%{"id" => "worker", "input" => "Edit the file."}]
+        },
+        %{agent_machine_worker_instructions: ""}
+      )
+    end
+  end
+
   test "rejects missing decision" do
     assert_raise ArgumentError, ~r/missing required decision/, fn ->
       normalize(%{"output" => "answer", "next_agents" => []})
@@ -118,18 +162,18 @@ defmodule AgentMachine.DelegationResponseTest do
     end
   end
 
-  defp normalize(body) do
-    DelegationResponse.normalize_payload!(agent(), %{output: JSON.encode!(body)})
+  defp normalize(body, metadata \\ %{}) do
+    DelegationResponse.normalize_payload!(agent(metadata), %{output: JSON.encode!(body)})
   end
 
-  defp agent do
+  defp agent(metadata) do
     %Agent{
       id: "planner",
       provider: AgentMachine.Providers.Echo,
       model: "echo",
       input: "do work",
       pricing: %{input_per_million: 0.0, output_per_million: 0.0},
-      metadata: %{agent_machine_response: "delegation"}
+      metadata: Map.merge(%{agent_machine_response: "delegation"}, metadata)
     }
   end
 end

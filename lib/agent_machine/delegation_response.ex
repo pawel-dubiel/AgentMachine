@@ -159,7 +159,7 @@ defmodule AgentMachine.DelegationResponse do
       model: agent.model,
       input: fetch_required_string!(spec, "input"),
       pricing: agent.pricing,
-      instructions: optional_string!(spec, "instructions"),
+      instructions: worker_instructions!(agent, optional_string!(spec, "instructions")),
       metadata: optional_map!(spec, "metadata"),
       depends_on: optional_string_list!(spec, "depends_on")
     }
@@ -185,6 +185,27 @@ defmodule AgentMachine.DelegationResponse do
               "delegated worker #{key} must be a non-empty string, got: #{inspect(value)}"
     end
   end
+
+  defp worker_instructions!(%Agent{metadata: metadata}, planner_instructions)
+       when is_map(metadata) do
+    case Map.get(metadata, :agent_machine_worker_instructions) ||
+           Map.get(metadata, "agent_machine_worker_instructions") do
+      nil ->
+        planner_instructions
+
+      runtime_instructions
+      when is_binary(runtime_instructions) and byte_size(runtime_instructions) > 0 ->
+        [runtime_instructions, planner_instructions]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join("\n\n")
+
+      invalid ->
+        raise ArgumentError,
+              "agent_machine_worker_instructions metadata must be a non-empty string, got: #{inspect(invalid)}"
+    end
+  end
+
+  defp worker_instructions!(_agent, planner_instructions), do: planner_instructions
 
   defp optional_map!(map, key) do
     case Map.fetch(map, key) do

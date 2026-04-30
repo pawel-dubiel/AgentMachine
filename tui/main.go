@@ -26,6 +26,7 @@ type summary struct {
 	WorkflowRoute workflowRoute               `json:"workflow_route"`
 	Results       map[string]runResultSummary `json:"results"`
 	Skills        []skillSummary              `json:"skills"`
+	Checklist     []workItem                  `json:"checklist"`
 	Usage         usageSummary                `json:"usage"`
 	Events        []eventSummary              `json:"events"`
 }
@@ -71,22 +72,37 @@ type usageSummary struct {
 }
 
 type eventSummary struct {
-	Type          string         `json:"type"`
-	RunID         string         `json:"run_id"`
-	AgentID       string         `json:"agent_id"`
-	ParentAgentID string         `json:"parent_agent_id"`
-	Status        string         `json:"status"`
-	Attempt       int            `json:"attempt"`
-	NextAttempt   int            `json:"next_attempt"`
-	Round         int            `json:"round"`
-	ToolCallID    string         `json:"tool_call_id"`
-	Tool          string         `json:"tool"`
-	DurationMS    *int           `json:"duration_ms"`
-	Reason        string         `json:"reason"`
-	Summary       string         `json:"summary"`
-	Delta         string         `json:"delta"`
-	Details       map[string]any `json:"details"`
-	At            string         `json:"at"`
+	Type              string         `json:"type"`
+	RunID             string         `json:"run_id"`
+	AgentID           string         `json:"agent_id"`
+	ParentAgentID     string         `json:"parent_agent_id"`
+	DelegatedAgentIDs []string       `json:"delegated_agent_ids"`
+	Status            string         `json:"status"`
+	Attempt           int            `json:"attempt"`
+	NextAttempt       int            `json:"next_attempt"`
+	Round             int            `json:"round"`
+	ToolCallID        string         `json:"tool_call_id"`
+	Tool              string         `json:"tool"`
+	DurationMS        *int           `json:"duration_ms"`
+	Reason            string         `json:"reason"`
+	Summary           string         `json:"summary"`
+	Delta             string         `json:"delta"`
+	InputSummary      map[string]any `json:"input_summary"`
+	ResultSummary     map[string]any `json:"result_summary"`
+	Details           map[string]any `json:"details"`
+	At                string         `json:"at"`
+}
+
+type workItem struct {
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	Label         string `json:"label"`
+	ParentID      string `json:"parent_id"`
+	Status        string `json:"status"`
+	StartedAt     string `json:"started_at"`
+	FinishedAt    string `json:"finished_at"`
+	DurationMS    *int   `json:"duration_ms"`
+	LatestSummary string `json:"latest_summary"`
 }
 
 type runResultMsg struct {
@@ -287,6 +303,8 @@ type model struct {
 	lastSummary        summary
 	agents             map[string]agentState
 	agentOrder         []string
+	workItems          map[string]workItem
+	workOrder          []string
 	eventLog           []eventSummary
 	eventScroll        int
 	eventAutoScroll    bool
@@ -357,8 +375,9 @@ func initialModelWithArgs(args []string) (model, error) {
 		messages: []chatMessage{
 			{Role: "system", Text: "Open Setup and select a provider before running AgentMachine."},
 		},
-		view:   viewSetup,
-		agents: map[string]agentState{},
+		view:      viewSetup,
+		agents:    map[string]agentState{},
+		workItems: map[string]workItem{},
 	}
 
 	if err := m.applySavedSettings(); err != nil {
@@ -796,6 +815,8 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	m.raw = ""
 	m.agents = map[string]agentState{}
 	m.agentOrder = nil
+	m.workItems = map[string]workItem{}
+	m.workOrder = nil
 	m.eventLog = nil
 	m.eventScroll = 0
 	m.eventAutoScroll = true
@@ -1986,6 +2007,7 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 		m.lastSummary = envelope.Summary
 		m.raw = line
 		m.applySummaryResults(envelope.Summary)
+		m.applySummaryChecklist(envelope.Summary)
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown JSONL message type: " + envelope.Type})
 	}
@@ -2011,6 +2033,7 @@ func (m *model) applyEvent(event eventSummary) {
 		m.markRunningAgentsTimedOut(event)
 	}
 
+	m.applyWorkEvent(event)
 	m.applyNonDeltaEvent(event)
 }
 
@@ -2094,6 +2117,175 @@ func (m *model) markRunningAgentsTimedOut(event eventSummary) {
 			m.agents[id] = agent
 		}
 	}
+}
+
+func (m *model) applyWorkEvent(event eventSummary) {
+	if m.workItems == nil {
+		m.workItems = map[string]workItem{}
+	}
+
+	switch event.Type {
+	case "agent_delegation_scheduled":
+		parentID := workAgentID(event.AgentID)
+		for _, agentID := range event.DelegatedAgentIDs {
+			m.upsertWorkItem(workItem{
+				ID:            workAgentID(agentID),
+				Kind:          "agent",
+				Label:         agentID,
+				ParentID:      parentID,
+				Status:        "pending",
+				LatestSummary: event.Summary,
+			})
+		}
+	case "agent_started":
+		m.upsertWorkItem(workItem{
+			ID:            workAgentID(event.AgentID),
+			Kind:          "agent",
+			Label:         event.AgentID,
+			ParentID:      parentWorkAgentID(event.ParentAgentID),
+			Status:        "running",
+			StartedAt:     event.At,
+			LatestSummary: event.Summary,
+		})
+	case "agent_finished":
+		m.upsertWorkItem(workItem{
+			ID:            workAgentID(event.AgentID),
+			Kind:          "agent",
+			Label:         event.AgentID,
+			Status:        workDoneStatus(event.Status),
+			FinishedAt:    event.At,
+			DurationMS:    event.DurationMS,
+			LatestSummary: event.Summary,
+		})
+	case "tool_call_started":
+		m.upsertWorkItem(workItem{
+			ID:            workToolID(event),
+			Kind:          "tool",
+			Label:         toolWorkLabel(event),
+			ParentID:      workAgentID(event.AgentID),
+			Status:        "running",
+			StartedAt:     event.At,
+			LatestSummary: eventDisplayLine(event),
+		})
+	case "tool_call_finished":
+		m.upsertWorkItem(workItem{
+			ID:            workToolID(event),
+			Kind:          "tool",
+			Label:         toolWorkLabel(event),
+			ParentID:      workAgentID(event.AgentID),
+			Status:        "done",
+			FinishedAt:    event.At,
+			DurationMS:    event.DurationMS,
+			LatestSummary: eventDisplayLine(event),
+		})
+	case "tool_call_failed":
+		m.upsertWorkItem(workItem{
+			ID:            workToolID(event),
+			Kind:          "tool",
+			Label:         toolWorkLabel(event),
+			ParentID:      workAgentID(event.AgentID),
+			Status:        "error",
+			FinishedAt:    event.At,
+			DurationMS:    event.DurationMS,
+			LatestSummary: eventDisplayLine(event),
+		})
+	case "run_timed_out":
+		for id, item := range m.workItems {
+			if item.Status == "" || item.Status == "pending" || item.Status == "running" {
+				item.Status = "timeout"
+				item.FinishedAt = event.At
+				item.LatestSummary = event.Summary
+				m.workItems[id] = item
+			}
+		}
+	}
+}
+
+func (m *model) upsertWorkItem(item workItem) {
+	if item.ID == "" {
+		return
+	}
+	existing, exists := m.workItems[item.ID]
+	if exists {
+		item = mergeWorkItem(existing, item)
+	} else {
+		m.workOrder = append(m.workOrder, item.ID)
+	}
+	m.workItems[item.ID] = item
+}
+
+func mergeWorkItem(existing, next workItem) workItem {
+	if next.Kind != "" {
+		existing.Kind = next.Kind
+	}
+	if next.Label != "" {
+		existing.Label = next.Label
+	}
+	if next.ParentID != "" {
+		existing.ParentID = next.ParentID
+	}
+	if next.Status != "" {
+		existing.Status = next.Status
+	}
+	if next.StartedAt != "" {
+		existing.StartedAt = next.StartedAt
+	}
+	if next.FinishedAt != "" {
+		existing.FinishedAt = next.FinishedAt
+	}
+	if next.DurationMS != nil {
+		existing.DurationMS = next.DurationMS
+	}
+	if next.LatestSummary != "" {
+		existing.LatestSummary = next.LatestSummary
+	}
+	return existing
+}
+
+func (m *model) applySummaryChecklist(summary summary) {
+	if len(summary.Checklist) == 0 {
+		return
+	}
+	m.workItems = map[string]workItem{}
+	m.workOrder = nil
+	for _, item := range summary.Checklist {
+		m.upsertWorkItem(item)
+	}
+}
+
+func workAgentID(agentID string) string {
+	if strings.TrimSpace(agentID) == "" {
+		return ""
+	}
+	return "agent:" + agentID
+}
+
+func parentWorkAgentID(agentID string) string {
+	if strings.TrimSpace(agentID) == "" {
+		return ""
+	}
+	return workAgentID(agentID)
+}
+
+func workToolID(event eventSummary) string {
+	return "tool:" + event.AgentID + ":" + event.ToolCallID
+}
+
+func workDoneStatus(status string) string {
+	if status == "ok" || status == "done" || status == "completed" {
+		return "done"
+	}
+	return "error"
+}
+
+func toolWorkLabel(event eventSummary) string {
+	if event.Summary != "" {
+		return event.Summary
+	}
+	if event.Tool != "" {
+		return event.Tool
+	}
+	return event.ToolCallID
 }
 
 func (m *model) appendAgentDelta(event eventSummary) {

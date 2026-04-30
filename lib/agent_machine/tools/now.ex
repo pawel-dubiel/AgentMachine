@@ -26,7 +26,14 @@ defmodule AgentMachine.Tools.Now do
 
   @impl true
   def run(input, _opts) when input == %{} do
-    {:ok, %{utc: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}}
+    utc = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    {:ok,
+     %{
+       utc: utc,
+       timezone: "UTC",
+       summary: %{tool: "now", status: "ok", utc: utc, timezone: "UTC"}
+     }}
   end
 
   def run(input, _opts) do

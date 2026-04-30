@@ -59,13 +59,19 @@ defmodule AgentMachine.Tools.SearchFiles do
 
         result = %{
           matches: matches,
-          truncated: truncated?(output, max_results)
+          truncated: truncated?(output, max_results),
+          summary: search_summary(root, target, pattern, matches, truncated?(output, max_results))
         }
 
         {:ok, Redactor.put_tool_metadata(result, redaction)}
 
       {_output, 1} ->
-        {:ok, %{matches: [], truncated: false}}
+        {:ok,
+         %{
+           matches: [],
+           truncated: false,
+           summary: search_summary(root, target, pattern, [], false)
+         }}
 
       {output, status} ->
         {:error, %{status: status, output: output}}
@@ -119,6 +125,17 @@ defmodule AgentMachine.Tools.SearchFiles do
     |> Stream.map(&JSON.decode!/1)
     |> Enum.count(&(&1["type"] == "match"))
     |> Kernel.>(max_results)
+  end
+
+  defp search_summary(root, target, pattern, matches, truncated) do
+    %{
+      tool: "search_files",
+      status: "ok",
+      path: Path.relative_to(target, root),
+      pattern: pattern,
+      match_count: length(matches),
+      truncated: truncated
+    }
   end
 
   defp match_from_event!(%{"data" => data}) do
