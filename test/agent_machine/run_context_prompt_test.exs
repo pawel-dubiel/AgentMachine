@@ -57,7 +57,8 @@ defmodule AgentMachine.RunContextPromptTest do
               requested: "auto",
               selected: "tool",
               reason: "time_intent_with_read_only_tool",
-              tool_intent: "time"
+              tool_intent: "time",
+              strategy: "swarm"
             }
           )
       )
@@ -67,7 +68,40 @@ defmodule AgentMachine.RunContextPromptTest do
                "workflow_route" => %{
                  "requested" => "auto",
                  "selected" => "tool",
-                 "tool_intent" => "time"
+                 "tool_intent" => "time",
+                 "strategy" => "swarm"
+               }
+             }
+           } = JSON.decode!(text)
+  end
+
+  test "includes safe current agent facts from run context" do
+    text =
+      RunContextPrompt.text(
+        run_context: %{
+          run_id: "run-1",
+          agent_id: "variant-minimal",
+          parent_agent_id: "planner",
+          agent: %{
+            agent_machine_role: "swarm_variant",
+            swarm_id: "default",
+            variant_id: "minimal",
+            workspace: ".agent_machine/swarm/run-1/minimal"
+          },
+          results: %{},
+          artifacts: %{}
+        }
+      )
+
+    assert %{
+             "runtime" => %{
+               "run_id" => "run-1",
+               "current_agent" => %{
+                 "agent_id" => "variant-minimal",
+                 "parent_agent_id" => "planner",
+                 "agent_machine_role" => "swarm_variant",
+                 "variant_id" => "minimal",
+                 "workspace" => ".agent_machine/swarm/run-1/minimal"
                }
              }
            } = JSON.decode!(text)

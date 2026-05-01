@@ -280,6 +280,51 @@ defmodule AgentMachine.WorkflowRouterTest do
     refute route.tools_exposed
   end
 
+  test "routes explicit swarm language to agentic swarm strategy" do
+    route =
+      route!(%{
+        task: "create a swarm of agents to build 3 different versions",
+        workflow: :auto
+      })
+
+    assert route.selected == "agentic"
+    assert route.strategy == "swarm"
+    assert route.reason == "user_requested_multiple_solution_variants"
+  end
+
+  test "carries swarm strategy on explicit agentic workflow" do
+    route =
+      route!(%{
+        task: "prototype several options for this feature",
+        workflow: :agentic
+      })
+
+    assert route.selected == "agentic"
+    assert route.strategy == "swarm"
+    assert route.reason == "user_requested_multiple_solution_variants"
+  end
+
+  test "does not select swarm for ordinary single-agent work" do
+    typo_route =
+      route!(%{
+        task: "fix typo in README.md",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert typo_route.selected == "agentic"
+    refute Map.has_key?(typo_route, :strategy)
+
+    delegation_route = route!(%{task: "use agents to fix this bug", workflow: :auto})
+    assert delegation_route.selected == "agentic"
+    assert delegation_route.tool_intent == "delegation"
+    refute Map.has_key?(delegation_route, :strategy)
+  end
+
   test "routes spawn agents intent to agentic when it names concrete work" do
     route = route!(%{task: "spawn agents to review this project", workflow: :auto})
 

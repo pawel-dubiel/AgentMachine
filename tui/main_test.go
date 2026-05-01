@@ -3167,12 +3167,17 @@ func TestAgentChecklistViewRendersStatusMarkers(t *testing.T) {
 					{Type: "run_timed_out", Summary: "Run timed out: hard timeout reached"},
 				},
 			},
+			"queued": {
+				ID:            "queued",
+				ParentAgentID: "planner",
+				Status:        "pending",
+			},
 		},
-		agentOrder: []string{"planner", "worker", "failed", "timed"},
+		agentOrder: []string{"planner", "worker", "failed", "timed", "queued"},
 	}
 
 	view := m.agentChecklistView()
-	for _, expected := range []string{"[-] planner", "[x] worker", "[!] failed", "[T] timed"} {
+	for _, expected := range []string{"[-] planner", "[v] worker", "[x] failed", "[x] timed", "[-] queued"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("expected checklist to contain %q, got %q", expected, view)
 		}
@@ -3204,7 +3209,7 @@ func TestJSONLSummaryAppliesChecklist(t *testing.T) {
 		t.Fatalf("expected checklist rows, got %#v", updated.workOrder)
 	}
 	view := updated.workChecklistView()
-	if !strings.Contains(view, "[x] planner") || !strings.Contains(view, "worker read README.md") {
+	if !strings.Contains(view, "[v] planner") || !strings.Contains(view, "worker read README.md") {
 		t.Fatalf("expected work checklist to render summary rows, got %q", view)
 	}
 }

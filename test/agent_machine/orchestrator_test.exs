@@ -409,6 +409,204 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.usage.agents == 3
   end
 
+  test "schedules delegated agents as a dependency DAG" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.SwarmGraph,
+        model: "test",
+        input: "plan swarm graph",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} = Orchestrator.run(agents, timeout: 1_000, max_steps: 4)
+    assert run.status == :completed
+    assert run.agent_order == ["planner", "variant-minimal", "variant-robust", "evaluator"]
+    assert run.results["evaluator"].output == "evaluated minimal output + robust output"
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :agent_started and event.agent_id == "variant-minimal" and
+               event.agent_machine_role == "swarm_variant" and event.variant_id == "minimal" and
+               event.workspace == ".agent_machine/swarm/run-graph/minimal" and
+               event.spawn_depth == 1
+           end)
+  end
+
+  test "isolates swarm variant filesystem tools to their workspaces" do
+    run_id = "run-swarm-workspace-#{System.unique_integer([:positive])}"
+    root = tmp_root("agent-machine-swarm-workspace")
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.SwarmWorkspace,
+        model: "test",
+        input: "plan isolated workspaces",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               run_id: run_id,
+               timeout: 1_000,
+               max_steps: 4,
+               allowed_tools: [AgentMachine.Tools.WriteFile],
+               tool_policy: AgentMachine.ToolHarness.builtin_policy!(:local_files),
+               tool_root: root,
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :auto_approved_safe
+             )
+
+    minimal_workspace = Path.join(root, ".agent_machine/swarm/#{run_id}/minimal")
+    robust_workspace = Path.join(root, ".agent_machine/swarm/#{run_id}/robust")
+
+    assert File.dir?(minimal_workspace)
+    assert File.dir?(robust_workspace)
+    refute File.exists?(Path.join(root, "outside.txt"))
+
+    assert run.results["variant-minimal"].output =~ minimal_workspace
+    assert run.results["variant-minimal"].output =~ "outside tool root"
+    assert run.results["variant-robust"].output =~ robust_workspace
+    assert run.results["evaluator"].output =~ "variant-minimal"
+  end
+
+  test "swarm variants can write and run approved code checks inside isolated workspaces" do
+    run_id = "run-swarm-code-edit-#{System.unique_integer([:positive])}"
+    root = tmp_root("agent-machine-swarm-code-edit")
+    parent = self()
+    test_commands = ["elixir sort_check.exs"]
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.SwarmCodeEdit,
+        model: "test",
+        input: "plan code-edit swarm",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:approval_context, context})
+      :approved
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               run_id: run_id,
+               timeout: 5_000,
+               max_steps: 5,
+               allowed_tools:
+                 AgentMachine.ToolHarness.builtin_many!([:code_edit],
+                   test_commands: test_commands
+                 ),
+               tool_policy:
+                 AgentMachine.ToolHarness.builtin_policy_many!([:code_edit],
+                   test_commands: test_commands
+                 ),
+               tool_root: root,
+               test_commands: test_commands,
+               tool_timeout_ms: 1_000,
+               tool_max_rounds: 3,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    approval_contexts = drain_approval_contexts([])
+
+    assert run.status == :completed
+    assert run.results["variant-minimal"].status == :ok
+    assert run.results["variant-robust"].status == :ok
+    assert run.results["variant-experimental"].status == :ok
+    assert run.results["variant-minimal"].output =~ "exit_status=0"
+    assert run.results["variant-robust"].output =~ "exit_status=0"
+    assert run.results["variant-experimental"].output =~ "exit_status=0"
+    assert run.results["evaluator"].output =~ "recommended=robust"
+
+    assert Enum.count(approval_contexts, &(&1.tool == AgentMachine.Tools.ApplyPatch)) == 3
+    assert Enum.count(approval_contexts, &(&1.tool == AgentMachine.Tools.RunTestCommand)) == 3
+
+    assert Enum.all?(approval_contexts, fn context ->
+             context.agent_machine_role == "swarm_variant" and
+               context.variant_id in ["minimal", "robust", "experimental"] and
+               context.workspace == ".agent_machine/swarm/#{run_id}/#{context.variant_id}" and
+               context.spawn_depth == 1
+           end)
+
+    Enum.each(["minimal", "robust", "experimental"], fn variant_id ->
+      assert File.exists?(
+               Path.join(root, ".agent_machine/swarm/#{run_id}/#{variant_id}/sort_check.exs")
+             )
+    end)
+
+    refute File.exists?(Path.join(root, "sort_check.exs"))
+
+    assert Enum.count(run.events, fn event ->
+             event.type == :tool_call_finished and event.tool == "run_test_command" and
+               event.agent_machine_role == "swarm_variant"
+           end) == 3
+  end
+
+  test "swarm code writes fail when runtime approval denies them" do
+    run_id = "run-swarm-code-denied-#{System.unique_integer([:positive])}"
+    root = tmp_root("agent-machine-swarm-code-denied")
+    parent = self()
+    test_commands = ["elixir sort_check.exs"]
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.SwarmCodeEdit,
+        model: "test",
+        input: "plan denied code-edit swarm",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:approval_context, context})
+      {:denied, "test denial"}
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               run_id: run_id,
+               timeout: 5_000,
+               max_steps: 5,
+               allowed_tools:
+                 AgentMachine.ToolHarness.builtin_many!([:code_edit],
+                   test_commands: test_commands
+                 ),
+               tool_policy:
+                 AgentMachine.ToolHarness.builtin_policy_many!([:code_edit],
+                   test_commands: test_commands
+                 ),
+               tool_root: root,
+               test_commands: test_commands,
+               tool_timeout_ms: 1_000,
+               tool_max_rounds: 3,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    approval_contexts = drain_approval_contexts([])
+
+    assert approval_contexts != []
+    assert Enum.all?(approval_contexts, &(&1.agent_machine_role == "swarm_variant"))
+    assert run.results["variant-minimal"].status == :error
+    assert run.results["variant-robust"].status == :error
+    assert run.results["variant-experimental"].status == :error
+    assert Path.wildcard(Path.join(root, ".agent_machine/swarm/**/sort_check.exs")) == []
+
+    assert Enum.count(run.events, fn event ->
+             event.type == :tool_call_failed and event.agent_machine_role == "swarm_variant" and
+               String.contains?(event.reason || "", "tool approval denied")
+           end) == 3
+  end
+
   test "parses opt-in structured delegation output into follow-up agents" do
     agents = [
       %{
@@ -483,6 +681,58 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.status == :failed
     assert run.error =~ "exceed max_steps 2"
     assert Map.keys(run.results) == ["planner"]
+  end
+
+  test "fails a dynamic run when delegated dependencies contain a cycle" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.InvalidDynamicGraph,
+        model: "test",
+        input: "cycle",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} = Orchestrator.run(agents, timeout: 1_000, max_steps: 4)
+    assert run.status == :failed
+    assert run.error =~ "dependency graph contains a cycle"
+    assert Map.keys(run.results) == ["planner"]
+  end
+
+  test "fails a dynamic run when one agent proposes too many children" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.InvalidDynamicGraph,
+        model: "test",
+        input: "too many children",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} = Orchestrator.run(agents, timeout: 1_000, max_steps: 20)
+    assert run.status == :failed
+    assert run.error =~ "max children per agent"
+    assert Map.keys(run.results) == ["planner"]
+  end
+
+  test "fails a dynamic run when spawn depth exceeds the runtime limit" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.RecursiveDelegating,
+        model: "test",
+        input: "recurse",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} = Orchestrator.run(agents, timeout: 1_000, max_steps: 10)
+    assert run.status == :failed
+    assert run.error =~ "max depth"
+    assert Map.has_key?(run.results, "depth-3")
+    refute Map.has_key?(run.results, "depth-4")
   end
 
   test "passes run artifacts and previous results to delegated agents" do
@@ -1236,6 +1486,31 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["tool-user"].error =~ "requires approval"
   end
 
+  test "ask-before-write approval mode allows reads without callback" do
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.ReadToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.ReadEcho],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_read_echo]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :ask_before_write
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert run.results["tool-user"].tool_results["read-echo"].value == "hello"
+  end
+
   test "ask-before-write approval mode allows writes with approval callback" do
     agents = [
       %{
@@ -1266,6 +1541,58 @@ defmodule AgentMachine.OrchestratorTest do
 
     assert run.results["tool-user"].status == :ok
     assert run.results["tool-user"].tool_results["uppercase"].value == "HELLO"
+  end
+
+  test "tool approval callback and events include swarm metadata" do
+    parent = self()
+
+    agents = [
+      %{
+        id: "variant-minimal",
+        provider: AgentMachine.TestProviders.ToolUsing,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{
+          agent_machine_role: "swarm_variant",
+          swarm_id: "default",
+          variant_id: "minimal",
+          workspace: ".agent_machine/swarm/run-approval/minimal"
+        }
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:approval_context, context})
+      :approved
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 1,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    assert run.results["variant-minimal"].status == :ok
+
+    assert_receive {:approval_context, context}
+    assert context.agent_machine_role == "swarm_variant"
+    assert context.swarm_id == "default"
+    assert context.variant_id == "minimal"
+    assert context.workspace == ".agent_machine/swarm/run-approval/minimal"
+    assert context.spawn_depth == 0
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :tool_call_finished and event.agent_id == "variant-minimal" and
+               event.agent_machine_role == "swarm_variant" and event.variant_id == "minimal" and
+               event.workspace == ".agent_machine/swarm/run-approval/minimal" and
+               event.spawn_depth == 0
+           end)
   end
 
   test "command approval mode requires full access" do
@@ -1487,6 +1814,15 @@ defmodule AgentMachine.OrchestratorTest do
     root
   end
 
+  defp drain_approval_contexts(acc) do
+    receive do
+      {:approval_context, context} ->
+        drain_approval_contexts([context | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
   defp wait_for_task_child(_task_supervisor, 0), do: {:error, :timeout}
 
   defp wait_for_task_child(task_supervisor, attempts_left) do
@@ -1621,6 +1957,520 @@ defmodule AgentMachine.TestProviders.ContextAwareDelegating do
        output: output,
        artifacts: %{worker_summary: "worker used #{plan}"},
        usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.SwarmGraph do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    output = "planned swarm graph"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [
+         variant("variant-minimal", "minimal", agent.pricing),
+         variant("variant-robust", "robust", agent.pricing),
+         %{
+           id: "evaluator",
+           provider: __MODULE__,
+           model: "test",
+           input: "evaluate variants",
+           pricing: agent.pricing,
+           depends_on: ["variant-minimal", "variant-robust"],
+           metadata: %{agent_machine_role: "swarm_evaluator", swarm_id: "default"}
+         }
+       ]
+     }}
+  end
+
+  def complete(%Agent{id: "evaluator"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+    minimal = context.results |> Map.fetch!("variant-minimal") |> Map.fetch!(:output)
+    robust = context.results |> Map.fetch!("variant-robust") |> Map.fetch!(:output)
+    output = "evaluated #{minimal} + #{robust}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  def complete(%Agent{} = agent, _opts) do
+    output = "#{agent.metadata.variant_id} output"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  defp variant(id, variant_id, pricing) do
+    %{
+      id: id,
+      provider: __MODULE__,
+      model: "test",
+      input: "build #{variant_id}",
+      pricing: pricing,
+      metadata: %{
+        agent_machine_role: "swarm_variant",
+        swarm_id: "default",
+        variant_id: variant_id,
+        workspace: ".agent_machine/swarm/run-graph/#{variant_id}"
+      }
+    }
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.SwarmWorkspace do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, opts) do
+    run_id = opts |> Keyword.fetch!(:run_context) |> Map.fetch!(:run_id)
+    output = "planned isolated workspaces"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [
+         variant("variant-minimal", "minimal", run_id, agent.pricing),
+         variant("variant-robust", "robust", run_id, agent.pricing),
+         %{
+           id: "evaluator",
+           provider: __MODULE__,
+           model: "test",
+           input: "evaluate workspace variants",
+           pricing: agent.pricing,
+           depends_on: ["variant-minimal", "variant-robust"],
+           metadata: %{agent_machine_role: "swarm_evaluator", swarm_id: "default"}
+         }
+       ]
+     }}
+  end
+
+  def complete(%Agent{id: "evaluator"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+
+    variant_ids =
+      context.results |> Map.keys() |> Enum.filter(&String.starts_with?(&1, "variant-"))
+
+    output = "evaluated #{Enum.join(Enum.sort(variant_ids), ", ")}"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        {:ok,
+         %{
+           output: "requesting workspace escape write",
+           usage: usage(agent, "requesting workspace escape write"),
+           tool_calls: [
+             %{
+               id: "#{agent.id}-write",
+               tool: AgentMachine.Tools.WriteFile,
+               input: %{path: "../outside.txt", content: "should not be written"}
+             }
+           ],
+           tool_state: %{round: 1}
+         }}
+
+      %{results: [%{result: result}]} ->
+        root = Keyword.fetch!(opts, :tool_root)
+        output = "tool_root=#{root} result=#{inspect(result)}"
+        {:ok, %{output: output, usage: usage(agent, output)}}
+    end
+  end
+
+  defp variant(id, variant_id, run_id, pricing) do
+    %{
+      id: id,
+      provider: __MODULE__,
+      model: "test",
+      input: "build #{variant_id}",
+      pricing: pricing,
+      metadata: %{
+        agent_machine_role: "swarm_variant",
+        swarm_id: "default",
+        variant_id: variant_id,
+        workspace: ".agent_machine/swarm/#{run_id}/#{variant_id}"
+      }
+    }
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.SwarmCodeEdit do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @variants ["minimal", "robust", "experimental"]
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, opts) do
+    run_id = opts |> Keyword.fetch!(:run_context) |> Map.fetch!(:run_id)
+    output = "planned code-edit swarm"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents:
+         Enum.map(@variants, &variant(&1, run_id, agent.pricing)) ++
+           [
+             %{
+               id: "evaluator",
+               provider: __MODULE__,
+               model: "test",
+               input: "evaluate code-edit variants",
+               pricing: agent.pricing,
+               depends_on: Enum.map(@variants, &"variant-#{&1}"),
+               metadata: %{agent_machine_role: "swarm_evaluator", swarm_id: "default"}
+             }
+           ]
+     }}
+  end
+
+  def complete(%Agent{id: "evaluator"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+
+    outputs =
+      Enum.map_join(@variants, ", ", fn variant_id ->
+        result = Map.fetch!(context.results, "variant-#{variant_id}")
+        "#{variant_id}=#{Map.fetch!(result, :status)}"
+      end)
+
+    output = "evaluated code-edit swarm #{outputs}; recommended=robust"
+    {:ok, %{output: output, usage: usage(agent, output)}}
+  end
+
+  def complete(%Agent{} = agent, opts) do
+    variant_id = Map.fetch!(agent.metadata, :variant_id)
+
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        request_patch(agent, variant_id)
+
+      %{state: %{stage: "patch"}} ->
+        request_test(agent, variant_id)
+
+      %{state: %{stage: "test"}, results: [%{result: result}]} ->
+        output = "#{variant_id} completed sort_check.exs exit_status=#{result.exit_status}"
+        {:ok, %{output: output, usage: usage(agent, output)}}
+    end
+  end
+
+  defp request_patch(agent, variant_id) do
+    output = "#{variant_id} creating sort_check.exs"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       tool_calls: [
+         %{
+           id: "#{variant_id}-patch",
+           tool: AgentMachine.Tools.ApplyPatch,
+           input: %{patch: sort_patch(variant_id)}
+         }
+       ],
+       tool_state: %{stage: "patch"}
+     }}
+  end
+
+  defp request_test(agent, variant_id) do
+    output = "#{variant_id} running sort_check.exs"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       tool_calls: [
+         %{
+           id: "#{variant_id}-test",
+           tool: AgentMachine.Tools.RunTestCommand,
+           input: %{command: "elixir sort_check.exs", cwd: "."}
+         }
+       ],
+       tool_state: %{stage: "test"}
+     }}
+  end
+
+  defp variant(variant_id, run_id, pricing) do
+    %{
+      id: "variant-#{variant_id}",
+      provider: __MODULE__,
+      model: "test",
+      input: "build #{variant_id} sorting variant",
+      pricing: pricing,
+      metadata: %{
+        agent_machine_role: "swarm_variant",
+        swarm_id: "default",
+        variant_id: variant_id,
+        workspace: ".agent_machine/swarm/#{run_id}/#{variant_id}"
+      }
+    }
+  end
+
+  defp sort_patch(variant_id) do
+    content_lines =
+      variant_id
+      |> sort_check_content()
+      |> String.split("\n")
+
+    ([
+       "diff --git a/sort_check.exs b/sort_check.exs",
+       "new file mode 100644",
+       "--- /dev/null",
+       "+++ b/sort_check.exs",
+       "@@ -0,0 +1,#{length(content_lines)} @@"
+     ] ++ Enum.map(content_lines, &"+#{&1}"))
+    |> Enum.join("\n")
+  end
+
+  defp sort_check_content("minimal") do
+    """
+    defmodule SortVariant do
+      def sort(list), do: Enum.sort(list)
+    end
+
+    checks = [[], [1], [1, 2, 3], [3, 1, 2], [2, 1, 2, 1], [-1, 3, 0, -1]]
+
+    Enum.each(checks, fn input ->
+      expected = Enum.sort(input)
+      actual = SortVariant.sort(input)
+      unless actual == expected, do: raise("minimal sort failed")
+    end)
+
+    IO.puts("SORT_CHECK_OK minimal")
+    """
+    |> String.trim()
+  end
+
+  defp sort_check_content("robust") do
+    """
+    defmodule SortVariant do
+      def sort(list), do: merge_sort(list)
+
+      defp merge_sort([]), do: []
+      defp merge_sort([item]), do: [item]
+
+      defp merge_sort(list) do
+        {left, right} = Enum.split(list, div(length(list), 2))
+        merge(merge_sort(left), merge_sort(right))
+      end
+
+      defp merge([], right), do: right
+      defp merge(left, []), do: left
+
+      defp merge([left | left_tail] = left_items, [right | right_tail] = right_items) do
+        if left <= right do
+          [left | merge(left_tail, right_items)]
+        else
+          [right | merge(left_items, right_tail)]
+        end
+      end
+    end
+
+    checks = [[], [1], [1, 2, 3], [3, 1, 2], [2, 1, 2, 1], [-1, 3, 0, -1]]
+
+    Enum.each(checks, fn input ->
+      expected = Enum.sort(input)
+      actual = SortVariant.sort(input)
+      unless actual == expected, do: raise("robust merge sort failed")
+    end)
+
+    IO.puts("SORT_CHECK_OK robust")
+    """
+    |> String.trim()
+  end
+
+  defp sort_check_content("experimental") do
+    """
+    defmodule SortVariant do
+      def sort([]), do: []
+
+      def sort([pivot | rest]) do
+        {lower, greater} = Enum.split_with(rest, &(&1 <= pivot))
+        sort(lower) ++ [pivot] ++ sort(greater)
+      end
+    end
+
+    checks = [[], [1], [1, 2, 3], [3, 1, 2], [2, 1, 2, 1], [-1, 3, 0, -1]]
+
+    Enum.each(checks, fn input ->
+      expected = Enum.sort(input)
+      actual = SortVariant.sort(input)
+      unless actual == expected, do: raise("experimental quicksort failed")
+    end)
+
+    IO.puts("SORT_CHECK_OK experimental")
+    """
+    |> String.trim()
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.InvalidDynamicGraph do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{input: "cycle"} = agent, _opts) do
+    output = "planned invalid cycle"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [
+         child("cycle-a", ["cycle-b"], agent.pricing),
+         child("cycle-b", ["cycle-a"], agent.pricing)
+       ]
+     }}
+  end
+
+  def complete(%Agent{input: "too many children"} = agent, _opts) do
+    output = "planned too many children"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: Enum.map(1..9, &child("child-#{&1}", [], agent.pricing))
+     }}
+  end
+
+  defp child(id, depends_on, pricing) do
+    %{
+      id: id,
+      provider: __MODULE__,
+      model: "test",
+      input: "child",
+      pricing: pricing,
+      depends_on: depends_on
+    }
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.RecursiveDelegating do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts), do: delegate(agent, 1)
+
+  def complete(%Agent{id: "depth-" <> depth_text} = agent, _opts) do
+    depth_text
+    |> String.to_integer()
+    |> Kernel.+(1)
+    |> then(&delegate(agent, &1))
+  end
+
+  defp delegate(agent, next_depth) do
+    output = "depth #{next_depth - 1}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [
+         %{
+           id: "depth-#{next_depth}",
+           provider: __MODULE__,
+           model: "test",
+           input: "recurse",
+           pricing: agent.pricing
+         }
+       ]
      }}
   end
 
@@ -2296,6 +3146,55 @@ defmodule AgentMachine.TestProviders.MultiRoundToolUsing do
   end
 end
 
+defmodule AgentMachine.TestProviders.ReadToolUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      %{results: [%{result: %{value: value}}]} ->
+        output = "final answer: #{value}"
+        {:ok, %{output: output, usage: usage(agent, output)}}
+
+      nil ->
+        output = "called read echo tool"
+
+        {:ok,
+         %{
+           output: output,
+           tool_calls: [
+             %{
+               id: "read-echo",
+               tool: AgentMachine.TestTools.ReadEcho,
+               input: %{value: agent.input}
+             }
+           ],
+           tool_state: %{round: 1},
+           usage: usage(agent, output)
+         }}
+    end
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
 defmodule AgentMachine.TestProviders.TestCommandUsing do
   @behaviour AgentMachine.Provider
 
@@ -2686,6 +3585,19 @@ defmodule AgentMachine.TestTools.Uppercase do
 
     {:ok, %{value: String.upcase(value), attempt: attempt}}
   end
+end
+
+defmodule AgentMachine.TestTools.ReadEcho do
+  @behaviour AgentMachine.Tool
+
+  @impl true
+  def permission, do: :test_read_echo
+
+  @impl true
+  def approval_risk, do: :read
+
+  @impl true
+  def run(input, _opts), do: {:ok, %{value: Map.fetch!(input, :value)}}
 end
 
 defmodule AgentMachine.TestTools.Failing do

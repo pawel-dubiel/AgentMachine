@@ -11,6 +11,7 @@ defmodule AgentMachine.ClientRunner do
     RunChecklist,
     RunSpec,
     Telemetry,
+    ToolPolicy,
     WorkflowRouter
   }
 
@@ -26,10 +27,12 @@ defmodule AgentMachine.ClientRunner do
     write_workflow_route_event(spec, workflow_route)
     skill_selection = Selector.select!(spec)
     {agents, run_opts} = build_workflow(spec, workflow_route)
+    validate_runtime_opts!(run_opts, opts)
     run_opts = put_skill_opts(run_opts, spec, skill_selection)
     run_opts = put_timeout_lease_opts(run_opts, spec)
     run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
     run_opts = put_event_sink(run_opts, opts)
+    run_opts = put_tool_approval_callback(run_opts, opts)
 
     case Orchestrator.run(agents, run_opts) do
       {:ok, run} -> summarize_and_log(run)
@@ -44,6 +47,7 @@ defmodule AgentMachine.ClientRunner do
   defp workflow_module(%{selected: "agentic"}), do: Agentic
 
   defp build_workflow(spec, %{selected: "tool"} = route), do: Tool.build!(spec, route)
+  defp build_workflow(spec, %{selected: "agentic"} = route), do: Agentic.build!(spec, route)
   defp build_workflow(spec, route), do: workflow_module(route).build!(spec)
 
   defp maybe_put_auto_time_harness(
@@ -72,6 +76,7 @@ defmodule AgentMachine.ClientRunner do
       requested: route.requested,
       selected: route.selected,
       reason: route.reason,
+      strategy: Map.get(route, :strategy),
       tool_intent: route.tool_intent,
       tools_exposed: route.tools_exposed,
       classifier: Map.get(route, :classifier),
@@ -119,22 +124,50 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp validate_opts!(opts) do
-    allowed_keys = [:event_sink]
+    allowed_keys = [:event_sink, :tool_approval_callback]
     unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
 
     if unknown_keys != [] do
       raise ArgumentError, "unknown client runner option(s): #{inspect(unknown_keys)}"
     end
 
-    case Keyword.fetch(opts, :event_sink) do
+    validate_optional_callback!(opts, :event_sink)
+    validate_optional_callback!(opts, :tool_approval_callback)
+  end
+
+  defp validate_optional_callback!(opts, key) do
+    case Keyword.fetch(opts, key) do
       :error ->
         :ok
 
-      {:ok, sink} when is_function(sink, 1) ->
+      {:ok, callback} when is_function(callback, 1) ->
         :ok
 
-      {:ok, sink} ->
-        raise ArgumentError, ":event_sink must be a function of arity 1, got: #{inspect(sink)}"
+      {:ok, callback} ->
+        raise ArgumentError,
+              "#{inspect(key)} must be a function of arity 1, got: #{inspect(callback)}"
+    end
+  end
+
+  defp validate_runtime_opts!(run_opts, opts) do
+    if Keyword.get(run_opts, :tool_approval_mode) == :ask_before_write and
+         approval_callback_required?(run_opts) and
+         not Keyword.has_key?(opts, :tool_approval_callback) do
+      raise ArgumentError,
+            ":tool_approval_callback is required when :tool_approval_mode :ask_before_write exposes write, delete, command, or network tools"
+    end
+  end
+
+  defp approval_callback_required?(run_opts) do
+    run_opts
+    |> Keyword.get(:allowed_tools, [])
+    |> Enum.any?(&(ToolPolicy.approval_risk!(&1) in [:write, :delete, :command, :network]))
+  end
+
+  defp put_tool_approval_callback(run_opts, opts) do
+    case Keyword.fetch(opts, :tool_approval_callback) do
+      :error -> run_opts
+      {:ok, callback} -> Keyword.put(run_opts, :tool_approval_callback, callback)
     end
   end
 

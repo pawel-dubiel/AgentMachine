@@ -553,6 +553,7 @@ defmodule AgentMachine.AgentRunner do
                attempt: attempt,
                round: round
              }
+             |> Map.merge(agent_event_metadata(opts))
            ) do
         {:ok, result, call_events} ->
           {:cont, {:ok, results ++ [result], events ++ call_events}}
@@ -822,6 +823,7 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp approval_allowed?(:read_only, :read), do: true
+  defp approval_allowed?(:ask_before_write, :read), do: true
   defp approval_allowed?(:auto_approved_safe, risk) when risk in [:read, :write], do: true
 
   defp approval_allowed?(:full_access, risk)
@@ -976,6 +978,7 @@ defmodule AgentMachine.AgentRunner do
       input_summary: summarize_tool_input(input),
       at: at
     }
+    |> Map.merge(tool_event_metadata(context))
   end
 
   defp tool_call_finished_event(context, id, tool, started_at, finished_at, opts, result) do
@@ -995,6 +998,7 @@ defmodule AgentMachine.AgentRunner do
       duration_ms: duration_ms(started_at, finished_at),
       at: finished_at
     }
+    |> Map.merge(tool_event_metadata(context))
   end
 
   defp tool_call_failed_event(context, id, tool, started_at, finished_at, opts, reason) do
@@ -1014,7 +1018,27 @@ defmodule AgentMachine.AgentRunner do
       reason: reason,
       at: finished_at
     }
+    |> Map.merge(tool_event_metadata(context))
   end
+
+  defp agent_event_metadata(opts) do
+    case Keyword.get(opts, :agent_event_metadata, %{}) do
+      metadata when is_map(metadata) -> metadata
+      _other -> %{}
+    end
+  end
+
+  defp tool_event_metadata(context) when is_map(context) do
+    Map.take(context, [
+      :agent_machine_role,
+      :swarm_id,
+      :variant_id,
+      :workspace,
+      :spawn_depth
+    ])
+  end
+
+  defp tool_event_metadata(_context), do: %{}
 
   defp emit_event!(opts, event) do
     case Keyword.fetch(opts, :event_collector) do

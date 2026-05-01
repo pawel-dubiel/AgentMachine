@@ -417,6 +417,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   defp print_workflow_route(%{requested: requested, selected: selected} = route) do
     Mix.shell().info("Workflow route: #{requested} -> #{selected}")
     Mix.shell().info("  reason: #{Map.get(route, :reason) || "(none)"}")
+    Mix.shell().info("  strategy: #{Map.get(route, :strategy) || "(none)"}")
     Mix.shell().info("  tool intent: #{Map.get(route, :tool_intent) || "(none)"}")
     Mix.shell().info("  tools exposed: #{Map.get(route, :tools_exposed)}")
     Mix.shell().info("  classifier: #{Map.get(route, :classifier) || "(none)"}")

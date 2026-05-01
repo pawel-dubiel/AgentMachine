@@ -1,4 +1,4 @@
-.PHONY: help deps test test-openrouter-paid test-openrouter-playwright-mcp quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
+.PHONY: help deps test test-openrouter-paid test-openrouter-playwright-mcp test-openrouter-swarm-e2e quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
 
 .DEFAULT_GOAL := run
 
@@ -11,6 +11,7 @@ help:
 	@printf '%s\n' '  make test                         Run Elixir tests'
 	@printf '%s\n' '  make test-openrouter-paid         Run paid OpenRouter tests'
 	@printf '%s\n' '  make test-openrouter-playwright-mcp Run paid OpenRouter + Playwright MCP test'
+	@printf '%s\n' '  make test-openrouter-swarm-e2e    Run paid OpenRouter swarm model e2e eval'
 	@printf '%s\n' '  make quality                      Run full Elixir quality gate'
 	@printf '%s\n' '  make format                       Format Elixir and Go code'
 	@printf '%s\n' '  make format-check                 Check Elixir formatting'
@@ -38,7 +39,7 @@ test:
 test-openrouter-paid:
 	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
 	@if [ "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL+x}" = "x" ] && [ -z "$$AGENT_MACHINE_PAID_OPENROUTER_MODEL" ]; then printf '%s\n' 'AGENT_MACHINE_PAID_OPENROUTER_MODEL must be non-empty when set.' >&2; exit 2; fi
-	@printf 'Running paid OpenRouter tests with model=%s\n' "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL:-stepfun/step-3.5-flash}"
+	@printf 'Running paid OpenRouter tests with model=%s\n' "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL:-moonshotai/kimi-k2.6}"
 	mix test --only paid_openrouter --timeout 180000
 	cd $(TUI_DIR) && AGENT_MACHINE_PAID_OPENROUTER=1 go test ./... -run '^TestPaidOpenRouter' -count=1 -v
 
@@ -46,8 +47,13 @@ test-openrouter-playwright-mcp:
 	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
 	@command -v npx >/dev/null || (printf '%s\n' 'npx is required for the Playwright MCP paid integration test.' >&2; exit 2)
 	@if [ "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL+x}" = "x" ] && [ -z "$$AGENT_MACHINE_PAID_OPENROUTER_MODEL" ]; then printf '%s\n' 'AGENT_MACHINE_PAID_OPENROUTER_MODEL must be non-empty when set.' >&2; exit 2; fi
-	@printf 'Running paid OpenRouter Playwright MCP test with model=%s\n' "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL:-stepfun/step-3.5-flash}"
+	@printf 'Running paid OpenRouter Playwright MCP test with model=%s\n' "$${AGENT_MACHINE_PAID_OPENROUTER_MODEL:-moonshotai/kimi-k2.6}"
 	AGENT_MACHINE_PAID_PLAYWRIGHT_MCP=1 mix test test/agent_machine/openrouter_paid_test.exs --include paid_openrouter --only playwright_mcp --timeout 300000
+
+test-openrouter-swarm-e2e:
+	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
+	@printf '%s\n' 'Running paid OpenRouter swarm e2e eval for model matrix.'
+	AGENT_MACHINE_PAID_SWARM_E2E=1 mix test test/agent_machine/evals/openrouter_swarm_e2e_eval_test.exs --only paid_openrouter_swarm_e2e_eval --timeout 3600000
 
 quality:
 	mix quality

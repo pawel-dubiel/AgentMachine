@@ -74,6 +74,67 @@ defmodule AgentMachine.DelegationResponseTest do
     assert [%{instructions: "Runtime worker rules."}] = payload.next_agents
   end
 
+  test "accepts a swarm planner decision with variants and evaluator" do
+    payload =
+      normalize(%{
+        "decision" => %{"mode" => "swarm", "reason" => "Compare variants."},
+        "output" => "Planning variants.",
+        "next_agents" => swarm_agents()
+      })
+
+    assert payload.decision == %{
+             mode: "swarm",
+             reason: "Compare variants.",
+             delegated_agent_ids: ["variant-minimal", "variant-robust", "evaluator"],
+             variant_agent_ids: ["variant-minimal", "variant-robust"],
+             evaluator_agent_id: "evaluator",
+             swarm_id: "default"
+           }
+
+    assert [%{metadata: %{"agent_machine_role" => "swarm_variant"}} | _] =
+             payload.next_agents
+  end
+
+  test "rejects swarm decisions without at least two variants" do
+    assert_raise ArgumentError, ~r/swarm decision requires 2 to 5 variant agents/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "swarm", "reason" => "invalid"},
+        "output" => "Planning variants.",
+        "next_agents" => Enum.take(swarm_agents(), 1) ++ [List.last(swarm_agents())]
+      })
+    end
+  end
+
+  test "rejects swarm evaluator dependency mismatches" do
+    agents =
+      swarm_agents()
+      |> List.update_at(2, &Map.put(&1, "depends_on", ["variant-minimal"]))
+
+    assert_raise ArgumentError, ~r/swarm evaluator must depend on all variant agents/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "swarm", "reason" => "invalid"},
+        "output" => "Planning variants.",
+        "next_agents" => agents
+      })
+    end
+  end
+
+  test "rejects swarm variant workspaces that escape the swarm root" do
+    agents =
+      swarm_agents()
+      |> List.update_at(0, fn agent ->
+        put_in(agent, ["metadata", "workspace"], "../outside")
+      end)
+
+    assert_raise ArgumentError, ~r/swarm variant workspace must be a relative path/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "swarm", "reason" => "invalid"},
+        "output" => "Planning variants.",
+        "next_agents" => agents
+      })
+    end
+  end
+
   test "rejects invalid runtime worker instruction metadata" do
     assert_raise ArgumentError, ~r/agent_machine_worker_instructions metadata/, fn ->
       normalize(
@@ -103,7 +164,7 @@ defmodule AgentMachine.DelegationResponseTest do
   end
 
   test "rejects unknown decision mode" do
-    assert_raise ArgumentError, ~r/decision mode must be direct or delegate/, fn ->
+    assert_raise ArgumentError, ~r/decision mode must be direct, delegate, or swarm/, fn ->
       normalize(%{
         "decision" => %{"mode" => "maybe", "reason" => "invalid"},
         "output" => "answer",
@@ -164,6 +225,40 @@ defmodule AgentMachine.DelegationResponseTest do
 
   defp normalize(body, metadata \\ %{}) do
     DelegationResponse.normalize_payload!(agent(metadata), %{output: JSON.encode!(body)})
+  end
+
+  defp swarm_agents do
+    [
+      %{
+        "id" => "variant-minimal",
+        "input" => "Build the minimal variant.",
+        "metadata" => %{
+          "agent_machine_role" => "swarm_variant",
+          "swarm_id" => "default",
+          "variant_id" => "minimal",
+          "workspace" => ".agent_machine/swarm/run-1/minimal"
+        }
+      },
+      %{
+        "id" => "variant-robust",
+        "input" => "Build the robust variant.",
+        "metadata" => %{
+          "agent_machine_role" => "swarm_variant",
+          "swarm_id" => "default",
+          "variant_id" => "robust",
+          "workspace" => ".agent_machine/swarm/run-1/robust"
+        }
+      },
+      %{
+        "id" => "evaluator",
+        "input" => "Compare the variants.",
+        "depends_on" => ["variant-minimal", "variant-robust"],
+        "metadata" => %{
+          "agent_machine_role" => "swarm_evaluator",
+          "swarm_id" => "default"
+        }
+      }
+    ]
   end
 
   defp agent(metadata) do

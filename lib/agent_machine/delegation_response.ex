@@ -102,10 +102,167 @@ defmodule AgentMachine.DelegationResponse do
       {"delegate", ids} ->
         %{mode: "delegate", reason: reason, delegated_agent_ids: ids}
 
+      {"swarm", ids} ->
+        swarm = validate_swarm_agents!(next_agents)
+
+        %{
+          mode: "swarm",
+          reason: reason,
+          delegated_agent_ids: ids,
+          variant_agent_ids: swarm.variant_agent_ids,
+          evaluator_agent_id: swarm.evaluator_agent_id,
+          swarm_id: swarm.swarm_id
+        }
+
       {other, _ids} ->
         raise ArgumentError,
-              "agent_machine delegation response decision mode must be direct or delegate, got: #{inspect(other)}"
+              "agent_machine delegation response decision mode must be direct, delegate, or swarm, got: #{inspect(other)}"
     end
+  end
+
+  defp validate_swarm_agents!(next_agents) do
+    reject_duplicate_agent_ids!(next_agents)
+
+    variants =
+      Enum.filter(
+        next_agents,
+        &(metadata_string(&1.metadata, "agent_machine_role") == "swarm_variant")
+      )
+
+    evaluators =
+      Enum.filter(
+        next_agents,
+        &(metadata_string(&1.metadata, "agent_machine_role") == "swarm_evaluator")
+      )
+
+    other_agents =
+      Enum.reject(next_agents, fn agent ->
+        metadata_string(agent.metadata, "agent_machine_role") in [
+          "swarm_variant",
+          "swarm_evaluator"
+        ]
+      end)
+
+    cond do
+      other_agents != [] ->
+        raise ArgumentError,
+              "agent_machine delegation response swarm decision only accepts variant and evaluator agents"
+
+      length(variants) < 2 or length(variants) > 5 ->
+        raise ArgumentError,
+              "agent_machine delegation response swarm decision requires 2 to 5 variant agents"
+
+      length(evaluators) != 1 ->
+        raise ArgumentError,
+              "agent_machine delegation response swarm decision requires exactly one evaluator agent"
+
+      true ->
+        validate_swarm_variants!(variants)
+        evaluator = hd(evaluators)
+        validate_swarm_evaluator!(evaluator, variants)
+
+        swarm_ids =
+          (variants ++ [evaluator])
+          |> Enum.map(&metadata_string!(&1.metadata, "swarm_id", "swarm agent"))
+          |> Enum.uniq()
+
+        if length(swarm_ids) != 1 do
+          raise ArgumentError,
+                "agent_machine delegation response swarm agents must share one swarm_id"
+        end
+
+        %{
+          swarm_id: hd(swarm_ids),
+          variant_agent_ids: Enum.map(variants, & &1.id),
+          evaluator_agent_id: evaluator.id
+        }
+    end
+  end
+
+  defp reject_duplicate_agent_ids!(agents) do
+    duplicates =
+      agents
+      |> Enum.map(& &1.id)
+      |> duplicates()
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "agent_machine delegation response swarm agent ids must be unique, duplicates: #{inspect(duplicates)}"
+    end
+  end
+
+  defp validate_swarm_variants!(variants) do
+    variant_ids =
+      Enum.map(variants, fn agent ->
+        metadata_string!(agent.metadata, "swarm_id", "swarm variant")
+        variant_id = metadata_string!(agent.metadata, "variant_id", "swarm variant")
+        workspace = metadata_string!(agent.metadata, "workspace", "swarm variant")
+        validate_workspace!(workspace)
+
+        if agent.depends_on != [] do
+          raise ArgumentError,
+                "agent_machine delegation response swarm variant agents must not depend on other agents"
+        end
+
+        variant_id
+      end)
+
+    case duplicates(variant_ids) do
+      [] ->
+        :ok
+
+      duplicates ->
+        raise ArgumentError,
+              "agent_machine delegation response swarm variant_id values must be unique, duplicates: #{inspect(duplicates)}"
+    end
+  end
+
+  defp validate_swarm_evaluator!(evaluator, variants) do
+    metadata_string!(evaluator.metadata, "swarm_id", "swarm evaluator")
+    variant_agent_ids = Enum.map(variants, & &1.id)
+
+    if Enum.sort(evaluator.depends_on) != Enum.sort(variant_agent_ids) do
+      raise ArgumentError,
+            "agent_machine delegation response swarm evaluator must depend on all variant agents"
+    end
+  end
+
+  defp metadata_string!(metadata, key, label) do
+    case metadata_string(metadata, key) do
+      value when is_binary(value) and byte_size(value) > 0 ->
+        value
+
+      _other ->
+        raise ArgumentError,
+              "agent_machine delegation response #{label} metadata #{key} must be a non-empty string"
+    end
+  end
+
+  defp metadata_string(metadata, key) when is_map(metadata) do
+    Map.get(metadata, key) || Map.get(metadata, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> Map.get(metadata, key)
+  end
+
+  defp metadata_string(_metadata, _key), do: nil
+
+  defp validate_workspace!(workspace) do
+    invalid? =
+      Path.type(workspace) != :relative or
+        workspace in [".", ".."] or
+        Enum.any?(Path.split(workspace), &(&1 in ["..", ""]))
+
+    if invalid? do
+      raise ArgumentError,
+            "agent_machine delegation response swarm variant workspace must be a relative path without parent traversal"
+    end
+  end
+
+  defp duplicates(values) do
+    values
+    |> Enum.frequencies()
+    |> Enum.filter(fn {_value, count} -> count > 1 end)
+    |> Enum.map(fn {value, _count} -> value end)
   end
 
   defp fetch_required_string!(map, key) do

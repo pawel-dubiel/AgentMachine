@@ -13,12 +13,14 @@ defmodule AgentMachine.RunContextPrompt do
     context = Keyword.fetch!(opts, :run_context)
     results = Map.fetch!(context, :results)
     artifacts = Map.fetch!(context, :artifacts)
+    agent_graph = Map.get(context, :agent_graph, %{})
     tools = tool_context(opts)
     skills = skills_context(opts)
     runtime = runtime_context(opts)
 
     run_context =
       %{results: json_value(results), artifacts: json_value(artifacts)}
+      |> maybe_put_agent_graph(agent_graph)
       |> maybe_put_runtime(runtime)
       |> maybe_put_tools(tools)
 
@@ -34,6 +36,7 @@ defmodule AgentMachine.RunContextPrompt do
   def runtime_facts(opts \\ []) when is_list(opts) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     route = Keyword.get(opts, :workflow_route)
+    run_context = Keyword.get(opts, :run_context)
 
     %{
       current_utc: DateTime.to_iso8601(now),
@@ -43,6 +46,7 @@ defmodule AgentMachine.RunContextPrompt do
       instruction: "Use these runtime facts when relevant. Do not invent dates or times."
     }
     |> maybe_put_workflow_route(route)
+    |> maybe_put_run_context_facts(run_context)
   end
 
   defp skills_context(opts) do
@@ -98,6 +102,11 @@ defmodule AgentMachine.RunContextPrompt do
   defp maybe_put_tools(context, tools), do: Map.put(context, :tools, json_value(tools))
   defp maybe_put_runtime(context, nil), do: context
   defp maybe_put_runtime(context, runtime), do: Map.put(context, :runtime, json_value(runtime))
+  defp maybe_put_agent_graph(context, graph) when graph == %{}, do: context
+
+  defp maybe_put_agent_graph(context, graph) when is_map(graph),
+    do: Map.put(context, :agent_graph, json_value(graph))
+
   defp maybe_put_skills(context, []), do: context
   defp maybe_put_skills(context, skills), do: Map.put(context, :skills, json_value(skills))
 
@@ -115,7 +124,8 @@ defmodule AgentMachine.RunContextPrompt do
 
   defp empty_context?(context) do
     map_size(context.results) == 0 and map_size(context.artifacts) == 0 and
-      not Map.has_key?(context, :tools) and not Map.has_key?(context, :runtime)
+      not Map.has_key?(context, :agent_graph) and not Map.has_key?(context, :tools) and
+      not Map.has_key?(context, :runtime)
   end
 
   defp runtime_context(opts) do
@@ -130,7 +140,10 @@ defmodule AgentMachine.RunContextPrompt do
         facts
 
       :auto ->
-        runtime_facts(workflow_route: Keyword.get(opts, :workflow_route))
+        runtime_facts(
+          workflow_route: Keyword.get(opts, :workflow_route),
+          run_context: Keyword.get(opts, :run_context)
+        )
 
       other ->
         raise ArgumentError,
@@ -144,9 +157,46 @@ defmodule AgentMachine.RunContextPrompt do
     Map.put(
       facts,
       :workflow_route,
-      Map.take(route, [:requested, :selected, :reason, :tool_intent])
+      Map.take(route, [:requested, :selected, :reason, :strategy, :tool_intent])
     )
   end
+
+  defp maybe_put_run_context_facts(facts, nil), do: facts
+
+  defp maybe_put_run_context_facts(facts, context) when is_map(context) do
+    facts
+    |> maybe_put_run_id(context)
+    |> maybe_put_current_agent(context)
+  end
+
+  defp maybe_put_run_id(facts, %{run_id: run_id}) when is_binary(run_id),
+    do: Map.put(facts, :run_id, run_id)
+
+  defp maybe_put_run_id(facts, _context), do: facts
+
+  defp maybe_put_current_agent(facts, context) do
+    agent_facts =
+      %{
+        agent_id: Map.get(context, :agent_id),
+        parent_agent_id: Map.get(context, :parent_agent_id)
+      }
+      |> Map.merge(safe_agent_metadata(Map.get(context, :agent)))
+      |> reject_nil_values()
+
+    if map_size(agent_facts) == 0 do
+      facts
+    else
+      Map.put(facts, :current_agent, agent_facts)
+    end
+  end
+
+  defp safe_agent_metadata(metadata) when is_map(metadata) do
+    Map.take(metadata, [:agent_machine_role, :swarm_id, :variant_id, :workspace, :spawn_depth])
+  end
+
+  defp safe_agent_metadata(_metadata), do: %{}
+
+  defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
   defp agent_machine_facts do
     %{

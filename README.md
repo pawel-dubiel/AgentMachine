@@ -24,6 +24,8 @@ were available, which agents ran, and what changed.
 - Load reusable skills that add task-specific instructions and references.
 - Route simple requests through a fast path and larger tasks through agentic
   planner/worker flows, using a local zero-shot intent model when installed.
+- Create controlled swarm runs for explicit multiple-variant requests, with
+  isolated variant workspaces and evaluator comparison.
 - Compact long conversations manually and compact run context automatically
   when explicit context limits are configured.
 - Write JSONL logs for runs and TUI sessions so behavior can be debugged later.
@@ -87,6 +89,21 @@ risk. Missing required configuration fails fast with an explicit error.
 When a task needs delegation, the runtime can create a planner and worker
 agents. The TUI shows each agent's status, parent, elapsed time, recent events,
 tool activity, and final output when available.
+
+**Swarm strategy**
+
+When the request explicitly asks for a swarm, variants, competing solutions, or
+several approaches, auto routing selects the agentic workflow with a visible
+`swarm` strategy. The planner creates isolated variant workers, normally
+`minimal`, `robust`, and `experimental`, followed by an evaluator that compares
+the variants. Variants use separate workspaces such as
+`.agent_machine/swarm/<run_id>/<variant_id>` under the configured tool root.
+For swarm variants, filesystem and code-edit tools are rooted at the variant
+workspace, not the original project root. The planner can propose workers and
+metadata, but tool permissions still come only from runtime options and
+approval callbacks. The runtime validates the graph, enforces step/depth
+limits, records variant metadata on events, and does not auto-merge a winning
+variant back into the original project.
 
 **Everything important is logged**
 
@@ -356,8 +373,12 @@ Approval modes:
 - `full-access`
 
 Test commands are intentionally narrow. A model can run tests only through
-`code-edit`, only with `full-access`, and only when the exact command was
-allowlisted with `--test-command`.
+`code-edit` and only when the exact command was allowlisted with
+`--test-command`. CLI runs are non-interactive, so allowlisted test commands
+must use `full-access` there. `ClientRunner` callers may use
+`ask-before-write` without a callback only when the exposed tools are read-only;
+if any exposed tool has write, delete, command, or network risk,
+`tool_approval_callback` is required before the run starts.
 
 Rollback for code-edit checkpoints:
 
@@ -478,4 +499,12 @@ newer:
 
 ```sh
 OPENROUTER_API_KEY="..." make test-openrouter-playwright-mcp
+```
+
+The paid swarm end-to-end eval is intentionally separate from normal paid
+regression tests. It runs a three-model OpenRouter matrix through planner,
+variant workers, tool calls, evaluator, and finalizer:
+
+```sh
+OPENROUTER_API_KEY="..." make test-openrouter-swarm-e2e
 ```

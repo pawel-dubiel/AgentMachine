@@ -425,14 +425,12 @@ func workDurationText(item workItem) string {
 
 func agentStatusMarker(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "running", "retrying":
+	case "pending", "scheduled", "running", "retrying":
 		return "[-]"
 	case "ok", "done", "completed":
+		return "[v]"
+	case "error", "failed", "timeout":
 		return "[x]"
-	case "error", "failed":
-		return "[!]"
-	case "timeout":
-		return "[T]"
 	default:
 		return "[ ]"
 	}

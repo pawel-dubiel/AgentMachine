@@ -6,8 +6,11 @@ defmodule AgentMachine.RunServer do
   use GenServer
 
   alias AgentMachine.{AgentResult, AgentRunner, ContextBudget, ContextCompactor}
+  alias AgentMachine.Tools.PathGuard
 
   @default_heartbeat_interval_ms 10_000
+  @max_children_per_agent 8
+  @max_spawn_depth 3
   @runtime_health_events MapSet.new([
                            :provider_request_started,
                            :context_budget,
@@ -54,11 +57,12 @@ defmodule AgentMachine.RunServer do
 
   @impl true
   def init({run_id, agents, finalizer, opts}) do
-    run_context = %{results: %{}, artifacts: %{}, artifact_sources: %{}, compacted_context: nil}
+    agent_graph = initial_agent_graph(agents)
+    run_context = empty_run_context(agent_graph)
     {ready_agents, pending_agents} = split_ready_agents(agents, %{})
     initial_events = [run_started_event(run_id)] ++ skills_events(run_id, opts)
     emit_events!(opts, initial_events)
-    {tasks, agent_events} = spawn_agents(ready_agents, opts, run_context, nil)
+    {tasks, agent_events} = spawn_agents(ready_agents, opts, run_context, agent_graph)
     emit_events!(opts, agent_events)
     events = initial_events ++ agent_events
 
@@ -77,6 +81,7 @@ defmodule AgentMachine.RunServer do
       events: events,
       finalizer: finalizer,
       finalizer_started: false,
+      agent_graph: agent_graph,
       usage: nil,
       opts: opts,
       step_count: length(agents),
@@ -168,18 +173,22 @@ defmodule AgentMachine.RunServer do
     Enum.all?(agent.depends_on, &Map.has_key?(results, &1))
   end
 
-  defp spawn_agents(agents, opts, run_context, parent_agent_id, attempt \\ 1) do
+  defp spawn_agents(agents, opts, run_context, agent_graph, attempt \\ 1) do
     run_id = Keyword.fetch!(opts, :run_id)
     task_supervisor = Keyword.fetch!(opts, :task_supervisor)
 
     agents
     |> Enum.map(fn agent ->
+      graph_entry = Map.fetch!(agent_graph, agent.id)
+      parent_agent_id = Map.get(graph_entry, :parent_agent_id)
+      agent_opts = effective_agent_opts!(agent, opts, graph_entry)
+
       agent_opts =
-        opts
+        agent_opts
         |> Keyword.put(:attempt, attempt)
         |> Keyword.put(
           :run_context,
-          build_agent_context(opts, agent, run_context, parent_agent_id)
+          build_agent_context(agent_opts, agent, run_context, graph_entry)
         )
 
       task =
@@ -195,16 +204,90 @@ defmodule AgentMachine.RunServer do
           agent: agent,
           agent_id: agent.id,
           attempt: attempt,
-          parent_agent_id: parent_agent_id
+          parent_agent_id: parent_agent_id,
+          graph_entry: graph_entry
         }
       }
 
-      event = agent_started_event(run_id, agent.id, parent_agent_id, attempt)
+      event = agent_started_event(run_id, agent.id, parent_agent_id, attempt, graph_entry)
 
       {task_entry, event}
     end)
     |> Enum.unzip()
     |> then(fn {task_entries, events} -> {Map.new(task_entries), events} end)
+  end
+
+  defp effective_agent_opts!(agent, opts, graph_entry) do
+    opts = Keyword.put(opts, :agent_event_metadata, event_agent_metadata(graph_entry))
+
+    case swarm_variant_workspace(agent) do
+      nil ->
+        opts
+
+      workspace ->
+        if Keyword.has_key?(opts, :tool_root) do
+          root = PathGuard.root!(opts)
+          workspace_root = ensure_workspace_dir!(root, workspace)
+          Keyword.put(opts, :tool_root, workspace_root)
+        else
+          opts
+        end
+    end
+  end
+
+  defp swarm_variant_workspace(%{metadata: metadata}) when is_map(metadata) do
+    if metadata_value(metadata, :agent_machine_role) == "swarm_variant" do
+      case metadata_value(metadata, :workspace) do
+        workspace when is_binary(workspace) and byte_size(workspace) > 0 -> workspace
+        _other -> nil
+      end
+    end
+  end
+
+  defp swarm_variant_workspace(_agent), do: nil
+
+  defp ensure_workspace_dir!(root, workspace) do
+    target = PathGuard.target!(root, workspace)
+
+    if target == root do
+      raise ArgumentError, "swarm variant workspace must not be the tool root"
+    end
+
+    target
+    |> Path.relative_to(root)
+    |> Path.split()
+    |> Enum.reduce(root, fn part, current ->
+      ensure_workspace_part!(root, current, part)
+    end)
+  end
+
+  defp ensure_workspace_part!(_root, _current, part) when part in ["", ".", ".."] do
+    raise ArgumentError, "swarm variant workspace contains invalid path segment: #{inspect(part)}"
+  end
+
+  defp ensure_workspace_part!(root, current, part) do
+    next = Path.join(current, part)
+
+    case File.lstat(next) do
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError,
+              "swarm variant workspace path must not contain symlinks: #{inspect(next)}"
+
+      {:ok, %{type: :directory}} ->
+        PathGuard.existing_target!(root, next)
+
+      {:ok, %{type: type}} ->
+        raise ArgumentError,
+              "swarm variant workspace path must be a directory or missing, got: #{inspect(type)}"
+
+      {:error, :enoent} ->
+        File.mkdir!(next)
+        PathGuard.existing_target!(root, next)
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "could not inspect swarm variant workspace #{inspect(next)}: #{inspect(reason)}"
+    end
   end
 
   defp put_result(run, ref, result) do
@@ -214,7 +297,7 @@ defmodule AgentMachine.RunServer do
     run =
       %{run | tasks: tasks}
       |> append_stored_events(result.events || [])
-      |> append_event(agent_finished_event(run.id, result))
+      |> append_event(agent_finished_event(run.id, result, task))
 
     if should_retry?(run, task, result) do
       retry_agent(run, task, result)
@@ -249,7 +332,7 @@ defmodule AgentMachine.RunServer do
     run_context = run_context(run)
 
     {tasks, events} =
-      spawn_agents([task.agent], run.opts, run_context, task.parent_agent_id, next_attempt)
+      spawn_agents([task.agent], run.opts, run_context, run.agent_graph, next_attempt)
 
     run
     |> Map.update!(:tasks, &Map.merge(&1, tasks))
@@ -291,7 +374,7 @@ defmodule AgentMachine.RunServer do
       case maybe_compact_before_spawn(run, ready_agents, nil) do
         {:ok, run} ->
           run_context = run_context(run)
-          {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, nil)
+          {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, run.agent_graph)
 
           run
           |> Map.merge(%{
@@ -310,20 +393,30 @@ defmodule AgentMachine.RunServer do
 
   defp schedule_next_agents(run, result) do
     with {:ok, max_steps} <- fetch_max_steps(run.opts),
-         {:ok, next_agents} <- validate_next_agents(run, result.next_agents),
+         {:ok, next_agents} <- validate_next_agents(run, result.next_agents, result.agent_id),
          {:ok, step_count} <- reserve_steps(run.step_count, length(next_agents), max_steps),
-         {:ok, run} <- maybe_compact_before_spawn(run, next_agents, result.agent_id) do
+         run <- register_delegated_agents(run, next_agents, result.agent_id),
+         {ready_agents, pending_next_agents} <- split_ready_agents(next_agents, run.results),
+         {:ok, run} <- maybe_compact_before_spawn(run, ready_agents, result.agent_id) do
       run_context = run_context(run)
 
-      {new_tasks, events} = spawn_agents(next_agents, run.opts, run_context, result.agent_id)
+      {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, run.agent_graph)
       tasks = Map.merge(run.tasks, new_tasks)
 
-      agent_order = run.agent_order ++ Enum.map(next_agents, & &1.id)
-      delegation_event = agent_delegation_scheduled_event(run.id, result.agent_id, next_agents)
+      agent_order = run.agent_order ++ Enum.map(ready_agents, & &1.id)
+      pending_agents = run.pending_agents ++ pending_next_agents
+
+      delegation_event =
+        agent_delegation_scheduled_event(run.id, result.agent_id, next_agents, run)
 
       {:ok,
        run
-       |> Map.merge(%{tasks: tasks, agent_order: agent_order, step_count: step_count})
+       |> Map.merge(%{
+         tasks: tasks,
+         pending_agents: pending_agents,
+         agent_order: agent_order,
+         step_count: step_count
+       })
        |> append_event(delegation_event)
        |> append_events(events)}
     else
@@ -382,10 +475,14 @@ defmodule AgentMachine.RunServer do
   defp start_finalizer(run) do
     case reserve_optional_step(run) do
       {:ok, step_count} ->
+        run = register_finalizer(run)
+
         case maybe_compact_before_spawn(run, [run.finalizer], nil) do
           {:ok, run} ->
             run_context = run_context(run)
-            {tasks, events} = spawn_agents([run.finalizer], run.opts, run_context, nil)
+
+            {tasks, events} =
+              spawn_agents([run.finalizer], run.opts, run_context, run.agent_graph)
 
             run
             |> Map.merge(%{
@@ -538,13 +635,14 @@ defmodule AgentMachine.RunServer do
 
   defp compaction_budget_measurement(run, agent, parent_agent_id) do
     run_context = run_context(run)
+    graph_entry = Map.get(run.agent_graph, agent.id, agent_graph_entry(agent, parent_agent_id, 0))
 
     opts =
       run.opts
       |> Keyword.put(:attempt, 1)
       |> Keyword.put(
         :run_context,
-        build_agent_context(run.opts, agent, run_context, parent_agent_id)
+        build_agent_context(run.opts, agent, run_context, graph_entry)
       )
 
     ContextBudget.measure(agent, opts)
@@ -650,6 +748,78 @@ defmodule AgentMachine.RunServer do
 
   defp compacted_result_ids(_context), do: MapSet.new()
 
+  defp empty_run_context(agent_graph) do
+    %{
+      results: %{},
+      artifacts: %{},
+      artifact_sources: %{},
+      compacted_context: nil,
+      agent_graph: context_agent_graph(agent_graph)
+    }
+  end
+
+  defp initial_agent_graph(agents) do
+    Map.new(agents, fn agent -> {agent.id, agent_graph_entry(agent, nil, 0)} end)
+  end
+
+  defp register_delegated_agents(run, agents, parent_agent_id) do
+    parent_depth = run.agent_graph |> Map.get(parent_agent_id, %{}) |> Map.get(:spawn_depth, 0)
+    child_depth = parent_depth + 1
+
+    updates =
+      Map.new(agents, fn agent ->
+        {agent.id, agent_graph_entry(agent, parent_agent_id, child_depth)}
+      end)
+
+    %{run | agent_graph: Map.merge(run.agent_graph, updates)}
+  end
+
+  defp register_finalizer(%{finalizer: nil} = run), do: run
+
+  defp register_finalizer(run) do
+    if Map.has_key?(run.agent_graph, run.finalizer.id) do
+      run
+    else
+      %{
+        run
+        | agent_graph:
+            Map.put(run.agent_graph, run.finalizer.id, agent_graph_entry(run.finalizer, nil, 0))
+      }
+    end
+  end
+
+  defp agent_graph_entry(agent, parent_agent_id, spawn_depth) do
+    %{
+      agent_id: agent.id,
+      parent_agent_id: parent_agent_id,
+      depends_on: agent.depends_on,
+      spawn_depth: spawn_depth
+    }
+    |> Map.merge(agent_metadata_summary(agent.metadata))
+    |> reject_nil_values()
+  end
+
+  defp context_agent_graph(agent_graph) when is_map(agent_graph) do
+    Map.new(agent_graph, fn {agent_id, entry} -> {agent_id, entry} end)
+  end
+
+  defp agent_metadata_summary(metadata) when is_map(metadata) do
+    %{
+      agent_machine_role: metadata_value(metadata, :agent_machine_role),
+      swarm_id: metadata_value(metadata, :swarm_id),
+      variant_id: metadata_value(metadata, :variant_id),
+      workspace: metadata_value(metadata, :workspace)
+    }
+  end
+
+  defp agent_metadata_summary(_metadata), do: %{}
+
+  defp metadata_value(metadata, key) do
+    Map.get(metadata, key) || Map.get(metadata, Atom.to_string(key))
+  end
+
+  defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
+
   defp run_context(run) do
     covered = compacted_result_ids(run.compacted_context)
 
@@ -657,15 +827,18 @@ defmodule AgentMachine.RunServer do
       results: context_results(run.results, covered),
       artifacts: context_artifacts(run.artifacts, run.artifact_sources, covered),
       artifact_sources: context_artifact_sources(run.artifact_sources, covered),
-      compacted_context: run.compacted_context
+      compacted_context: run.compacted_context,
+      agent_graph: context_agent_graph(run.agent_graph)
     }
   end
 
-  defp build_agent_context(opts, agent, run_context, parent_agent_id) do
+  defp build_agent_context(opts, agent, run_context, graph_entry) do
     context = %{
       run_id: Keyword.fetch!(opts, :run_id),
       agent_id: agent.id,
-      parent_agent_id: parent_agent_id,
+      parent_agent_id: Map.get(graph_entry, :parent_agent_id),
+      agent: graph_entry,
+      agent_graph: run_context.agent_graph,
       results: run_context.results,
       artifacts: run_context.artifacts
     }
@@ -813,6 +986,7 @@ defmodule AgentMachine.RunServer do
         status: :running,
         at: DateTime.utc_now()
       }
+      |> Map.merge(event_agent_metadata(task.graph_entry))
     end)
   end
 
@@ -885,7 +1059,7 @@ defmodule AgentMachine.RunServer do
     end
   end
 
-  defp agent_started_event(run_id, agent_id, parent_agent_id, attempt) do
+  defp agent_started_event(run_id, agent_id, parent_agent_id, attempt, graph_entry) do
     %{
       type: :agent_started,
       run_id: run_id,
@@ -894,18 +1068,21 @@ defmodule AgentMachine.RunServer do
       attempt: attempt,
       at: DateTime.utc_now()
     }
+    |> Map.merge(event_agent_metadata(graph_entry))
   end
 
-  defp agent_finished_event(run_id, result) do
+  defp agent_finished_event(run_id, result, task) do
     %{
       type: :agent_finished,
       run_id: run_id,
       agent_id: result.agent_id,
+      parent_agent_id: task.parent_agent_id,
       status: result.status,
       attempt: result.attempt,
       duration_ms: result_duration_ms(result),
       at: result.finished_at || DateTime.utc_now()
     }
+    |> Map.merge(event_agent_metadata(task.graph_entry))
   end
 
   defp agent_retry_scheduled_event(run_id, agent_id, next_attempt, reason) do
@@ -919,16 +1096,29 @@ defmodule AgentMachine.RunServer do
     }
   end
 
-  defp agent_delegation_scheduled_event(run_id, agent_id, next_agents) do
+  defp agent_delegation_scheduled_event(run_id, agent_id, next_agents, run) do
     %{
       type: :agent_delegation_scheduled,
       run_id: run_id,
       agent_id: agent_id,
       count: length(next_agents),
       delegated_agent_ids: Enum.map(next_agents, & &1.id),
+      delegated_agents: Enum.map(next_agents, &Map.fetch!(run.agent_graph, &1.id)),
       at: DateTime.utc_now()
     }
   end
+
+  defp event_agent_metadata(graph_entry) when is_map(graph_entry) do
+    Map.take(graph_entry, [
+      :agent_machine_role,
+      :swarm_id,
+      :variant_id,
+      :workspace,
+      :spawn_depth
+    ])
+  end
+
+  defp event_agent_metadata(_graph_entry), do: %{}
 
   defp run_context_compaction_started_event(run_id, compaction_count, covered_items) do
     %{
@@ -1060,9 +1250,40 @@ defmodule AgentMachine.RunServer do
     end
   end
 
-  defp validate_next_agents(run, next_agents) do
+  defp validate_next_agents(run, next_agents, parent_agent_id) do
     next_ids = Enum.map(next_agents, & &1.id)
 
+    with :ok <- validate_child_count(next_agents),
+         :ok <- validate_spawn_depth(run, parent_agent_id),
+         :ok <- validate_next_agent_ids(run, next_ids),
+         :ok <- validate_next_agent_dependencies(run, next_agents),
+         :ok <- validate_next_agent_cycles(next_agents) do
+      {:ok, next_agents}
+    end
+  end
+
+  defp validate_child_count(next_agents) do
+    if length(next_agents) <= @max_children_per_agent do
+      :ok
+    else
+      {:error,
+       "delegated agent count exceeds max children per agent #{@max_children_per_agent}: #{length(next_agents)} requested"}
+    end
+  end
+
+  defp validate_spawn_depth(run, parent_agent_id) do
+    parent_depth = run.agent_graph |> Map.get(parent_agent_id, %{}) |> Map.get(:spawn_depth, 0)
+    child_depth = parent_depth + 1
+
+    if child_depth <= @max_spawn_depth do
+      :ok
+    else
+      {:error,
+       "delegated agent spawn depth would exceed max depth #{@max_spawn_depth}: #{child_depth} requested"}
+    end
+  end
+
+  defp validate_next_agent_ids(run, next_ids) do
     cond do
       duplicate_values(next_ids) != [] ->
         {:error,
@@ -1078,8 +1299,76 @@ defmodule AgentMachine.RunServer do
          "delegated agent ids must not reuse existing ids, duplicates: #{inspect(duplicate_existing_ids)}"}
 
       true ->
-        {:ok, next_agents}
+        :ok
     end
+  end
+
+  defp validate_next_agent_dependencies(run, next_agents) do
+    known_ids = MapSet.new(Map.keys(run.agent_graph))
+    next_ids = MapSet.new(Enum.map(next_agents, & &1.id))
+    allowed_ids = MapSet.union(known_ids, next_ids)
+
+    Enum.reduce_while(next_agents, :ok, fn agent, :ok ->
+      case validate_next_agent_dependency(agent, allowed_ids) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_next_agent_dependency(agent, allowed_ids) do
+    missing_dependencies = Enum.reject(agent.depends_on, &MapSet.member?(allowed_ids, &1))
+
+    cond do
+      agent.id in agent.depends_on ->
+        {:error, "delegated agent #{inspect(agent.id)} must not depend on itself"}
+
+      duplicate_values(agent.depends_on) != [] ->
+        {:error,
+         "delegated agent #{inspect(agent.id)} has duplicate depends_on entries: #{inspect(duplicate_values(agent.depends_on))}"}
+
+      missing_dependencies != [] ->
+        {:error,
+         "delegated agent #{inspect(agent.id)} depends on missing agent id(s): #{inspect(missing_dependencies)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_next_agent_cycles(next_agents) do
+    next_ids = MapSet.new(Enum.map(next_agents, & &1.id))
+
+    dependencies_by_id =
+      Map.new(next_agents, fn agent ->
+        {agent.id, Enum.filter(agent.depends_on, &MapSet.member?(next_ids, &1))}
+      end)
+
+    Enum.reduce_while(next_agents, :ok, fn agent, :ok ->
+      case visit_next_dependency(agent.id, dependencies_by_id, MapSet.new()) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp visit_next_dependency(agent_id, dependencies_by_id, visiting) do
+    if MapSet.member?(visiting, agent_id) do
+      {:error, "delegated agent dependency graph contains a cycle involving #{inspect(agent_id)}"}
+    else
+      dependencies_by_id
+      |> Map.fetch!(agent_id)
+      |> visit_next_dependency_children(dependencies_by_id, MapSet.put(visiting, agent_id))
+    end
+  end
+
+  defp visit_next_dependency_children(dependency_ids, dependencies_by_id, visiting) do
+    Enum.reduce_while(dependency_ids, :ok, fn dependency_id, :ok ->
+      case visit_next_dependency(dependency_id, dependencies_by_id, visiting) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp reserve_steps(step_count, next_count, max_steps) do
@@ -1093,20 +1382,10 @@ defmodule AgentMachine.RunServer do
     end
   end
 
-  defp existing_agent_ids(%{
-         agent_order: agent_order,
-         pending_agents: pending_agents,
-         finalizer: nil
-       }) do
-    agent_order ++ Enum.map(pending_agents, & &1.id)
-  end
+  defp existing_agent_ids(%{agent_graph: agent_graph, finalizer: nil}), do: Map.keys(agent_graph)
 
-  defp existing_agent_ids(%{
-         agent_order: agent_order,
-         pending_agents: pending_agents,
-         finalizer: finalizer
-       }) do
-    Enum.uniq(agent_order ++ Enum.map(pending_agents, & &1.id) ++ [finalizer.id])
+  defp existing_agent_ids(%{agent_graph: agent_graph, finalizer: finalizer}) do
+    Enum.uniq(Map.keys(agent_graph) ++ [finalizer.id])
   end
 
   defp require_positive_integer!(value, _field) when is_integer(value) and value > 0 do

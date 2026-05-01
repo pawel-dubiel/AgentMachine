@@ -422,7 +422,31 @@ defmodule AgentMachine.ClientRunnerTest do
     assert MapSet.member?(permissions, :test_command_run)
   end
 
-  test "requires code-edit and full-access for test commands" do
+  test "accepts code-edit test commands with ask-before-write approval" do
+    spec =
+      RunSpec.new!(%{
+        task: "edit code",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :code_edit,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_root: "/tmp/agent-machine",
+        tool_approval_mode: :ask_before_write,
+        test_commands: ["mix test"]
+      })
+
+    {_agents, opts} = Basic.build!(spec)
+
+    assert AgentMachine.Tools.RunTestCommand in Keyword.fetch!(opts, :allowed_tools)
+    assert Keyword.fetch!(opts, :tool_approval_mode) == :ask_before_write
+    assert Keyword.fetch!(opts, :test_commands) == ["mix test"]
+  end
+
+  test "requires code-edit and command-capable approval mode for test commands" do
     base = %{
       task: "edit code",
       workflow: :basic,
@@ -447,6 +471,104 @@ defmodule AgentMachine.ClientRunnerTest do
         Map.merge(base, %{tool_harness: :code_edit, tool_approval_mode: :auto_approved_safe})
       )
     end
+  end
+
+  test "requires client approval callback for ask-before-write test commands" do
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-client-approval-#{System.unique_integer()}")
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+
+    attrs = %{
+      task: "edit code",
+      workflow: :basic,
+      provider: :echo,
+      timeout_ms: 1_000,
+      max_steps: 2,
+      max_attempts: 1,
+      tool_harness: :code_edit,
+      tool_timeout_ms: 100,
+      tool_max_rounds: 2,
+      tool_root: root,
+      tool_approval_mode: :ask_before_write,
+      test_commands: ["mix test"]
+    }
+
+    assert_raise ArgumentError, ~r/:tool_approval_callback is required/, fn ->
+      ClientRunner.run!(attrs)
+    end
+
+    summary = ClientRunner.run!(attrs, tool_approval_callback: fn _context -> :approved end)
+    assert summary.status == "completed"
+  end
+
+  test "requires client approval callback for ask-before-write write-risk tools" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-client-write-approval-#{System.unique_integer()}"
+      )
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+
+    attrs = %{
+      task: "write a file",
+      workflow: :basic,
+      provider: :echo,
+      timeout_ms: 1_000,
+      max_steps: 2,
+      max_attempts: 1,
+      tool_harness: :local_files,
+      tool_timeout_ms: 100,
+      tool_max_rounds: 2,
+      tool_root: root,
+      tool_approval_mode: :ask_before_write
+    }
+
+    assert_raise ArgumentError, ~r/:tool_approval_callback is required/, fn ->
+      ClientRunner.run!(attrs)
+    end
+
+    summary = ClientRunner.run!(attrs, tool_approval_callback: fn _context -> :approved end)
+    assert summary.status == "completed"
+  end
+
+  test "allows ask-before-write without callback when exposed tools are read-only" do
+    summary =
+      ClientRunner.run!(%{
+        task: "what time is it?",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 2,
+        max_attempts: 1,
+        tool_harness: :time,
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :ask_before_write
+      })
+
+    assert summary.status == "completed"
+  end
+
+  test "validates client approval callback option" do
+    attrs = %{
+      task: "summarize",
+      workflow: :basic,
+      provider: :echo,
+      timeout_ms: 1_000,
+      max_steps: 2,
+      max_attempts: 1
+    }
+
+    assert_raise ArgumentError, ~r/:tool_approval_callback must be a function of arity 1/, fn ->
+      ClientRunner.run!(attrs, tool_approval_callback: :approved)
+    end
+
+    summary = ClientRunner.run!(attrs, tool_approval_callback: fn _context -> :approved end)
+    assert summary.status == "completed"
   end
 
   test "rejects duplicate or malformed test commands" do
@@ -531,6 +653,35 @@ defmodule AgentMachine.ClientRunnerTest do
     assert finalizer.metadata == %{agent_machine_disable_tools: true}
     assert finalizer.instructions =~ "what completed"
     assert finalizer.instructions =~ "what was not verified"
+  end
+
+  test "builds swarm-specific agentic planner and finalizer instructions" do
+    spec =
+      RunSpec.new!(%{
+        task: "build multiple versions",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1
+      })
+
+    {[planner], opts} = Agentic.build!(spec, %{selected: "agentic", strategy: "swarm"})
+
+    assert planner.metadata.agent_machine_strategy == "swarm"
+    assert planner.instructions =~ "\"swarm\""
+    assert planner.instructions =~ "minimal"
+    assert planner.instructions =~ "robust"
+    assert planner.instructions =~ "experimental"
+    assert planner.instructions =~ "swarm_evaluator"
+
+    worker_instructions = planner.metadata.agent_machine_worker_instructions
+    assert worker_instructions =~ "swarm_variant"
+    assert worker_instructions =~ "workspace"
+
+    finalizer = Keyword.fetch!(opts, :finalizer)
+    assert finalizer.instructions =~ "recommended variant"
+    assert finalizer.instructions =~ "Do not auto-merge"
   end
 
   test "runs the basic echo workflow and returns a client summary" do
@@ -1535,7 +1686,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert %{"status" => "completed"} = JSON.decode!(line)
   end
 
-  test "mix agent_machine.run rejects test commands without code-edit full-access" do
+  test "mix agent_machine.run rejects test commands without supported non-interactive approval" do
     Mix.Task.reenable("agent_machine.run")
 
     assert_raise ArgumentError, ~r/test_commands require :tool_harness :code_edit/, fn ->
@@ -1589,6 +1740,37 @@ defmodule AgentMachine.ClientRunnerTest do
         "2",
         "--tool-approval-mode",
         "auto-approved-safe",
+        "--test-command",
+        "mix test",
+        "--json",
+        "edit"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/:tool_approval_callback is required/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--tool-harness",
+        "code-edit",
+        "--tool-root",
+        System.tmp_dir!(),
+        "--tool-timeout-ms",
+        "100",
+        "--tool-max-rounds",
+        "2",
+        "--tool-approval-mode",
+        "ask-before-write",
         "--test-command",
         "mix test",
         "--json",

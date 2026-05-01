@@ -4,6 +4,21 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed `ClientRunner` to fail fast when `ask-before-write` exposes write,
+  delete, command, or network-risk tools without an approval callback.
+- Changed TUI work checklist markers so pending/running rows render as `[-]`,
+  completed rows render as `[v]`, and failed/timeout rows render as `[x]`.
+- Added an opt-in paid OpenRouter swarm end-to-end eval target that runs Kimi
+  K2.6, GPT OSS 120B, and Step 3.5 Flash through the same
+  planner-to-variants-to-evaluator tool workflow.
+- Changed the default paid OpenRouter integration-test model to
+  `moonshotai/kimi-k2.6`.
+- Added paid OpenRouter swarm integration coverage and high-level
+  `ClientRunner` approval callbacks so swarm variant writes and allowlisted
+  test commands can be verified under runtime-owned permissions.
+- Added an agentic swarm strategy for explicit multiple-variant requests, with
+  validated variant/evaluator graphs, per-variant workspace roots, and
+  evaluator/finalizer prompt support.
 - Reworked context budget monitoring to measure provider request bodies with an
   explicit tokenizer path, added reserved-output configuration, TUI status-line
   rendering, and budget-gated run-context compaction skips when measurement is

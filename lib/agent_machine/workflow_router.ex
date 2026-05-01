@@ -68,14 +68,19 @@ defmodule AgentMachine.WorkflowRouter do
 
   def route!(%__MODULE__{requested_workflow: :agentic} = input) do
     intent = deterministic_intent(input)
+    swarm? = swarm_requested?(input)
 
     route(
       :agentic,
       :agentic,
-      "explicit_agentic_workflow",
+      if(swarm?,
+        do: "user_requested_multiple_solution_variants",
+        else: "explicit_agentic_workflow"
+      ),
       intent,
       tools_configured?(input),
-      deterministic_meta(intent)
+      deterministic_meta(intent),
+      strategy_meta(swarm?)
     )
   end
 
@@ -93,7 +98,27 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp route_auto!(input) do
     classified = classify_intent!(input)
-    route_auto_intent(input, classified.intent, classified)
+
+    if swarm_requested?(input) do
+      route_auto_swarm_intent(input, classified)
+    else
+      route_auto_intent(input, classified.intent, classified)
+    end
+  end
+
+  defp route_auto_swarm_intent(input, classified) do
+    intent = Map.fetch!(classified, :intent)
+    require_swarm_capability!(input, intent)
+
+    route(
+      :auto,
+      :agentic,
+      "user_requested_multiple_solution_variants",
+      intent,
+      swarm_tools_exposed?(input, intent),
+      classifier_meta(classified),
+      %{strategy: "swarm"}
+    )
   end
 
   defp route_auto_intent(_input, :none, classified) do
@@ -202,7 +227,15 @@ defmodule AgentMachine.WorkflowRouter do
     )
   end
 
-  defp route(requested, selected, reason, tool_intent, tools_exposed, classifier_meta) do
+  defp route(
+         requested,
+         selected,
+         reason,
+         tool_intent,
+         tools_exposed,
+         classifier_meta,
+         extra_meta \\ %{}
+       ) do
     %{
       requested: Atom.to_string(requested),
       selected: Atom.to_string(selected),
@@ -211,6 +244,7 @@ defmodule AgentMachine.WorkflowRouter do
       tools_exposed: tools_exposed
     }
     |> Map.merge(classifier_meta)
+    |> Map.merge(extra_meta)
   end
 
   defp reject_chat_tools!(input) do
@@ -530,6 +564,24 @@ defmodule AgentMachine.WorkflowRouter do
     web_action? and web_browse_target?(normalized)
   end
 
+  defp swarm_requested?(input) do
+    input
+    |> effective_text()
+    |> normalize()
+    |> contains_any?([
+      "swarm",
+      "different versions",
+      "multiple versions",
+      "variants",
+      "variant",
+      "alternative implementations",
+      "competing solutions",
+      "try several approaches",
+      "prototype several options",
+      "prototype options"
+    ])
+  end
+
   defp web_browse_target?(normalized) do
     contains_any?(normalized, [
       "website",
@@ -663,6 +715,14 @@ defmodule AgentMachine.WorkflowRouter do
     end
   end
 
+  defp require_swarm_capability!(input, :file_read), do: require_read_capability!(input)
+  defp require_swarm_capability!(input, :file_mutation), do: require_write_capability!(input)
+  defp require_swarm_capability!(input, :code_mutation), do: require_code_edit_capability!(input)
+  defp require_swarm_capability!(input, :test_command), do: require_test_capability!(input)
+  defp require_swarm_capability!(input, :web_browse), do: require_browser_mcp_capability!(input)
+  defp require_swarm_capability!(input, :tool_use), do: require_any_tool_capability!(input)
+  defp require_swarm_capability!(_input, _intent), do: :ok
+
   defp require_read_only_tool_capability!(input, intent) do
     require_any_tool_capability!(input)
 
@@ -747,6 +807,15 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp has_any_harness?(%__MODULE__{tool_harnesses: harnesses}, expected),
     do: Enum.any?(harnesses, &(&1 in expected))
+
+  defp swarm_tools_exposed?(_input, intent)
+       when intent in [:file_read, :file_mutation, :code_mutation, :test_command, :web_browse],
+       do: true
+
+  defp swarm_tools_exposed?(input, _intent), do: tools_configured?(input)
+
+  defp strategy_meta(true), do: %{strategy: "swarm"}
+  defp strategy_meta(false), do: %{}
 
   defp tools_configured?(%__MODULE__{tool_harnesses: harnesses}), do: harnesses != []
 

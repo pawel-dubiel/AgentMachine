@@ -11,9 +11,9 @@ defmodule AgentMachine.Providers.Echo do
   alias AgentMachine.{Agent, JSON, RunContextPrompt}
 
   @impl true
-  def complete(%Agent{} = agent, _opts) do
+  def complete(%Agent{} = agent, opts) do
     input_tokens = token_count(agent.input) + token_count(agent.instructions)
-    output = output(agent)
+    output = output(agent, opts)
     output_tokens = token_count(output)
 
     {:ok,
@@ -29,7 +29,7 @@ defmodule AgentMachine.Providers.Echo do
 
   @impl true
   def stream_complete(%Agent{} = agent, opts) do
-    output = output(agent)
+    output = output(agent, opts)
     emit_delta(opts, output)
     emit_done(opts)
 
@@ -98,10 +98,13 @@ defmodule AgentMachine.Providers.Echo do
     })
   end
 
-  defp output(%Agent{} = agent) do
+  defp output(%Agent{} = agent, opts) do
     cond do
       compaction_response?(agent) ->
         compaction_output(agent)
+
+      swarm_delegation_response?(agent) ->
+        swarm_output(agent, opts)
 
       structured_delegation_response?(agent) ->
         JSON.encode!(%{
@@ -116,6 +119,47 @@ defmodule AgentMachine.Providers.Echo do
       true ->
         "agent #{agent.id}: #{agent.input}"
     end
+  end
+
+  defp swarm_output(%Agent{} = agent, opts) do
+    run_id = opts |> Keyword.fetch!(:run_context) |> Map.fetch!(:run_id)
+    variant_ids = ["minimal", "robust", "experimental"]
+    variant_agent_ids = Enum.map(variant_ids, &"variant-#{&1}")
+
+    JSON.encode!(%{
+      "decision" => %{
+        "mode" => "swarm",
+        "reason" => "Echo provider created deterministic swarm variants."
+      },
+      "output" => "Planning three isolated variants and an evaluator.",
+      "next_agents" =>
+        Enum.map(variant_ids, &swarm_variant(&1, run_id)) ++
+          [
+            %{
+              "id" => "swarm-evaluator",
+              "input" => "Compare the swarm variants for: #{agent.input}",
+              "depends_on" => variant_agent_ids,
+              "metadata" => %{
+                "agent_machine_role" => "swarm_evaluator",
+                "swarm_id" => "default"
+              }
+            }
+          ]
+    })
+  end
+
+  defp swarm_variant(variant_id, run_id) do
+    %{
+      "id" => "variant-#{variant_id}",
+      "input" =>
+        "Produce the #{variant_id} variant in workspace .agent_machine/swarm/#{run_id}/#{variant_id}. Report confirmed checks and partial failures.",
+      "metadata" => %{
+        "agent_machine_role" => "swarm_variant",
+        "swarm_id" => "default",
+        "variant_id" => variant_id,
+        "workspace" => ".agent_machine/swarm/#{run_id}/#{variant_id}"
+      }
+    }
   end
 
   defp input(%Agent{} = agent, %{full_text: ""}), do: agent.input
@@ -162,6 +206,14 @@ defmodule AgentMachine.Providers.Echo do
   end
 
   defp structured_delegation_response?(_agent), do: false
+
+  defp swarm_delegation_response?(%Agent{metadata: metadata} = agent) when is_map(metadata) do
+    structured_delegation_response?(agent) and
+      (Map.get(metadata, :agent_machine_strategy) == "swarm" ||
+         Map.get(metadata, "agent_machine_strategy") == "swarm")
+  end
+
+  defp swarm_delegation_response?(_agent), do: false
 
   defp token_count(nil), do: 0
 

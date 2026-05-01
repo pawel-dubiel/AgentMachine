@@ -31,6 +31,11 @@ the public docs and the main implementation boundaries for each area.
 - [Agentic workflow](README.md#workflows) through
   [`AgentMachine.Workflows.Agentic`](lib/agent_machine/workflows/agentic.ex),
   with a planner, delegated workers, and a finalizer.
+- [Swarm strategy](README.md#core-concepts) for explicit multiple-variant
+  requests, with planner-created isolated variant workers, a dependent
+  evaluator, validated graph limits, and no automatic merge back to the
+  original project. Variant tool permissions remain runtime-owned, and
+  filesystem/code-edit tools are rooted at each variant workspace.
 - [Structured delegation parsing](lib/agent_machine/delegation_response.ex) for
   opt-in planner JSON that creates delegated worker specs.
 - [Run context prompt formatting](lib/agent_machine/run_context_prompt.ex) so
@@ -156,7 +161,8 @@ the public docs and the main implementation boundaries for each area.
 - [Go TUI test suite](tui/) for the terminal client, config, CLI adapter, and
   paid OpenRouter integration paths.
 - [Paid OpenRouter integration tests](README.md#development) gated behind
-  `OPENROUTER_API_KEY` and an optional `AGENT_MACHINE_PAID_OPENROUTER_MODEL`.
+  `OPENROUTER_API_KEY` and an optional `AGENT_MACHINE_PAID_OPENROUTER_MODEL`,
+  including opt-in swarm checks tagged `:openrouter_swarm_paid`.
 
 ## Deferred Work
 

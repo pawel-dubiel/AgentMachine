@@ -9,29 +9,32 @@ defmodule AgentMachine.Workflows.Agentic do
 
   alias AgentMachine.{RunSpec, WorkflowOptions}
 
-  def build!(%RunSpec{} = spec) do
+  def build!(%RunSpec{} = spec, route \\ %{}) when is_map(route) do
     provider = provider_module(spec)
     pricing = pricing(spec)
+    swarm? = swarm_strategy?(route)
 
     planner = %{
       id: "planner",
       provider: provider,
       model: model(spec),
-      instructions: planner_instructions(),
+      instructions: planner_instructions(swarm?),
       input: spec.task,
       pricing: pricing,
-      metadata: %{
-        agent_machine_response: "delegation",
-        agent_machine_disable_tools: true,
-        agent_machine_worker_instructions: worker_runtime_instructions()
-      }
+      metadata:
+        %{
+          agent_machine_response: "delegation",
+          agent_machine_disable_tools: true,
+          agent_machine_worker_instructions: worker_runtime_instructions(swarm?)
+        }
+        |> maybe_put_swarm_strategy(swarm?)
     }
 
     finalizer = %{
       id: "finalizer",
       provider: provider,
       model: model(spec),
-      instructions: finalizer_instructions(),
+      instructions: finalizer_instructions(swarm?),
       input: "Create the final answer for this task: #{spec.task}",
       pricing: pricing,
       metadata: %{agent_machine_disable_tools: true}
@@ -51,6 +54,15 @@ defmodule AgentMachine.Workflows.Agentic do
 
     {[planner], opts}
   end
+
+  defp swarm_strategy?(%{strategy: "swarm"}), do: true
+  defp swarm_strategy?(%{"strategy" => "swarm"}), do: true
+  defp swarm_strategy?(_route), do: false
+
+  defp maybe_put_swarm_strategy(metadata, true),
+    do: Map.put(metadata, :agent_machine_strategy, "swarm")
+
+  defp maybe_put_swarm_strategy(metadata, false), do: metadata
 
   defp provider_module(%RunSpec{provider: :echo}), do: AgentMachine.Providers.Echo
   defp provider_module(%RunSpec{provider: :openai}), do: AgentMachine.Providers.OpenAIResponses
@@ -139,7 +151,7 @@ defmodule AgentMachine.Workflows.Agentic do
   defp maybe_put_mcp_config(opts, %RunSpec{mcp_config: config}),
     do: Keyword.put(opts, :mcp_config, config)
 
-  defp planner_instructions do
+  defp planner_instructions(false) do
     """
     You are the planning agent for AgentMachine.
 
@@ -176,20 +188,65 @@ defmodule AgentMachine.Workflows.Agentic do
     |> String.trim()
   end
 
-  defp worker_runtime_instructions do
-    """
-    You are a worker agent running inside AgentMachine.
-    Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
-    Inspect named files or directories before changing them when the task depends on existing state.
-    For MCP browser work, navigate to the requested page or search URL first, then capture a browser snapshot before summarizing. For Google/news-style requests, construct a search URL from the user's query when no direct URL is provided.
-    Do not claim that you created, changed, deleted, read, browsed, patched, or ran anything unless tool_results confirm it.
-    If a tool fails, times out, lacks permission, or reaches a limit, report the exact partial state and stop inventing progress.
-    Keep the final worker output concise: completed work, confirmed side effects, failures, and anything not verified.
-    """
+  defp planner_instructions(true) do
+    [
+      planner_instructions(false),
+      """
+      Swarm strategy:
+      - Runtime facts show workflow_route.strategy is "swarm"; you MUST return decision mode "swarm".
+      - Create isolated candidate-producing variant workers that solve the same user goal through intentionally different approaches.
+      - Use 2 to 5 variants. Default to exactly 3 variants unless the user explicitly asks for a different count: minimal, robust, experimental.
+      - The minimal variant should pursue the smallest correct solution.
+      - The robust variant should pursue production-oriented validation, tests, and maintainability where applicable.
+      - The experimental variant should pursue a creative or alternative architecture.
+      - Each variant worker MUST include metadata with agent_machine_role "swarm_variant", swarm_id "default", a unique variant_id, and workspace ".agent_machine/swarm/<run_id>/<variant_id>" using the run_id from runtime facts.
+      - Each variant input MUST include the variant goal, workspace path, acceptance criteria, instructions to report partial failures, and instructions not to claim file changes unless tool_results confirm them.
+      - Add exactly one evaluator agent with metadata agent_machine_role "swarm_evaluator" and swarm_id "default".
+      - The evaluator MUST depend_on every variant worker and compare correctness, simplicity, maintainability, testability, risk, changed files, artifacts, and tool results when available.
+      - Do not create recursive swarms, nested planners, or unlimited follow-up spawning.
+      - Do not auto-merge any variant back into the original project.
+
+      Return only JSON with this shape for swarm:
+      {"decision":{"mode":"swarm","reason":"non-empty reason"},"output":"short planning note","next_agents":[{"id":"variant-minimal","input":"worker task","instructions":"optional worker instructions","metadata":{"agent_machine_role":"swarm_variant","swarm_id":"default","variant_id":"minimal","workspace":".agent_machine/swarm/<run_id>/minimal"}},{"id":"swarm-evaluator","input":"compare variants","depends_on":["variant-minimal"],"metadata":{"agent_machine_role":"swarm_evaluator","swarm_id":"default"}}]}
+      """
+    ]
+    |> Enum.join("\n\n")
     |> String.trim()
   end
 
-  defp finalizer_instructions do
+  defp worker_runtime_instructions(swarm?) do
+    base =
+      """
+      You are a worker agent running inside AgentMachine.
+      Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
+      Inspect named files or directories before changing them when the task depends on existing state.
+      For MCP browser work, navigate to the requested page or search URL first, then capture a browser snapshot before summarizing. For Google/news-style requests, construct a search URL from the user's query when no direct URL is provided.
+      Do not claim that you created, changed, deleted, read, browsed, patched, or ran anything unless tool_results confirm it.
+      If a tool fails, times out, lacks permission, or reaches a limit, report the exact partial state and stop inventing progress.
+      Keep the final worker output concise: completed work, confirmed side effects, failures, and anything not verified.
+      """
+      |> String.trim()
+
+    if swarm? do
+      [
+        base,
+        """
+        Swarm worker rules:
+        - If your metadata agent_machine_role is "swarm_variant", work only on your assigned variant goal.
+        - Filesystem and code-edit tools are rooted at your assigned workspace; use relative paths inside that workspace for writes and command cwd values.
+        - Report your assigned workspace path in your output.
+        - Treat other variants as isolated candidates; do not coordinate through shared files.
+        - Report acceptance criteria, checks passed or failed, changed files, artifacts, and unverified work.
+        """
+      ]
+      |> Enum.join("\n\n")
+      |> String.trim()
+    else
+      base
+    end
+  end
+
+  defp finalizer_instructions(false) do
     """
     Create the final user-facing answer from the completed run context.
     If the planner decision mode is "direct", return the planner output as the final answer.
@@ -199,6 +256,22 @@ defmodule AgentMachine.Workflows.Agentic do
     Say what completed, what failed or remained partial, which side effects are confirmed by tool_results, and what was not verified.
     Do not call tools. Summarize only the run context.
     """
+    |> String.trim()
+  end
+
+  defp finalizer_instructions(true) do
+    [
+      finalizer_instructions(false),
+      """
+      Swarm finalization rules:
+      - Summarize which variants were created and where their workspaces live.
+      - Explain what each variant tried, which checks passed or failed, and which side effects are confirmed by tool_results.
+      - Use the swarm evaluator output when present to compare correctness, simplicity, maintainability, testability, and risk.
+      - Name the recommended variant and any uncertainty or unverified work.
+      - Do not auto-merge any variant back into the original project.
+      """
+    ]
+    |> Enum.join("\n\n")
     |> String.trim()
   end
 end
