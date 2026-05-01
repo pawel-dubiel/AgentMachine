@@ -200,6 +200,9 @@ Useful first commands:
 /agent <id>
 ```
 
+Agent detail views show streamed provider text separately from the final
+normalized output, decision, errors, and compacted event history.
+
 The TUI keeps saved settings in a local user config file with `0600`
 permissions. Override the location with `AGENT_MACHINE_TUI_CONFIG`.
 

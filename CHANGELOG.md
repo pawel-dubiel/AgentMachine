@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed TUI agent detail views to show each agent's exact streamed text
+  separately from the final normalized output, while compacting repeated stream
+  activity rows.
 - Changed provider SSE streaming to close locally on terminal stream events such
   as OpenRouter `[DONE]` and OpenAI `response.completed`.
 - Changed `ClientRunner` to fail fast when `ask-before-write` exposes write,

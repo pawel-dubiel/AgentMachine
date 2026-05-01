@@ -803,6 +803,22 @@ func TestAgentDetailCompactsHeartbeatEvents(t *testing.T) {
 	}
 }
 
+func TestAgentDetailCompactsAssistantDeltaEvents(t *testing.T) {
+	lines := agentEventLines([]eventSummary{
+		{Type: "assistant_delta", AgentID: "planner", Summary: "planner streamed text"},
+		{Type: "assistant_delta", AgentID: "planner", Summary: "planner streamed text"},
+		{Type: "assistant_delta", AgentID: "planner", Summary: "planner streamed text"},
+		{Type: "assistant_done", AgentID: "planner", Summary: "planner finished streaming text"},
+	})
+
+	if strings.Count(lines, "planner streamed text") != 1 || !strings.Contains(lines, "x3") {
+		t.Fatalf("expected compact stream event line, got %q", lines)
+	}
+	if !strings.Contains(lines, "planner finished streaming text") {
+		t.Fatalf("expected stream completion event, got %q", lines)
+	}
+}
+
 func TestLiveActivityCompactsReadOnlyToolEvents(t *testing.T) {
 	lines := compactEventDisplayLines([]eventSummary{
 		{Type: "tool_call_finished", AgentID: "worker", Tool: "read_file", Status: "ok", Summary: "worker read README.md"},
@@ -838,8 +854,42 @@ func TestAgentDetailShowsRunningPlaceholders(t *testing.T) {
 	view := m.agentDetailView()
 	for _, expected := range []string{
 		"(pending until agent finishes)",
-		"(provider request in progress; no streamed output yet)",
+		"(provider request in progress; no streamed text yet)",
 		"(none so far)",
+	} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("expected %q in detail view, got %q", expected, view)
+		}
+	}
+}
+
+func TestAgentDetailShowsStreamAndFinalOutput(t *testing.T) {
+	m := model{
+		selectedAgent: "planner",
+		agents: map[string]agentState{
+			"planner": {
+				ID:           "planner",
+				Status:       "ok",
+				Attempt:      1,
+				StreamOutput: "{\"decision\":{\"mode\":\"delegate\"},\"output\":\"draft plan\"}",
+				Output:       "draft plan",
+				Decision: plannerDecision{
+					Mode:              "delegate",
+					Reason:            "Need one worker for the filesystem change.",
+					DelegatedAgentIDs: []string{"create-experiments-folder"},
+				},
+			},
+		},
+	}
+
+	view := m.agentDetailView()
+	for _, expected := range []string{
+		"Stream",
+		"{\"decision\":{\"mode\":\"delegate\"},\"output\":\"draft plan\"}",
+		"Output",
+		"draft plan",
+		"reason: Need one worker for the filesystem change.",
+		"delegated: create-experiments-folder",
 	} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("expected %q in detail view, got %q", expected, view)
@@ -3234,7 +3284,7 @@ func TestJSONLEventsMaintainWorkChecklist(t *testing.T) {
 	}
 }
 
-func TestJSONLAssistantDeltaUpdatesDraftWithoutLiveFeedNoise(t *testing.T) {
+func TestJSONLAssistantDeltaUpdatesStreamWithoutLiveFeedNoise(t *testing.T) {
 	m := model{agents: map[string]agentState{}, eventAutoScroll: true}
 
 	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"assistant_delta","run_id":"run-1","agent_id":"assistant","attempt":1,"delta":"hel","summary":"assistant streamed text","details":{"attempt":1},"at":"2026-04-25T10:00:00Z"}}`)
@@ -3243,8 +3293,11 @@ func TestJSONLAssistantDeltaUpdatesDraftWithoutLiveFeedNoise(t *testing.T) {
 	if updated.liveAssistant != "hello" {
 		t.Fatalf("expected live assistant draft, got %q", updated.liveAssistant)
 	}
-	if updated.agents["assistant"].Output != "hello" {
-		t.Fatalf("expected agent output draft, got %#v", updated.agents["assistant"])
+	if updated.agents["assistant"].StreamOutput != "hello" {
+		t.Fatalf("expected agent stream draft, got %#v", updated.agents["assistant"])
+	}
+	if updated.agents["assistant"].Output != "" {
+		t.Fatalf("expected final output to stay empty until summary, got %#v", updated.agents["assistant"])
 	}
 	if len(updated.eventLog) != 0 {
 		t.Fatalf("expected assistant deltas to stay out of event log, got %d", len(updated.eventLog))

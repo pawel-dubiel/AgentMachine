@@ -521,6 +521,8 @@ func compactEventDisplayLines(events []eventSummary) []string {
 	lines := make([]string, 0, len(events))
 	var heartbeat eventSummary
 	heartbeatCount := 0
+	var groupedStream eventSummary
+	groupedStreamCount := 0
 	var groupedRead eventSummary
 	groupedReadCount := 0
 
@@ -535,6 +537,19 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		lines = append(lines, line)
 		heartbeat = eventSummary{}
 		heartbeatCount = 0
+	}
+
+	flushGroupedStream := func() {
+		if groupedStreamCount == 0 {
+			return
+		}
+		line := eventDisplayLine(groupedStream)
+		if groupedStreamCount > 1 {
+			line += hintStyle.Render(fmt.Sprintf(" x%d", groupedStreamCount))
+		}
+		lines = append(lines, line)
+		groupedStream = eventSummary{}
+		groupedStreamCount = 0
 	}
 
 	flushGroupedRead := func() {
@@ -557,6 +572,7 @@ func compactEventDisplayLines(events []eventSummary) []string {
 			next := events[index+1]
 			if next.Type == "provider_request_finished" && next.AgentID == event.AgentID {
 				flushHeartbeat()
+				flushGroupedStream()
 				flushGroupedRead()
 				lines = append(lines, eventDisplayLine(next))
 				index++
@@ -565,14 +581,30 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		}
 
 		if event.Type == "agent_heartbeat" {
+			flushGroupedStream()
 			flushGroupedRead()
 			heartbeat = event
 			heartbeatCount++
 			continue
 		}
 
+		if event.Type == "assistant_delta" {
+			flushHeartbeat()
+			flushGroupedRead()
+			if groupedStreamCount > 0 && groupedStream.AgentID == event.AgentID {
+				groupedStream = event
+				groupedStreamCount++
+			} else {
+				flushGroupedStream()
+				groupedStream = event
+				groupedStreamCount = 1
+			}
+			continue
+		}
+
 		if collapsibleReadEvent(event) {
 			flushHeartbeat()
+			flushGroupedStream()
 			if groupedReadCount > 0 && groupedRead.AgentID == event.AgentID && groupedRead.Tool == event.Tool {
 				groupedRead = event
 				groupedReadCount++
@@ -585,11 +617,13 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		}
 
 		flushHeartbeat()
+		flushGroupedStream()
 		flushGroupedRead()
 		lines = append(lines, eventDisplayLine(event))
 	}
 
 	flushHeartbeat()
+	flushGroupedStream()
 	flushGroupedRead()
 	return lines
 }
@@ -941,6 +975,9 @@ func (m model) agentDetailView() string {
 		labelStyle.Render("Decision"),
 		agentDecisionText(agent),
 		"",
+		labelStyle.Render("Stream"),
+		agentStreamText(agent),
+		"",
 		labelStyle.Render("Output"),
 		agentOutputText(agent),
 		"",
@@ -961,15 +998,25 @@ func agentDecisionText(agent agentState) string {
 	return decisionText(agent.Decision)
 }
 
+func agentStreamText(agent agentState) string {
+	if strings.TrimSpace(agent.StreamOutput) != "" {
+		return agent.StreamOutput
+	}
+	if agentRunning(agent) && providerRequestOpen(agent.Events) {
+		return "(provider request in progress; no streamed text yet)"
+	}
+	if agentRunning(agent) {
+		return "(waiting for streamed text)"
+	}
+	return "(none)"
+}
+
 func agentOutputText(agent agentState) string {
 	if strings.TrimSpace(agent.Output) != "" {
 		return agent.Output
 	}
-	if agentRunning(agent) && providerRequestOpen(agent.Events) {
-		return "(provider request in progress; no streamed output yet)"
-	}
 	if agentRunning(agent) {
-		return "(waiting for agent output)"
+		return "(pending until agent finishes)"
 	}
 	return "(none)"
 }

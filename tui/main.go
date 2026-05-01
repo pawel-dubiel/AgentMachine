@@ -168,6 +168,7 @@ type agentState struct {
 	Status        string
 	Attempt       int
 	Output        string
+	StreamOutput  string
 	StreamChunks  int
 	Decision      plannerDecision
 	Error         string
@@ -2647,7 +2648,7 @@ func (m *model) appendAgentDelta(event eventSummary) {
 		agent.ID = event.AgentID
 		m.agentOrder = append(m.agentOrder, event.AgentID)
 	}
-	agent.Output += event.Delta
+	agent.StreamOutput += event.Delta
 	agent.StreamChunks++
 	agent.Events = append(agent.Events, sanitizedStreamEvent(event))
 	m.agents[event.AgentID] = agent
