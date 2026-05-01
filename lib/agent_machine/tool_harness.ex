@@ -69,6 +69,7 @@ defmodule AgentMachine.ToolHarness do
       {:ok, tools} ->
         tools
         |> maybe_put_test_command_tool(name, opts)
+        |> maybe_put_shell_tools(name, opts)
         |> maybe_put_skill_script_tool(name, opts)
 
       :error when name == :mcp ->
@@ -140,6 +141,7 @@ defmodule AgentMachine.ToolHarness do
     case Map.fetch(@builtin_policies, name) do
       {:ok, permissions} ->
         permissions = maybe_put_test_command_permission(name, permissions, opts)
+        permissions = maybe_put_shell_permissions(name, permissions, opts)
         permissions = maybe_put_skill_script_permission(name, permissions, opts)
         ToolPolicy.new!(harness: name, permissions: permissions)
 
@@ -422,6 +424,23 @@ defmodule AgentMachine.ToolHarness do
 
   defp maybe_put_test_command_tool(tools, _name, _opts), do: tools
 
+  defp maybe_put_shell_tools(tools, :code_edit, opts) do
+    if shell_enabled?(opts) do
+      tools ++
+        [
+          AgentMachine.Tools.RunShellCommand,
+          AgentMachine.Tools.StartShellCommand,
+          AgentMachine.Tools.ReadShellCommandOutput,
+          AgentMachine.Tools.StopShellCommand,
+          AgentMachine.Tools.ListShellCommands
+        ]
+    else
+      tools
+    end
+  end
+
+  defp maybe_put_shell_tools(tools, _name, _opts), do: tools
+
   defp maybe_put_skill_script_tool(tools, :skills, opts) do
     if Keyword.get(opts, :allow_skill_scripts, false) == true do
       tools ++ [AgentMachine.Tools.RunSkillScript]
@@ -442,6 +461,21 @@ defmodule AgentMachine.ToolHarness do
 
   defp maybe_put_test_command_permission(_name, permissions, _opts), do: permissions
 
+  defp maybe_put_shell_permissions(:code_edit, permissions, opts) do
+    if shell_enabled?(opts) do
+      permissions ++
+        [
+          :code_edit_shell_run,
+          :code_edit_shell_background,
+          :code_edit_shell_stop
+        ]
+    else
+      permissions
+    end
+  end
+
+  defp maybe_put_shell_permissions(_name, permissions, _opts), do: permissions
+
   defp maybe_put_skill_script_permission(:skills, permissions, opts) do
     if Keyword.get(opts, :allow_skill_scripts, false) == true do
       permissions ++ [:skills_script_run]
@@ -458,4 +492,7 @@ defmodule AgentMachine.ToolHarness do
       _other -> false
     end
   end
+
+  defp shell_enabled?(opts),
+    do: Keyword.get(opts, :tool_approval_mode) in [:full_access, :ask_before_write]
 end

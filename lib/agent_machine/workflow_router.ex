@@ -187,16 +187,27 @@ defmodule AgentMachine.WorkflowRouter do
   end
 
   defp route_auto_intent(input, :tool_use, classified) do
-    require_read_only_tool_capability!(input, :tool_use)
+    if shell_capable_code_edit?(input) do
+      route(
+        :auto,
+        :agentic,
+        "tool_intent_with_code_edit_shell",
+        :tool_use,
+        true,
+        classifier_meta(classified)
+      )
+    else
+      require_read_only_tool_capability!(input, :tool_use)
 
-    route(
-      :auto,
-      :tool,
-      "tool_intent_with_read_only_tool",
-      :tool_use,
-      true,
-      classifier_meta(classified)
-    )
+      route(
+        :auto,
+        :tool,
+        "tool_intent_with_read_only_tool",
+        :tool_use,
+        true,
+        classifier_meta(classified)
+      )
+    end
   end
 
   defp route_auto_intent(input, :file_mutation, classified) do
@@ -231,7 +242,7 @@ defmodule AgentMachine.WorkflowRouter do
     route(
       :auto,
       :agentic,
-      "test_intent_with_code_edit_full_access",
+      test_reason(input),
       :test_command,
       true,
       classifier_meta(classified)
@@ -814,15 +825,32 @@ defmodule AgentMachine.WorkflowRouter do
           requested_root: input.tool_root
 
       input.test_commands == [] ->
-        raise CapabilityRequired,
-          reason: :missing_test_commands,
-          intent: :test_command,
-          required_harness: :code_edit,
-          requested_root: input.tool_root
+        if shell_capable_code_edit?(input) do
+          :ok
+        else
+          raise CapabilityRequired,
+            reason: :missing_test_commands,
+            intent: :test_command,
+            required_harness: :code_edit,
+            requested_root: input.tool_root
+        end
 
       true ->
         :ok
     end
+  end
+
+  defp test_reason(input) do
+    if input.test_commands == [] and shell_capable_code_edit?(input) do
+      "test_intent_with_code_edit_shell"
+    else
+      "test_intent_with_code_edit_full_access"
+    end
+  end
+
+  defp shell_capable_code_edit?(input) do
+    has_any_harness?(input, [:code_edit]) and
+      input.approval_mode in [:full_access, :ask_before_write]
   end
 
   defp require_browser_mcp_capability!(input) do
