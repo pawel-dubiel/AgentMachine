@@ -334,56 +334,57 @@ const (
 )
 
 type model struct {
-	input               textinput.Model
-	workflow            runWorkflow
-	workflowSet         bool
-	provider            provider
-	providerSet         bool
-	theme               tuiTheme
-	savedConfig         savedConfig
-	configPath          string
-	modelOptions        []modelOption
-	modelIndex          int
-	selectedModel       string
-	modelStatus         string
-	modelPickerOpen     bool
-	modelPickerIndex    int
-	modelPickerPending  bool
-	modelPickerQuery    string
-	messages            []chatMessage
-	inputHistory        []string
-	historyIndex        int
-	historyDraft        string
-	queuedMessages      []queuedMessage
-	nextQueueID         int
-	view                viewMode
-	selectedAgent       string
-	selectedAgentIndex  int
-	running             bool
-	activeConfig        runConfig
-	lastSummary         summary
-	agents              map[string]agentState
-	agentOrder          []string
-	workItems           map[string]workItem
-	workOrder           []string
-	eventLog            []eventSummary
-	latestContextBudget *eventSummary
-	eventScroll         int
-	eventAutoScroll     bool
-	streamFrame         int
-	liveAssistant       string
-	raw                 string
-	stream              *streamSession
-	pendingToolTask     string
-	pendingToolRoot     string
-	pendingToolHarness  string
-	pendingToolChoice   int
-	pendingPermissions  map[string]eventSummary
-	pendingPermissionID []string
-	eventSessionID      string
-	eventLogFile        string
-	width               int
-	height              int
+	input                   textinput.Model
+	workflow                runWorkflow
+	workflowSet             bool
+	provider                provider
+	providerSet             bool
+	theme                   tuiTheme
+	savedConfig             savedConfig
+	configPath              string
+	modelOptions            []modelOption
+	modelIndex              int
+	selectedModel           string
+	modelStatus             string
+	modelPickerOpen         bool
+	modelPickerIndex        int
+	modelPickerPending      bool
+	modelPickerQuery        string
+	messages                []chatMessage
+	inputHistory            []string
+	historyIndex            int
+	historyDraft            string
+	queuedMessages          []queuedMessage
+	nextQueueID             int
+	view                    viewMode
+	selectedAgent           string
+	selectedAgentIndex      int
+	running                 bool
+	activeConfig            runConfig
+	lastSummary             summary
+	agents                  map[string]agentState
+	agentOrder              []string
+	workItems               map[string]workItem
+	workOrder               []string
+	eventLog                []eventSummary
+	latestContextBudget     *eventSummary
+	eventScroll             int
+	eventAutoScroll         bool
+	streamFrame             int
+	liveAssistant           string
+	raw                     string
+	stream                  *streamSession
+	pendingToolTask         string
+	pendingToolRoot         string
+	pendingToolHarness      string
+	pendingToolChoice       int
+	pendingPermissions      map[string]eventSummary
+	pendingPermissionID     []string
+	pendingPermissionChoice int
+	eventSessionID          string
+	eventLogFile            string
+	width                   int
+	height                  int
 }
 
 func initialModel() (model, error) {
@@ -573,12 +574,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if request, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
-			switch msg.String() {
-			case "enter", "a":
-				return m.answerPendingPermission(request, "approve")
-			case "d", "esc":
-				return m.answerPendingPermission(request, "deny")
+		if request, ok := m.currentPendingPermission(); ok && m.view == viewChat {
+			if strings.TrimSpace(m.input.Value()) == "" {
+				switch msg.String() {
+				case "up", "k":
+					m.movePendingPermissionChoice(-1)
+					return m, nil
+				case "down", "j":
+					m.movePendingPermissionChoice(1)
+					return m, nil
+				case "enter":
+					return m.applyPendingPermissionChoice(request)
+				case "a":
+					m.pendingPermissionChoice = 0
+					return m.applyPendingPermissionChoice(request)
+				case "d", "esc":
+					m.pendingPermissionChoice = pendingPermissionDenyChoice()
+					return m.applyPendingPermissionChoice(request)
+				}
 			}
 		}
 
@@ -730,6 +743,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.pendingPermissions = nil
 		m.pendingPermissionID = nil
+		m.pendingPermissionChoice = 0
 		m.view = viewChat
 		if msg.Session != nil && msg.Session.persistent && msg.Err == nil {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine session ended"})
@@ -817,6 +831,13 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return m, nil
+	}
+
+	if request, ok := m.currentPendingPermission(); ok && m.view == viewChat {
+		if decision, ok := runtimePermissionDecisionFromInput(text); ok {
+			m.input.SetValue("")
+			return m.answerPendingPermission(request, decision)
+		}
 	}
 
 	m.rememberInput(text)
@@ -1779,6 +1800,7 @@ func (m *model) addPendingPermission(event eventSummary) {
 	}
 	if m.pendingPermissions == nil {
 		m.pendingPermissions = map[string]eventSummary{}
+		m.pendingPermissionChoice = 0
 	}
 	if _, exists := m.pendingPermissions[event.RequestID]; !exists {
 		m.pendingPermissionID = append(m.pendingPermissionID, event.RequestID)
@@ -1801,6 +1823,7 @@ func (m *model) removePendingPermission(requestID string) {
 	if len(m.pendingPermissionID) == 0 {
 		m.pendingPermissionID = nil
 		m.pendingPermissions = nil
+		m.pendingPermissionChoice = 0
 	}
 }
 
@@ -1820,6 +1843,61 @@ func (m model) answerPendingPermission(request eventSummary, decision string) (t
 	}
 	m.removePendingPermission(request.RequestID)
 	return m, sendPermissionDecisionCommand(m.stream, request.RequestID, decision, "TUI "+decision)
+}
+
+type pendingRuntimePermissionOption struct {
+	Label       string
+	Description string
+	Decision    string
+}
+
+func pendingRuntimePermissionOptions() []pendingRuntimePermissionOption {
+	return []pendingRuntimePermissionOption{
+		{
+			Label:       "Approve once",
+			Description: "Allow this exact runtime tool request.",
+			Decision:    "approve",
+		},
+		{
+			Label:       "Deny",
+			Description: "Reject this runtime tool request.",
+			Decision:    "deny",
+		},
+	}
+}
+
+func pendingPermissionDenyChoice() int {
+	options := pendingRuntimePermissionOptions()
+	for index, option := range options {
+		if option.Decision == "deny" {
+			return index
+		}
+	}
+	return len(options) - 1
+}
+
+func (m *model) movePendingPermissionChoice(delta int) {
+	options := pendingRuntimePermissionOptions()
+	m.pendingPermissionChoice = (m.pendingPermissionChoice + delta + len(options)) % len(options)
+}
+
+func (m model) applyPendingPermissionChoice(request eventSummary) (tea.Model, tea.Cmd) {
+	options := pendingRuntimePermissionOptions()
+	if m.pendingPermissionChoice < 0 || m.pendingPermissionChoice >= len(options) {
+		m.pendingPermissionChoice = 0
+	}
+	return m.answerPendingPermission(request, options[m.pendingPermissionChoice].Decision)
+}
+
+func runtimePermissionDecisionFromInput(text string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "a", "/a", "approve", "/approve", "allow", "/allow":
+		return "approve", true
+	case "d", "/d", "deny", "/deny":
+		return "deny", true
+	default:
+		return "", false
+	}
 }
 
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
@@ -2630,6 +2708,7 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 			m.running = false
 			m.pendingPermissions = nil
 			m.pendingPermissionID = nil
+			m.pendingPermissionChoice = 0
 			if envelope.Summary.Status == "failed" {
 				errorText := summaryError(envelope.Summary)
 				if updated, handled := m.withRunPermissionText(errorText); handled {

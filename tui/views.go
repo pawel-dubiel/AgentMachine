@@ -58,7 +58,7 @@ func (m model) View() string {
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 	if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
-		b.WriteString(styles.Hint.Render("Runtime permission pending. Enter/a approves. d/Esc denies."))
+		b.WriteString(styles.Hint.Render("Runtime permission pending. Up/Down selects. Enter accepts. a=approve, d=deny."))
 	} else if m.running {
 		b.WriteString(styles.Hint.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
 	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
@@ -357,7 +357,23 @@ func (m model) pendingRuntimePermissionView() string {
 	if request.Summary != "" {
 		lines = append(lines, "summary: "+request.Summary)
 	}
-	lines = append(lines, "", "Enter/a approves this exact request. d/Esc denies.")
+	lines = append(lines, "")
+
+	options := pendingRuntimePermissionOptions()
+	selected := m.pendingPermissionChoice
+	if selected < 0 || selected >= len(options) {
+		selected = 0
+	}
+
+	for index, option := range options {
+		prefix := "  "
+		if index == selected {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+option.Label+" - "+option.Description)
+	}
+
+	lines = append(lines, "", "Up/Down choose. Enter accepts. a=approve, d/Esc=deny.")
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
