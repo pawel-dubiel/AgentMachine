@@ -252,8 +252,9 @@ partition "Tool harness assembly" {
 
     if (MCP harness?) then (yes)
       :Load explicit MCP config;
-      :Validate allowlisted servers and tools;
+      :Validate allowlisted servers, tools,\nand inputSchema objects;
       :Create namespaced provider-visible MCP tools;
+      :Expose MCP inputSchema under\nprovider-visible arguments;
       :Build permissions from MCP config;
     endif
 
@@ -311,6 +312,9 @@ partition "AgentRunner and provider loop" {
           :Agent result = error;
           break
         else (execute tool)
+          if (MCP tool?) then (yes)
+            :Validate arguments against configured\nMCP inputSchema before transport;
+          endif
           :Run exact tool call with tool_timeout_ms;
           if (tool returns {:ok, map}) then (ok)
             :Store tool result;

@@ -15,7 +15,9 @@ defmodule AgentMachine.MCP.ToolFactory do
         AgentMachine,
         MCP,
         DynamicTools,
-        Macro.camelize("#{tool.provider_name}_#{:erlang.phash2({tool.permission, tool.risk})}")
+        Macro.camelize(
+          "#{tool.provider_name}_#{:erlang.phash2({tool.permission, tool.risk, tool.input_schema})}"
+        )
       ])
 
     :global.trans({__MODULE__, module}, fn ->
@@ -55,7 +57,8 @@ defmodule AgentMachine.MCP.ToolFactory do
             server_id: tool.server_id,
             tool_name: tool.name,
             permission: tool.permission,
-            risk: tool.risk
+            risk: tool.risk,
+            argument_schema: Macro.escape(argument_schema(tool.input_schema))
           ] do
       @behaviour AgentMachine.Tool
       alias AgentMachine.MCP.ToolRunner
@@ -65,6 +68,7 @@ defmodule AgentMachine.MCP.ToolFactory do
       @tool_name tool_name
       @permission permission
       @risk risk
+      @argument_schema argument_schema
 
       @impl true
       def permission, do: @permission
@@ -80,10 +84,11 @@ defmodule AgentMachine.MCP.ToolFactory do
           input_schema: %{
             "type" => "object",
             "properties" => %{
-              "arguments" => %{
-                "type" => "object",
-                "description" => "Arguments to send to the MCP tool."
-              }
+              "arguments" =>
+                %{
+                  "description" => "Arguments to send to the MCP tool."
+                }
+                |> Map.merge(@argument_schema)
             },
             "required" => ["arguments"],
             "additionalProperties" => false
@@ -97,4 +102,7 @@ defmodule AgentMachine.MCP.ToolFactory do
       end
     end
   end
+
+  defp argument_schema(schema) when schema == %{}, do: %{"type" => "object"}
+  defp argument_schema(schema), do: schema
 end

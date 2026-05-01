@@ -29,7 +29,7 @@ defmodule AgentMachine.MCP.Config do
 
   defmodule Tool do
     @moduledoc false
-    defstruct [:server_id, :name, :provider_name, :permission, :risk]
+    defstruct [:server_id, :name, :provider_name, :permission, :risk, :input_schema]
 
     @type t :: %__MODULE__{}
   end
@@ -108,6 +108,13 @@ defmodule AgentMachine.MCP.Config do
     end
   end
 
+  def tool_by_name!(%__MODULE__{tools: tools}, server_id, name) do
+    case Enum.find(tools, &(&1.server_id == server_id and &1.name == name)) do
+      nil -> raise ArgumentError, "unknown MCP tool #{inspect(server_id)}.#{inspect(name)}"
+      tool -> tool
+    end
+  end
+
   defp tools!(server_id, tools) when is_list(tools) and tools != [] do
     parsed = Enum.map(tools, &tool!(server_id, &1))
     reject_duplicates!(Enum.map(parsed, & &1.name), "MCP tool name for #{server_id}")
@@ -127,18 +134,20 @@ defmodule AgentMachine.MCP.Config do
 
   defp tool!(
          server_id,
-         %{"name" => name, "permission" => permission, "risk" => risk}
+         %{"name" => name, "permission" => permission, "risk" => risk} = tool
        ) do
     name = require_identifier!(name, "MCP tool name")
     permission = require_permission!(permission)
     risk = require_risk!(risk)
+    input_schema = input_schema!(tool)
 
     %Tool{
       server_id: server_id,
       name: name,
       provider_name: provider_name!(server_id, name),
       permission: permission,
-      risk: risk
+      risk: risk,
+      input_schema: input_schema
     }
   end
 
@@ -232,6 +241,25 @@ defmodule AgentMachine.MCP.Config do
   defp require_risk!(risk) do
     raise ArgumentError,
           "MCP tool risk must be one of #{inspect(@risks)}, got: #{inspect(risk)}"
+  end
+
+  defp input_schema!(tool) do
+    cond do
+      Map.has_key?(tool, "inputSchema") ->
+        input_schema_value!(Map.fetch!(tool, "inputSchema"))
+
+      Map.has_key?(tool, "input_schema") ->
+        input_schema_value!(Map.fetch!(tool, "input_schema"))
+
+      true ->
+        raise ArgumentError, "MCP tool must include explicit inputSchema object"
+    end
+  end
+
+  defp input_schema_value!(schema) when is_map(schema), do: schema
+
+  defp input_schema_value!(schema) do
+    raise ArgumentError, "MCP tool inputSchema must be an object, got: #{inspect(schema)}"
   end
 
   defp provider_name!(server_id, tool_name) do

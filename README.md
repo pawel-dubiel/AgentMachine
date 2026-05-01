@@ -437,6 +437,10 @@ That writes a managed MCP config, allowlists browser navigation and page
 snapshot tools, and keeps the setup visible in `/setup` and run banners.
 When using a standalone MCP config, pass an explicit tool budget with
 `/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>`.
+MCP tool entries must include an explicit `inputSchema` object. AgentMachine
+exposes that schema under the provider-visible `arguments` property and
+validates arguments before any MCP transport call. Repeated identical malformed
+MCP calls fail early instead of consuming every configured tool round.
 
 Browser navigation is a network-capable action, so it requires either
 interactive `ask-before-write` permission control or explicit `full-access`. A
