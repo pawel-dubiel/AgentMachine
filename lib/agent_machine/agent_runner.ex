@@ -950,7 +950,8 @@ defmodule AgentMachine.AgentRunner do
     [
       test_commands: Keyword.get(opts, :test_commands),
       mcp_config: Keyword.get(opts, :mcp_config),
-      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false)
+      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false),
+      tool_approval_mode: Keyword.get(opts, :tool_approval_mode)
     ]
   end
 
@@ -1169,6 +1170,7 @@ defmodule AgentMachine.AgentRunner do
   defp do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at) do
     started_event = tool_call_started_event(event_context, id, tool, started_at, opts, input)
     emit_event!(opts, started_event)
+    opts = Keyword.put(opts, :tool_event_context, event_context)
 
     case run_tool_with_timeout(tool, input, opts, tool_timeout_ms) do
       {:ok, result} when is_map(result) ->

@@ -101,11 +101,13 @@ defmodule AgentMachine.Workflows.Tool do
 
   defp tool_harness_opts(%RunSpec{
          mcp_config: mcp_config,
-         allow_skill_scripts: allow_skill_scripts
+         allow_skill_scripts: allow_skill_scripts,
+         tool_approval_mode: tool_approval_mode
        }),
        do: [
          mcp_config: mcp_config,
-         allow_skill_scripts: allow_skill_scripts
+         allow_skill_scripts: allow_skill_scripts,
+         tool_approval_mode: tool_approval_mode
        ]
 
   defp maybe_put_tool_root(opts, harnesses, %RunSpec{tool_root: root})
