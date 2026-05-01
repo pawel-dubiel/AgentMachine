@@ -4,6 +4,13 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Required explicit MCP tool `inputSchema` values, exposed them to providers,
+  validated MCP arguments before transport calls, and failed repeated identical
+  malformed tool calls before `tool_max_rounds` exhaustion.
+- Added TUI startup migration for older managed Playwright MCP configs that
+  were generated before explicit `inputSchema` entries were required.
+- Fixed MCP stdio JSON-RPC framing so large responses are read across port
+  chunks instead of being decoded at the first 64 KiB chunk boundary.
 - Added JSONL stdio permission control for interactive `ask-before-write` runs,
   including runtime permission request, decision, and cancellation events.
 - Added current-attempt `request_capability` negotiation for local-files,
