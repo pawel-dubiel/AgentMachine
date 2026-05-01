@@ -10,6 +10,8 @@ defmodule AgentMachine.Application do
       AgentMachine.RunSupervisor,
       {Task.Supervisor, name: AgentMachine.AgentSupervisor},
       AgentMachine.SessionSupervisor,
+      {Task.Supervisor, name: AgentMachine.LLMRouter.TaskSupervisor},
+      AgentMachine.LLMRouter,
       AgentMachine.UsageLedger,
       AgentMachine.EventLog,
       AgentMachine.Orchestrator
