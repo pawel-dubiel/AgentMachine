@@ -78,7 +78,7 @@ defmodule AgentMachine.RunSpec do
           run_context_compaction: :off | :on,
           run_context_compact_percent: pos_integer() | nil,
           max_context_compactions: pos_integer() | nil,
-          router_mode: :deterministic | :local,
+          router_mode: :deterministic | :local | :llm,
           router_model_dir: binary() | nil,
           router_timeout_ms: pos_integer() | nil,
           router_confidence_threshold: float() | nil
@@ -215,7 +215,7 @@ defmodule AgentMachine.RunSpec do
     |> Map.put_new(:allow_skill_scripts, false)
     |> Map.put_new(:stream_response, false)
     |> Map.put_new(:run_context_compaction, :off)
-    |> Map.put_new(:router_mode, :deterministic)
+    |> Map.put_new(:router_mode, :llm)
     |> normalize_skill_names!()
   end
 
@@ -280,6 +280,19 @@ defmodule AgentMachine.RunSpec do
   end
 
   defp validate_router_options!(%__MODULE__{
+         router_mode: :llm,
+         router_model_dir: nil,
+         router_timeout_ms: nil,
+         router_confidence_threshold: nil
+       }),
+       do: :ok
+
+  defp validate_router_options!(%__MODULE__{router_mode: :llm} = spec) do
+    raise ArgumentError,
+          "run spec llm router does not accept local router options, got :router_model_dir #{inspect(spec.router_model_dir)}, :router_timeout_ms #{inspect(spec.router_timeout_ms)}, and :router_confidence_threshold #{inspect(spec.router_confidence_threshold)}"
+  end
+
+  defp validate_router_options!(%__MODULE__{
          router_mode: :local,
          router_model_dir: model_dir,
          router_timeout_ms: timeout_ms,
@@ -292,7 +305,7 @@ defmodule AgentMachine.RunSpec do
 
   defp validate_router_options!(%__MODULE__{router_mode: mode}) do
     raise ArgumentError,
-          "run spec :router_mode must be :deterministic or :local, got: #{inspect(mode)}"
+          "run spec :router_mode must be :deterministic, :local, or :llm, got: #{inspect(mode)}"
   end
 
   defp normalize_skill_names!(%{skill_names: nil} = attrs), do: Map.put(attrs, :skill_names, [])

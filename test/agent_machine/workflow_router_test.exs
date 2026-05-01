@@ -66,6 +66,30 @@ defmodule AgentMachine.WorkflowRouterTest do
     end
   end
 
+  defmodule LLMProcessClassifier do
+    def classify!(_input) do
+      Process.get(:workflow_router_classifier_result) ||
+        raise "missing :workflow_router_classifier_result"
+    end
+  end
+
+  test "run spec defaults auto routing to llm mode" do
+    spec =
+      RunSpec.new!(%{
+        task: "explain the project",
+        workflow: :auto,
+        provider: :openrouter,
+        model: "openai/gpt-4o-mini",
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        http_timeout_ms: 1_000,
+        pricing: %{input_per_million: 0.15, output_per_million: 0.60}
+      })
+
+    assert spec.router_mode == :llm
+  end
+
   test "routes auto chat intent to chat without exposing configured tools" do
     route =
       route!(%{
@@ -723,6 +747,47 @@ defmodule AgentMachine.WorkflowRouterTest do
     end
   end
 
+  test "llm router mode feeds intent into existing capability routing" do
+    route =
+      llm_route!(:file_mutation,
+        task: "stwórz mi w home folder gg1 i daj tam prostą stronę",
+        tool_harnesses: [:local_files],
+        approval_mode: :auto_approved_safe
+      )
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "file_mutation"
+    assert route.classifier == "llm"
+    assert route.classified_intent == "file_mutation"
+  end
+
+  test "llm router mode fails fast through existing capability checks" do
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        llm_route!(:code_mutation,
+          task: "create a react app file src/main.js with hello world",
+          tool_harnesses: [:local_files],
+          approval_mode: :auto_approved_safe
+        )
+      end
+
+    assert exception.reason == :missing_code_edit_harness
+  end
+
+  test "llm router deterministic guard preserves classified intent for auditability" do
+    route =
+      llm_route!(:web_browse,
+        task: "create lib/router_example.ex with a simple module",
+        tool_harnesses: [:code_edit],
+        approval_mode: :auto_approved_safe
+      )
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "code_mutation"
+    assert route.classifier == "llm"
+    assert route.classified_intent == "web_browse"
+  end
+
   describe "local classifier permission and routing matrix" do
     test "none intent stays chat even when tools are configured" do
       route =
@@ -1074,15 +1139,40 @@ defmodule AgentMachine.WorkflowRouterTest do
   end
 
   defp route!(attrs) do
-    attrs
-    |> Map.merge(%{
+    %{
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 6,
-      max_attempts: 1
-    })
+      max_attempts: 1,
+      router_mode: :deterministic
+    }
+    |> Map.merge(attrs)
     |> RunSpec.new!()
     |> WorkflowRouter.route!()
+  end
+
+  defp llm_route!(intent, attrs) do
+    Process.put(:workflow_router_classifier_result, classifier_result(intent, attrs, "llm"))
+
+    %WorkflowRouter{
+      requested_workflow: :auto,
+      task: Keyword.get(attrs, :task, "please handle this request"),
+      pending_action: Keyword.get(attrs, :pending_action),
+      recent_context: Keyword.get(attrs, :recent_context),
+      tool_harnesses: Keyword.get(attrs, :tool_harnesses, []),
+      approval_mode: Keyword.get(attrs, :approval_mode),
+      test_commands: Keyword.get(attrs, :test_commands, []),
+      mcp_config: Keyword.get(attrs, :mcp_config),
+      router_mode: :llm,
+      provider: :openrouter,
+      model: "openai/gpt-4o-mini",
+      pricing: %{input_per_million: 0.15, output_per_million: 0.60},
+      http_timeout_ms: 1_000,
+      llm_router_module: LLMProcessClassifier
+    }
+    |> WorkflowRouter.route!()
+  after
+    Process.delete(:workflow_router_classifier_result)
   end
 
   defp local_route!(intent, attrs \\ []) do
@@ -1108,18 +1198,21 @@ defmodule AgentMachine.WorkflowRouterTest do
     Process.delete(:workflow_router_classifier_result)
   end
 
-  defp classifier_result(intent, attrs) do
+  defp classifier_result(intent, attrs, classifier \\ "local") do
     classified_intent = Keyword.get(attrs, :classified_intent, intent)
 
     %{
       intent: intent,
       classified_intent: classified_intent,
-      classifier: "local",
-      classifier_model: AgentMachine.LocalIntentClassifier.model_id(),
+      classifier: classifier,
+      classifier_model: classifier_model(classifier),
       confidence: Keyword.get(attrs, :confidence, 0.91),
       reason: "test_classifier_#{intent}"
     }
   end
+
+  defp classifier_model("local"), do: AgentMachine.LocalIntentClassifier.model_id()
+  defp classifier_model("llm"), do: "openai/gpt-4o-mini"
 
   defp mcp_config(risk) do
     Config.from_map!(%{

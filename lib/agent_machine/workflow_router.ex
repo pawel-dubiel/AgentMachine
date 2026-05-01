@@ -19,6 +19,10 @@ defmodule AgentMachine.WorkflowRouter do
     :task,
     :tool_harnesses,
     :tool_root,
+    :provider,
+    :model,
+    :pricing,
+    :http_timeout_ms,
     :approval_mode,
     :test_commands,
     :pending_action,
@@ -28,7 +32,8 @@ defmodule AgentMachine.WorkflowRouter do
     router_model_dir: nil,
     router_timeout_ms: nil,
     router_confidence_threshold: nil,
-    classifier_module: AgentMachine.LocalIntentClassifier
+    classifier_module: AgentMachine.LocalIntentClassifier,
+    llm_router_module: AgentMachine.LLMRouter
   ]
 
   def route!(%RunSpec{} = spec) do
@@ -37,6 +42,10 @@ defmodule AgentMachine.WorkflowRouter do
       task: spec.task,
       tool_harnesses: spec.tool_harnesses || [],
       tool_root: spec.tool_root,
+      provider: spec.provider,
+      model: spec.model,
+      pricing: spec.pricing,
+      http_timeout_ms: spec.http_timeout_ms,
       approval_mode: spec.tool_approval_mode,
       test_commands: spec.test_commands || [],
       pending_action: nil,
@@ -281,9 +290,23 @@ defmodule AgentMachine.WorkflowRouter do
     |> maybe_apply_deterministic_guard(input)
   end
 
+  defp classify_intent!(%__MODULE__{router_mode: :llm} = input) do
+    input.llm_router_module.classify!(%{
+      task: input.task,
+      pending_action: input.pending_action,
+      recent_context: input.recent_context,
+      provider: input.provider,
+      model: input.model,
+      pricing: input.pricing,
+      http_timeout_ms: input.http_timeout_ms
+    })
+    |> validate_classifier_result!()
+    |> maybe_apply_deterministic_guard(input)
+  end
+
   defp classify_intent!(%__MODULE__{router_mode: mode}) do
     raise ArgumentError,
-          "workflow router :router_mode must be :deterministic or :local, got: #{inspect(mode)}"
+          "workflow router :router_mode must be :deterministic, :local, or :llm, got: #{inspect(mode)}"
   end
 
   defp deterministic_intent(input) do
@@ -344,7 +367,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp validate_classifier_result!(result) do
     raise ArgumentError,
-          "local router classifier must return a map, got: #{inspect(result)}"
+          "workflow router classifier must return a map, got: #{inspect(result)}"
   end
 
   defp maybe_apply_deterministic_guard(classified, input) do
@@ -365,7 +388,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp validate_classifier_intent!(intent, field) do
     raise ArgumentError,
-          "local router classifier returned invalid #{field}: #{inspect(intent)}"
+          "workflow router classifier returned invalid #{field}: #{inspect(intent)}"
   end
 
   defp validate_classifier_name!(classifier) when is_binary(classifier) and classifier != "",
@@ -373,7 +396,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp validate_classifier_name!(classifier) do
     raise ArgumentError,
-          "local router classifier returned invalid classifier: #{inspect(classifier)}"
+          "workflow router classifier returned invalid classifier: #{inspect(classifier)}"
   end
 
   defp validate_optional_binary!(nil, _field), do: :ok
@@ -381,7 +404,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp validate_optional_binary!(value, field) do
     raise ArgumentError,
-          "local router classifier returned invalid #{field}: #{inspect(value)}"
+          "workflow router classifier returned invalid #{field}: #{inspect(value)}"
   end
 
   defp validate_optional_number!(nil, _field), do: :ok
@@ -389,7 +412,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp validate_optional_number!(value, field) do
     raise ArgumentError,
-          "local router classifier returned invalid #{field}: #{inspect(value)}"
+          "workflow router classifier returned invalid #{field}: #{inspect(value)}"
   end
 
   defp classifier_meta(classified) do
@@ -401,7 +424,10 @@ defmodule AgentMachine.WorkflowRouter do
     }
   end
 
-  defp none_reason(%{classifier: "local", reason: reason}) when is_binary(reason), do: reason
+  defp none_reason(%{classifier: classifier, reason: reason})
+       when classifier in ["local", "llm"] and is_binary(reason),
+       do: reason
+
   defp none_reason(_classified), do: "no_tool_or_mutation_intent_detected"
 
   defp local_web_browse_without_target?(input, %{classifier: "local"}) do
