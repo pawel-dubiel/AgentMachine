@@ -12,6 +12,7 @@ defmodule AgentMachine.Application do
       AgentMachine.SessionSupervisor,
       {Task.Supervisor, name: AgentMachine.LLMRouter.TaskSupervisor},
       AgentMachine.LLMRouter,
+      AgentMachine.ShellCommandRegistry,
       AgentMachine.UsageLedger,
       AgentMachine.EventLog,
       AgentMachine.Orchestrator
