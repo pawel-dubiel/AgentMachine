@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Moved auto-router missing capability decisions into structured Elixir
+  `capability_required` summaries/events and removed duplicated TUI intent
+  heuristics for filesystem, code-edit, test, and MCP browser permission prompts.
 - Fixed file-change summaries so rewriting identical file content is reported
   as unchanged with `changed_count: 0` instead of a false update.
 - Changed runtime permission prompts in the TUI to use an explicit

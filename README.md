@@ -397,6 +397,11 @@ Tool permissions have two layers:
 
 The runtime enforces both layers. The TUI only displays permission requests and
 sends approve/deny decisions back to the CLI.
+When auto routing detects that a request needs a missing harness, broader
+approval, allowlisted test command, or MCP browser capability, the Elixir
+runtime returns a structured `capability_required` summary/event. The TUI
+renders that runtime-owned requirement; it does not classify filesystem,
+code-edit, test, or browser intent itself.
 
 Session-control tools are a separate internal layer in TUI daemon runs. The
 coordinator may use `spawn_agent`, `send_agent_message`, `read_agent_output`,
@@ -475,8 +480,9 @@ Use agents and Playwright MCP to open https://example.com and report the page ti
 
 Auto mode also treats Google/search/news-style research prompts as browser work
 when the Playwright MCP browser tools are configured.
-If browser work is detected while approval is too narrow, the TUI prompts for
-interactive approval or full-access and retries as an MCP-only run.
+If browser work is detected while approval is too narrow, the runtime returns a
+structured `capability_required` response and the TUI can prompt for interactive
+approval or full-access before retrying as an MCP-only run.
 
 For a standalone example config, see [examples/playwright.mcp.json](examples/playwright.mcp.json).
 
@@ -536,8 +542,8 @@ AgentMachine prefers explicit errors over hidden defaults:
 - MCP secrets must come from environment references, not inline config values.
 - Tool errors are returned to the model as tool results when safe, so it can try
   another approach within the configured round limit.
-- The TUI stops before model execution when a request obviously needs broader
-  filesystem permission.
+- The runtime stops before model execution when auto routing needs a missing
+  capability and returns a structured `capability_required` response.
 
 ## Development
 

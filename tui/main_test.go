@@ -2640,7 +2640,7 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 	}
 }
 
-func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
+func TestFilesystemWriteStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
 		workflow:    workflowBasic,
@@ -2653,29 +2653,18 @@ func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
 	updated, cmd := m.startRun("create directory testmme in my home folder")
 	result := updated.(model)
 
-	if cmd != nil {
-		t.Fatal("expected no run command before tool permission")
+	if cmd == nil {
+		t.Fatal("expected runtime command instead of TUI permission preflight")
 	}
-	if result.running {
-		t.Fatal("expected run to remain stopped")
+	if !result.running {
+		t.Fatal("expected runtime run to start")
 	}
-	if result.pendingToolTask == "" {
-		t.Fatal("expected pending tool task")
-	}
-	if result.pendingToolHarness != "local-files" {
-		t.Fatalf("expected local-files pending harness, got %q", result.pendingToolHarness)
-	}
-	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "filesystem permission required") || !strings.Contains(last, "required harness: local-files") || !strings.Contains(last, "Use the selector below") || !strings.Contains(last, "/allow-tools") || !strings.Contains(last, "/deny-tools") {
-		t.Fatalf("expected permission prompt, got %q", last)
-	}
-	view := result.View()
-	if !strings.Contains(view, "Tool Permission") || !strings.Contains(view, "> Ask each use") || !strings.Contains(view, "Allow writes") || !strings.Contains(view, "Full access") || !strings.Contains(view, "Deny") {
-		t.Fatalf("expected permission selector, got %q", view)
+	if result.pendingToolTask != "" || result.pendingToolHarness != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected no TUI-inferred tool request, got task=%q harness=%q root=%q", result.pendingToolTask, result.pendingToolHarness, result.pendingToolRoot)
 	}
 }
 
-func TestCodeEditFollowUpPromptRequiresCodeEditHarness(t *testing.T) {
+func TestCodeEditFollowUpStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -2701,22 +2690,15 @@ func TestCodeEditFollowUpPromptRequiresCodeEditHarness(t *testing.T) {
 	updated, cmd := m.startRun("yes rewrite and fix")
 	result := updated.(model)
 
-	if cmd != nil {
-		t.Fatal("expected no run command before code-edit permission")
+	if cmd == nil {
+		t.Fatal("expected runtime command instead of TUI permission preflight")
 	}
-	if result.pendingToolTask != "yes rewrite and fix" {
-		t.Fatalf("expected pending follow-up task, got %q", result.pendingToolTask)
-	}
-	if result.pendingToolHarness != "code-edit" {
-		t.Fatalf("expected code-edit pending harness, got %q", result.pendingToolHarness)
-	}
-	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "required harness: code-edit") || !strings.Contains(last, "active tool harness cannot perform this filesystem action") {
-		t.Fatalf("expected code-edit permission prompt, got %q", last)
+	if result.pendingToolTask != "" || result.pendingToolHarness != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected no TUI-inferred tool request, got task=%q harness=%q root=%q", result.pendingToolTask, result.pendingToolHarness, result.pendingToolRoot)
 	}
 }
 
-func TestNextJSProjectCreationRequiresCodeEditHarness(t *testing.T) {
+func TestNextJSProjectCreationStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -2738,22 +2720,15 @@ func TestNextJSProjectCreationRequiresCodeEditHarness(t *testing.T) {
 	updated, cmd := m.startRun("in home folder create tt100 dir and create nextjs project")
 	result := updated.(model)
 
-	if cmd != nil {
-		t.Fatal("expected no run command before code-edit permission")
+	if cmd == nil {
+		t.Fatal("expected runtime command instead of TUI permission preflight")
 	}
-	if result.pendingToolHarness != "code-edit" {
-		t.Fatalf("expected code-edit pending harness, got %q", result.pendingToolHarness)
-	}
-	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "required harness: code-edit") ||
-		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
-		t.Fatalf("expected code-edit permission prompt, got %q", last)
+	if result.pendingToolTask != "" || result.pendingToolHarness != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected no TUI-inferred tool request, got task=%q harness=%q root=%q", result.pendingToolTask, result.pendingToolHarness, result.pendingToolRoot)
 	}
 }
 
 func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
-	t.Setenv("HOME", "/tmp/agent-machine-home")
-
 	m := model{
 		provider:    providerOpenRouter,
 		providerSet: true,
@@ -2765,15 +2740,19 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 			ToolApproval:  "read-only",
 		},
 		messages: []chatMessage{
-			{Role: "user", Text: "in home folder create me dir test1 and create a nice nextjs website"},
+			{Role: "user", Text: "create a nice nextjs website"},
 		},
 	}
 
-	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured")
-	updated, handled := m.withRunPermissionError(err)
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:          "missing_code_edit_harness",
+		Intent:          "code_mutation",
+		RequiredHarness: "code-edit",
+		RequestedRoot:   "/tmp/agent-machine-home",
+	})
 
 	if !handled {
-		t.Fatal("expected router permission error to be handled")
+		t.Fatal("expected capability requirement to be handled")
 	}
 	if updated.pendingToolTask == "" {
 		t.Fatal("expected pending tool task")
@@ -2784,51 +2763,12 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 	last := updated.messages[len(updated.messages)-1].Text
 	if !strings.Contains(last, "filesystem permission required") ||
 		!strings.Contains(last, "required harness: code-edit") ||
-		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
+		!strings.Contains(last, "missing_code_edit_harness") {
 		t.Fatalf("expected permission prompt, got %q", last)
 	}
 }
 
-func TestSessionAgentRouterCapabilityErrorShowsPermissionSelector(t *testing.T) {
-	t.Setenv("HOME", "/tmp/agent-machine-home")
-
-	m := model{
-		running:     true,
-		provider:    providerOpenRouter,
-		providerSet: true,
-		agents:      map[string]agentState{},
-		workItems:   map[string]workItem{},
-		savedConfig: savedConfig{
-			ToolHarness:   "local-files",
-			ToolRoot:      "/tmp/agent-machine-home",
-			ToolTimeout:   "1000",
-			ToolMaxRounds: "6",
-			ToolApproval:  "auto-approved-safe",
-		},
-		messages: []chatMessage{
-			{Role: "user", Text: "can you create me website in home folder under gggg100"},
-		},
-	}
-
-	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"session_agent_failed","session_id":"session-1","agent_id":"agent-1","status":"failed","reason":"** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured","summary":"agent-1: session_agent_failed","at":"2026-05-01T20:00:00Z"}}`)
-
-	if updated.pendingToolTask == "" {
-		t.Fatal("expected pending tool task")
-	}
-	if updated.pendingToolHarness != "code-edit" {
-		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
-	}
-	last := updated.messages[len(updated.messages)-1].Text
-	if !strings.Contains(last, "filesystem permission required") ||
-		!strings.Contains(last, "required harness: code-edit") ||
-		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
-		t.Fatalf("expected code-edit permission prompt, got %q", last)
-	}
-}
-
-func TestPersistentSessionFailedSummaryShowsPermissionSelector(t *testing.T) {
-	t.Setenv("HOME", "/tmp/agent-machine-home")
-
+func TestPersistentSessionCapabilitySummaryShowsPermissionSelector(t *testing.T) {
 	m := model{
 		running:     true,
 		stream:      &streamSession{persistent: true},
@@ -2844,26 +2784,59 @@ func TestPersistentSessionFailedSummaryShowsPermissionSelector(t *testing.T) {
 			ToolApproval:  "auto-approved-safe",
 		},
 		messages: []chatMessage{
-			{Role: "user", Text: "can you create me react website in home folder under gggg100"},
+			{Role: "user", Text: "can you create me website"},
 		},
 	}
 
-	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[]}}`)
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit","requested_root":"/tmp/agent-machine-home"}}}`)
 
-	if updated.running {
-		t.Fatal("expected persistent run to stop after failed summary")
-	}
 	if updated.pendingToolTask == "" {
 		t.Fatal("expected pending tool task")
 	}
 	if updated.pendingToolHarness != "code-edit" {
 		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
 	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "filesystem permission required") ||
+		!strings.Contains(last, "required harness: code-edit") ||
+		!strings.Contains(last, "missing_code_edit_harness") {
+		t.Fatalf("expected code-edit permission prompt, got %q", last)
+	}
+}
+
+func TestCapabilitySummaryWithoutRootRequiresExplicitToolRoot(t *testing.T) {
+	m := model{
+		running:     true,
+		stream:      &streamSession{persistent: true},
+		provider:    providerOpenRouter,
+		providerSet: true,
+		agents:      map[string]agentState{},
+		workItems:   map[string]workItem{},
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "can you create me react website"},
+		},
+	}
+
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit"}}}`)
+
+	if updated.running {
+		t.Fatal("expected persistent run to stop after failed summary")
+	}
+	if updated.pendingToolTask != "" || updated.pendingToolHarness != "" || updated.pendingToolRoot != "" {
+		t.Fatalf("expected no pending approval without explicit root, got task=%q harness=%q root=%q", updated.pendingToolTask, updated.pendingToolHarness, updated.pendingToolRoot)
+	}
 	last := updated.messages[len(updated.messages)-1]
 	if last.Role != "system" ||
-		!strings.Contains(last.Text, "filesystem permission required") ||
-		!strings.Contains(last.Text, "required harness: code-edit") {
-		t.Fatalf("expected code-edit permission prompt, got %#v", last)
+		!strings.Contains(last.Text, "tool root is required") ||
+		!strings.Contains(last.Text, "/tools code-edit <root>") {
+		t.Fatalf("expected explicit root prompt, got %#v", last)
 	}
 }
 
@@ -2881,18 +2854,22 @@ func TestRouterFileMutationCapabilityErrorShowsLocalFilesSelector(t *testing.T) 
 		},
 	}
 
-	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected mutation intent but no write-capable tool harness is configured")
-	updated, handled := m.withRunPermissionError(err)
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:          "missing_write_harness",
+		Intent:          "file_mutation",
+		RequiredHarness: "local-files",
+		RequestedRoot:   "/tmp/agent-machine-home",
+	})
 
 	if !handled {
-		t.Fatal("expected router permission error to be handled")
+		t.Fatal("expected capability requirement to be handled")
 	}
 	if updated.pendingToolHarness != "local-files" {
 		t.Fatalf("expected local-files harness, got %q", updated.pendingToolHarness)
 	}
 	last := updated.messages[len(updated.messages)-1].Text
 	if !strings.Contains(last, "required harness: local-files") ||
-		!strings.Contains(last, "filesystem tools are off") {
+		!strings.Contains(last, "missing_write_harness") {
 		t.Fatalf("expected local-files permission prompt, got %q", last)
 	}
 }
@@ -2915,11 +2892,16 @@ func TestRouterTestIntentApprovalErrorShowsCodeEditSelector(t *testing.T) {
 		},
 	}
 
-	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected test intent but :tool_approval_mode must be :full_access")
-	updated, handled := m.withRunPermissionError(err)
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:                "missing_test_approval",
+		Intent:                "test_command",
+		RequiredHarness:       "code-edit",
+		RequiredApprovalModes: []string{"full-access", "ask-before-write"},
+		RequestedRoot:         "/tmp/agent-machine-home",
+	})
 
 	if !handled {
-		t.Fatal("expected router permission error to be handled")
+		t.Fatal("expected capability requirement to be handled")
 	}
 	if updated.pendingToolHarness != "code-edit" {
 		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
@@ -2948,11 +2930,16 @@ func TestRouterWebBrowseApprovalErrorShowsMCPBrowserSelector(t *testing.T) {
 		},
 	}
 
-	err := errors.New("mix command failed: exit status 1\n** (ArgumentError) auto workflow detected web browse intent but :tool_approval_mode must be :full_access for network-risk MCP browser tools")
-	updated, handled := m.withRunPermissionError(err)
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:                "missing_browser_approval",
+		Intent:                "web_browse",
+		RequiredHarness:       "mcp",
+		RequiredMCPTool:       "browser_navigate",
+		RequiredApprovalModes: []string{"full-access", "ask-before-write"},
+	})
 
 	if !handled {
-		t.Fatal("expected web browse approval error to be handled")
+		t.Fatal("expected web browse capability requirement to be handled")
 	}
 	if updated.pendingToolHarness != pendingHarnessMCPBrowser {
 		t.Fatalf("expected MCP browser pending harness, got %q", updated.pendingToolHarness)
@@ -2983,13 +2970,14 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	}
 
 	m := model{
-		workflow:        workflowBasic,
-		workflowSet:     true,
-		provider:        providerEcho,
-		providerSet:     true,
-		configPath:      configPath,
-		pendingToolTask: "create directory testmme in my home folder",
-		pendingToolRoot: home,
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		pendingToolTask:    "create directory testmme in my home folder",
+		pendingToolRoot:    home,
+		pendingToolHarness: "local-files",
 	}
 
 	updated, cmd := m.handleCommand("/allow-tools")
@@ -3098,13 +3086,14 @@ func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
 	}
 
 	m := model{
-		workflow:        workflowBasic,
-		workflowSet:     true,
-		provider:        providerEcho,
-		providerSet:     true,
-		configPath:      configPath,
-		pendingToolTask: "create directory testmme in my home folder",
-		pendingToolRoot: home,
+		workflow:           workflowBasic,
+		workflowSet:        true,
+		provider:           providerEcho,
+		providerSet:        true,
+		configPath:         configPath,
+		pendingToolTask:    "create directory testmme in my home folder",
+		pendingToolRoot:    home,
+		pendingToolHarness: "local-files",
 	}
 
 	updated, cmd := m.handleCommand("/yolo-tools")
@@ -3380,7 +3369,7 @@ func TestTaskConversationContextOmitsAssistantRefusals(t *testing.T) {
 	}
 }
 
-func TestFilesystemWritePromptWhenActiveRootDoesNotCoverRequest(t *testing.T) {
+func TestFilesystemWriteDoesNotPreflightActiveRootCoverage(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
 		workflow:    workflowBasic,
@@ -3400,12 +3389,11 @@ func TestFilesystemWritePromptWhenActiveRootDoesNotCoverRequest(t *testing.T) {
 	updated, cmd := m.startRun("create directory testmme in my home folder")
 	result := updated.(model)
 
-	if cmd != nil {
-		t.Fatal("expected no run command when root does not cover request")
+	if cmd == nil {
+		t.Fatal("expected runtime command instead of TUI root coverage preflight")
 	}
-	last := result.messages[len(result.messages)-1].Text
-	if !strings.Contains(last, "outside the active tool root") {
-		t.Fatalf("expected active root warning, got %q", last)
+	if result.pendingToolTask != "" || result.pendingToolHarness != "" || result.pendingToolRoot != "" {
+		t.Fatalf("expected no TUI-inferred tool request, got task=%q harness=%q root=%q", result.pendingToolTask, result.pendingToolHarness, result.pendingToolRoot)
 	}
 }
 
