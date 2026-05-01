@@ -88,7 +88,9 @@ risk. Missing required configuration fails fast with an explicit error.
 
 When a task needs delegation, the runtime can create a planner and worker
 agents. The TUI shows each agent's status, parent, elapsed time, recent events,
-tool activity, and final output when available.
+tool activity, streamed provider text, and final output when available. Planner
+delegation responses are strict JSON and fail fast when the provider returns
+malformed JSON.
 
 **Swarm strategy**
 

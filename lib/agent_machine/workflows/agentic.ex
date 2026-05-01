@@ -166,6 +166,16 @@ defmodule AgentMachine.Workflows.Agentic do
     or:
     {"decision":{"mode":"delegate","reason":"non-empty reason"},"output":"short planning note","next_agents":[{"id":"worker-id","input":"worker task","instructions":"optional worker instructions"}]}
 
+    Strict JSON rules:
+    - Return one complete JSON object only.
+    - Do not wrap the object in markdown fences, prose, bullets, comments, XML, or any other text.
+    - Use double quotes for every key and string value.
+    - Do not use trailing commas after the last object property or array item.
+    - Escape newlines, quotes, and backslashes inside string values.
+    - Ensure every array and object is closed before sending the response.
+    - If you are uncertain about content, put that uncertainty inside the "output" string, not outside the JSON object.
+    - Before sending, mentally validate that the full response would pass JSON.parse exactly as written.
+
     Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
     Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
     If the task needs external side effects such as writing files, creating directories, browsing the web, calling MCP tools, or running commands, you MUST create a worker agent for that exact action and require it to use available tools.
