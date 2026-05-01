@@ -1,7 +1,7 @@
 defmodule AgentMachine.WorkflowRouter do
   @moduledoc false
 
-  alias AgentMachine.RunSpec
+  alias AgentMachine.{CapabilityRequired, RunSpec}
 
   @valid_intents AgentMachine.LocalIntentClassifier.intents()
 
@@ -18,6 +18,7 @@ defmodule AgentMachine.WorkflowRouter do
     :requested_workflow,
     :task,
     :tool_harnesses,
+    :tool_root,
     :approval_mode,
     :test_commands,
     :pending_action,
@@ -35,6 +36,7 @@ defmodule AgentMachine.WorkflowRouter do
       requested_workflow: spec.workflow,
       task: spec.task,
       tool_harnesses: spec.tool_harnesses || [],
+      tool_root: spec.tool_root,
       approval_mode: spec.tool_approval_mode,
       test_commands: spec.test_commands || [],
       pending_action: nil,
@@ -669,8 +671,10 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp require_read_capability!(input) do
     unless has_any_harness?(input, [:local_files, :code_edit]) do
-      raise ArgumentError,
-            "auto workflow detected local read/search intent but no read-capable tool harness is configured"
+      raise CapabilityRequired,
+        reason: :missing_read_harness,
+        intent: :file_read,
+        required_harnesses: [:local_files, :code_edit]
     end
   end
 
@@ -710,8 +714,9 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp require_any_tool_capability!(input) do
     unless tools_configured?(input) do
-      raise ArgumentError,
-            "auto workflow detected tool intent but no tool harness is configured"
+      raise CapabilityRequired,
+        reason: :missing_tool_harness,
+        intent: :tool_use
     end
   end
 
@@ -735,41 +740,59 @@ defmodule AgentMachine.WorkflowRouter do
     :ok
   rescue
     exception in ArgumentError ->
-      reraise ArgumentError,
+      reraise CapabilityRequired,
               [
-                message:
-                  "auto workflow detected tool intent but no read-only tool capability is configured: #{Exception.message(exception)}"
+                reason: :missing_read_only_tool_capability,
+                intent: intent,
+                detail: Exception.message(exception)
               ],
               __STACKTRACE__
   end
 
   defp require_write_capability!(input) do
     unless has_any_harness?(input, [:local_files, :code_edit]) do
-      raise ArgumentError,
-            "auto workflow detected mutation intent but no write-capable tool harness is configured"
+      raise CapabilityRequired,
+        reason: :missing_write_harness,
+        intent: :file_mutation,
+        required_harness: :local_files,
+        required_harnesses: [:local_files, :code_edit],
+        requested_root: input.tool_root
     end
   end
 
   defp require_code_edit_capability!(input) do
     unless has_any_harness?(input, [:code_edit]) do
-      raise ArgumentError,
-            "auto workflow detected code mutation intent but :code_edit tool harness is not configured"
+      raise CapabilityRequired,
+        reason: :missing_code_edit_harness,
+        intent: :code_mutation,
+        required_harness: :code_edit,
+        requested_root: input.tool_root
     end
   end
 
   defp require_test_capability!(input) do
     cond do
       not has_any_harness?(input, [:code_edit]) ->
-        raise ArgumentError,
-              "auto workflow detected test intent but :code_edit tool harness is not configured"
+        raise CapabilityRequired,
+          reason: :missing_test_code_edit_harness,
+          intent: :test_command,
+          required_harness: :code_edit,
+          requested_root: input.tool_root
 
       input.approval_mode not in [:full_access, :ask_before_write] ->
-        raise ArgumentError,
-              "auto workflow detected test intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control"
+        raise CapabilityRequired,
+          reason: :missing_test_approval,
+          intent: :test_command,
+          required_harness: :code_edit,
+          required_approval_modes: [:full_access, :ask_before_write],
+          requested_root: input.tool_root
 
       input.test_commands == [] ->
-        raise ArgumentError,
-              "auto workflow detected test intent but no allowlisted :test_commands are configured"
+        raise CapabilityRequired,
+          reason: :missing_test_commands,
+          intent: :test_command,
+          required_harness: :code_edit,
+          requested_root: input.tool_root
 
       true ->
         :ok
@@ -778,13 +801,20 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp require_browser_mcp_capability!(input) do
     unless has_browser_mcp_tool?(input) do
-      raise ArgumentError,
-            "auto workflow detected web browse intent but no MCP browser network tool is configured"
+      raise CapabilityRequired,
+        reason: :missing_browser_mcp,
+        intent: :web_browse,
+        required_harness: :mcp,
+        required_mcp_tool: "browser_navigate"
     end
 
     if input.approval_mode not in [:full_access, :ask_before_write] do
-      raise ArgumentError,
-            "auto workflow detected web browse intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control for network-risk MCP browser tools"
+      raise CapabilityRequired,
+        reason: :missing_browser_approval,
+        intent: :web_browse,
+        required_harness: :mcp,
+        required_approval_modes: [:full_access, :ask_before_write],
+        required_mcp_tool: "browser_navigate"
     end
   end
 
