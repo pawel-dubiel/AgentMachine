@@ -5,7 +5,14 @@ defmodule Mix.Tasks.AgentMachine.Session do
 
   use Mix.Task
 
-  alias AgentMachine.{JSON, PermissionControl, SessionProtocol, SessionServer, SessionWriter}
+  alias AgentMachine.{
+    CapabilityRequired,
+    JSON,
+    PermissionControl,
+    SessionProtocol,
+    SessionServer,
+    SessionWriter
+  }
 
   @shortdoc "Runs a long-lived AgentMachine session daemon"
 
@@ -159,15 +166,27 @@ defmodule Mix.Tasks.AgentMachine.Session do
   end
 
   defp write_error_summary(writer, reason) do
+    summary =
+      case reason do
+        %CapabilityRequired{} = error ->
+          event = CapabilityRequired.event(error)
+
+          %{
+            status: "failed",
+            error: Exception.message(error),
+            final_output: nil,
+            results: %{},
+            events: [event],
+            capability_required: CapabilityRequired.to_map(error)
+          }
+
+        reason when is_binary(reason) ->
+          %{status: "failed", error: reason, final_output: nil, results: %{}, events: []}
+      end
+
     SessionWriter.write_line(
       writer,
-      SessionProtocol.summary_line!(%{
-        status: "failed",
-        error: reason,
-        final_output: nil,
-        results: %{},
-        events: []
-      })
+      SessionProtocol.summary_line!(summary)
     )
   end
 

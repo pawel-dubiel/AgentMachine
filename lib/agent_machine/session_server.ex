@@ -7,6 +7,7 @@ defmodule AgentMachine.SessionServer do
 
   alias AgentMachine.{
     AgentTask,
+    CapabilityRequired,
     ClientRunner,
     Orchestrator,
     RunSpec,
@@ -210,6 +211,7 @@ defmodule AgentMachine.SessionServer do
       end
     end
   rescue
+    exception in CapabilityRequired -> {:error, exception}
     exception -> {:error, Exception.message(exception)}
   end
 
@@ -585,6 +587,19 @@ defmodule AgentMachine.SessionServer do
     })
 
     state
+  end
+
+  defp failed_primary_summary(%CapabilityRequired{} = reason) do
+    event = CapabilityRequired.event(reason)
+
+    %{
+      status: "failed",
+      error: Exception.message(reason),
+      final_output: nil,
+      results: %{},
+      events: [event],
+      capability_required: CapabilityRequired.to_map(reason)
+    }
   end
 
   defp failed_primary_summary(reason) do

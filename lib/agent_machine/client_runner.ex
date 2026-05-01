@@ -4,6 +4,7 @@ defmodule AgentMachine.ClientRunner do
   """
 
   alias AgentMachine.{
+    CapabilityRequired,
     EventLog,
     EventSummary,
     JSON,
@@ -23,25 +24,38 @@ defmodule AgentMachine.ClientRunner do
   def run!(attrs, opts \\ []) when is_list(opts) do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
-    workflow_route = WorkflowRouter.route!(spec)
-    spec = maybe_put_auto_time_harness(spec, workflow_route)
-    write_workflow_route_event(spec, workflow_route)
-    skill_selection = Selector.select!(spec)
-    {agents, run_opts} = build_workflow(spec, workflow_route)
-    run_opts = put_permission_control(run_opts, opts)
-    validate_runtime_opts!(run_opts, opts)
-    run_opts = put_skill_opts(run_opts, spec, skill_selection)
-    run_opts = put_timeout_lease_opts(run_opts, spec)
-    run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
-    run_opts = put_event_sink(run_opts, opts)
-    run_opts = put_tool_approval_callback(run_opts, opts)
 
-    case Orchestrator.run(agents, run_opts) do
-      {:ok, run} -> summarize_and_log(run)
-      {:error, {:failed, run}} -> summarize_and_log(run)
-      {:error, {:timeout, run}} -> summarize_timeout_and_log(run)
-      {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
+    case route_workflow(spec, opts) do
+      {:ok, workflow_route} ->
+        spec = maybe_put_auto_time_harness(spec, workflow_route)
+        write_workflow_route_event(spec, workflow_route)
+        skill_selection = Selector.select!(spec)
+        {agents, run_opts} = build_workflow(spec, workflow_route)
+        run_opts = put_permission_control(run_opts, opts)
+        validate_runtime_opts!(run_opts, opts)
+        run_opts = put_skill_opts(run_opts, spec, skill_selection)
+        run_opts = put_timeout_lease_opts(run_opts, spec)
+        run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
+        run_opts = put_event_sink(run_opts, opts)
+        run_opts = put_tool_approval_callback(run_opts, opts)
+
+        case Orchestrator.run(agents, run_opts) do
+          {:ok, run} -> summarize_and_log(run)
+          {:error, {:failed, run}} -> summarize_and_log(run)
+          {:error, {:timeout, run}} -> summarize_timeout_and_log(run)
+          {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
+        end
+
+      {:capability_required, summary} ->
+        summary
     end
+  end
+
+  defp route_workflow(spec, opts) do
+    {:ok, WorkflowRouter.route!(spec)}
+  rescue
+    exception in CapabilityRequired ->
+      {:capability_required, summarize_capability_required(spec, opts, exception)}
   end
 
   defp workflow_module(%{selected: "chat"}), do: Chat
@@ -244,6 +258,37 @@ defmodule AgentMachine.ClientRunner do
     run_opts
     |> Keyword.put(:idle_timeout_ms, timeout_ms)
     |> Keyword.put(:hard_timeout_ms, timeout_ms * 3)
+  end
+
+  defp summarize_capability_required(spec, opts, %CapabilityRequired{} = exception) do
+    event = CapabilityRequired.event(exception)
+    emit_capability_required_event(opts, event)
+    EventLog.write_event(event)
+
+    %{
+      run_id: nil,
+      status: "failed",
+      error: Exception.message(exception),
+      final_output: nil,
+      workflow_route: nil,
+      results: %{},
+      artifacts: %{},
+      skills: [],
+      checklist: [],
+      usage: empty_usage(),
+      events: [summarize_event(event)],
+      capability_required: CapabilityRequired.to_map(exception),
+      task: spec.task
+    }
+    |> Redactor.redact_output()
+    |> Map.fetch!(:value)
+  end
+
+  defp emit_capability_required_event(opts, event) do
+    case Keyword.fetch(opts, :event_sink) do
+      {:ok, sink} -> sink.(event)
+      :error -> :ok
+    end
   end
 
   defp summarize_run(run) do
