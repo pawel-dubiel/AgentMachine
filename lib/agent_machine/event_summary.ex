@@ -95,6 +95,18 @@ defmodule AgentMachine.EventSummary do
     "#{agent_id} failed #{tool}: #{reason}"
   end
 
+  defp summary(%{type: :permission_requested, agent_id: agent_id, kind: kind, tool: tool}) do
+    "#{agent_id} requested #{kind} permission for #{tool}"
+  end
+
+  defp summary(%{type: :permission_decided, agent_id: agent_id, decision: decision, tool: tool}) do
+    "#{agent_id} permission #{decision} for #{tool}"
+  end
+
+  defp summary(%{type: :permission_cancelled, agent_id: agent_id, tool: tool, reason: reason}) do
+    "#{agent_id} permission cancelled for #{tool}: #{reason}"
+  end
+
   defp summary(%{type: type}), do: Atom.to_string(type)
 
   defp details(event) do
@@ -106,8 +118,11 @@ defmodule AgentMachine.EventSummary do
       :next_attempt,
       :round,
       :tool_call_id,
+      :request_id,
+      :kind,
       :tool,
       :status,
+      :decision,
       :duration_ms,
       :idle_timeout_ms,
       :hard_timeout_ms,
@@ -118,6 +133,10 @@ defmodule AgentMachine.EventSummary do
       :permission,
       :approval_risk,
       :approval_mode,
+      :capability,
+      :requested_root,
+      :requested_tool,
+      :requested_command,
       :input_summary,
       :result_summary,
       :delegated_agent_ids,

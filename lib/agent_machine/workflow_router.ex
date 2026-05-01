@@ -763,9 +763,9 @@ defmodule AgentMachine.WorkflowRouter do
         raise ArgumentError,
               "auto workflow detected test intent but :code_edit tool harness is not configured"
 
-      input.approval_mode != :full_access ->
+      input.approval_mode not in [:full_access, :ask_before_write] ->
         raise ArgumentError,
-              "auto workflow detected test intent but :tool_approval_mode must be :full_access"
+              "auto workflow detected test intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control"
 
       input.test_commands == [] ->
         raise ArgumentError,
@@ -782,9 +782,9 @@ defmodule AgentMachine.WorkflowRouter do
             "auto workflow detected web browse intent but no MCP browser network tool is configured"
     end
 
-    if input.approval_mode != :full_access do
+    if input.approval_mode not in [:full_access, :ask_before_write] do
       raise ArgumentError,
-            "auto workflow detected web browse intent but :tool_approval_mode must be :full_access for network-risk MCP browser tools"
+            "auto workflow detected web browse intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control for network-risk MCP browser tools"
     end
   end
 

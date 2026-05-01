@@ -10,6 +10,9 @@ import (
 )
 
 var streamFrames = []string{"|", "/", "-", "\\"}
+
+const matrixSignalFrameHold = 10
+
 var matrixWorkSignals = []string{
 	"operator link open",
 	"construct loading",
@@ -18,6 +21,7 @@ var matrixWorkSignals = []string{
 	"exit line ready",
 	"signal lock acquired",
 }
+var matrixSignalGradient = []string{"22", "28", "34", "40", "46", "40", "34", "28"}
 
 func (m model) View() string {
 	styles := m.styles()
@@ -53,7 +57,9 @@ func (m model) View() string {
 	b.WriteString("> ")
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
-	if m.running {
+	if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
+		b.WriteString(styles.Hint.Render("Runtime permission pending. Enter/a approves. d/Esc denies."))
+	} else if m.running {
 		b.WriteString(styles.Hint.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
 	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
 		b.WriteString(styles.Hint.Render("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."))
@@ -144,6 +150,10 @@ func (m model) chatView() string {
 		b.WriteString("\n\n")
 		if checklist := m.workChecklistView(); checklist != "" {
 			b.WriteString(checklist)
+			b.WriteString("\n\n")
+		}
+		if permission := m.pendingRuntimePermissionView(); permission != "" {
+			b.WriteString(permission)
 			b.WriteString("\n\n")
 		}
 		b.WriteString(m.liveActivityView())
@@ -318,14 +328,81 @@ func (m model) pendingToolPermissionView() string {
 		Render(strings.Join(lines, "\n"))
 }
 
+func (m model) pendingRuntimePermissionView() string {
+	request, ok := m.currentPendingPermission()
+	if !ok {
+		return ""
+	}
+
+	styles := m.styles()
+	lines := []string{
+		styles.Label.Render("Runtime Permission"),
+		"worker: " + emptyAsNone(request.AgentID),
+		"kind: " + emptyAsNone(request.Kind),
+		"tool: " + emptyAsNone(request.Tool),
+		"risk: " + emptyAsNone(request.ApprovalRisk),
+	}
+	if request.Capability != "" {
+		lines = append(lines, "capability: "+request.Capability)
+	}
+	if request.RequestedRoot != "" {
+		lines = append(lines, "root: "+request.RequestedRoot)
+	}
+	if request.RequestedTool != "" {
+		lines = append(lines, "requested tool: "+request.RequestedTool)
+	}
+	if request.RequestedCommand != "" {
+		lines = append(lines, "command: "+compactQueueText(request.RequestedCommand))
+	}
+	if request.Summary != "" {
+		lines = append(lines, "summary: "+request.Summary)
+	}
+	lines = append(lines, "", "Enter/a approves this exact request. d/Esc denies.")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(styles.Border).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+}
+
 func (m model) thinkingView() string {
 	frame := streamFrames[m.streamFrame%len(streamFrames)]
 	styles := m.styles()
 	if m.activeTheme() == themeMatrix {
-		signal := matrixWorkSignals[m.streamFrame%len(matrixWorkSignals)]
-		return styles.Signal.Render(frame + " " + signal)
+		return styles.Signal.Render(frame+" ") + matrixGradientText(matrixWorkSignal(m.streamFrame), m.streamFrame)
 	}
 	return styles.Hint.Render("thinking " + frame)
+}
+
+func matrixWorkSignal(frame int) string {
+	if len(matrixWorkSignals) == 0 {
+		return ""
+	}
+	signalFrame := frame / matrixSignalFrameHold
+	return matrixWorkSignals[signalFrame%len(matrixWorkSignals)]
+}
+
+func matrixGradientText(text string, frame int) string {
+	if text == "" || len(matrixSignalGradient) == 0 {
+		return text
+	}
+
+	var b strings.Builder
+	runes := []rune(text)
+	for index, char := range runes {
+		if char == ' ' {
+			b.WriteRune(char)
+			continue
+		}
+		color := matrixGradientColor(index, frame)
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(string(char)))
+	}
+	return b.String()
+}
+
+func matrixGradientColor(index int, frame int) string {
+	return matrixSignalGradient[(index+frame)%len(matrixSignalGradient)]
 }
 
 func (m model) queueView() string {
@@ -829,11 +906,12 @@ func (m model) setupView() string {
 		"/skills list",
 		"/skills show <name>",
 		"/skills install <name>",
+		"/skills generate <name> <description>",
 		"/skills off",
 		"/test-command add <command>",
 		"/test-command list",
 		"/test-command clear",
-		"/allow-tools [auto-approved-safe|full-access]",
+		"/allow-tools [ask-before-write|auto-approved-safe|full-access]",
 		"/yolo-tools",
 		"/deny-tools",
 		"/models reload",
@@ -1195,7 +1273,7 @@ func helpTextForTheme(theme tuiTheme) string {
 		"/tools off",
 		"/skills auto <skills-dir>",
 		"/skills add <name>",
-		"/skills list|show <name>|install <name>|off",
+		"/skills list|show <name>|install <name>|generate <name> <description>|off",
 		"/test-command add <command>",
 		"/test-command list",
 		"/test-command clear",

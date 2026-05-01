@@ -3,7 +3,7 @@ defmodule AgentMachine.SkillsTest do
   import ExUnit.CaptureIO
 
   alias AgentMachine.{ClientRunner, JSON}
-  alias AgentMachine.Skills.{Creator, Installer, Loader, Manifest, Registry, Selector}
+  alias AgentMachine.Skills.{Creator, Generator, Installer, Loader, Manifest, Registry, Selector}
   alias AgentMachine.Tools.{ReadSkillResource, RunSkillScript}
   alias Mix.Tasks.AgentMachine.Skills, as: SkillsTask
 
@@ -110,6 +110,76 @@ defmodule AgentMachine.SkillsTest do
     assert skill.name == "research-helper"
     assert File.dir?(Path.join(skills_dir, "research-helper/references"))
     assert File.dir?(Path.join(skills_dir, "research-helper/assets"))
+  end
+
+  test "generator creates a valid model-authored skill that auto selection can use", %{root: root} do
+    skills_dir = Path.join(root, "skills")
+
+    skill =
+      Generator.generate!("docs-helper",
+        skills_dir: skills_dir,
+        description: "Helps write concise README documentation",
+        provider: :echo,
+        model: "echo",
+        http_timeout_ms: 1_000,
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      )
+
+    assert skill.name == "docs-helper"
+    assert skill.description =~ "README documentation"
+    assert skill.body =~ "README documentation"
+    assert File.regular?(Path.join(skills_dir, "docs-helper/SKILL.md"))
+
+    loaded = Loader.load_installed!(skills_dir)
+    assert [%{name: "docs-helper"}] = loaded
+
+    selection =
+      Selector.select!(%AgentMachine.RunSpec{
+        task: "Update README documentation",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        skills_mode: :auto,
+        skills_dir: skills_dir,
+        skill_names: [],
+        allow_skill_scripts: false
+      })
+
+    assert [%{skill: %{name: "docs-helper"}}] = selection.selected
+
+    summary =
+      ClientRunner.run!(%{
+        task: "Update README documentation",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        skills_mode: :auto,
+        skills_dir: skills_dir
+      })
+
+    assert [%{name: "docs-helper"}] = summary.skills
+  end
+
+  test "generator fails before writing when a skill already exists", %{root: root} do
+    skills_dir = Path.join(root, "skills")
+    write_skill!(skills_dir, "docs-helper", "Helps with docs", "Body")
+
+    assert_raise ArgumentError, ~r/skill already exists/, fn ->
+      Generator.generate!("docs-helper",
+        skills_dir: skills_dir,
+        description: "Helps write concise README documentation",
+        provider: :echo,
+        model: "echo",
+        http_timeout_ms: 1_000,
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      )
+    end
+
+    assert Manifest.load!(Path.join(skills_dir, "docs-helper")).body == "Body"
   end
 
   test "auto selector chooses matching installed skills", %{root: root} do
@@ -220,6 +290,67 @@ defmodule AgentMachine.SkillsTest do
 
     assert %{"valid" => true, "skill" => %{"name" => "docs-helper"}} =
              JSON.decode!(String.trim(output))
+  end
+
+  test "mix agent_machine.skills generate creates a skill through the provider boundary", %{
+    root: root
+  } do
+    skills_dir = Path.join(root, "skills")
+
+    Mix.Task.reenable("agent_machine.skills")
+
+    output =
+      capture_io(fn ->
+        SkillsTask.run([
+          "generate",
+          "docs-helper",
+          "--skills-dir",
+          skills_dir,
+          "--description",
+          "Helps write concise README documentation",
+          "--provider",
+          "echo",
+          "--model",
+          "echo",
+          "--http-timeout-ms",
+          "1000",
+          "--input-price-per-million",
+          "0",
+          "--output-price-per-million",
+          "0",
+          "--json"
+        ])
+      end)
+
+    assert %{"created" => %{"name" => "docs-helper"}} = JSON.decode!(String.trim(output))
+    assert Manifest.load!(Path.join(skills_dir, "docs-helper")).body =~ "README documentation"
+  end
+
+  test "mix agent_machine.skills generate fails fast without explicit provider", %{root: root} do
+    skills_dir = Path.join(root, "skills")
+
+    Mix.Task.reenable("agent_machine.skills")
+
+    assert_raise Mix.Error, ~r/missing required --provider option/, fn ->
+      capture_io(fn ->
+        SkillsTask.run([
+          "generate",
+          "docs-helper",
+          "--skills-dir",
+          skills_dir,
+          "--description",
+          "Helps write concise README documentation",
+          "--model",
+          "echo",
+          "--http-timeout-ms",
+          "1000",
+          "--input-price-per-million",
+          "0",
+          "--output-price-per-million",
+          "0"
+        ])
+      end)
+    end
   end
 
   test "registry rejects duplicate names", %{root: root} do

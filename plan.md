@@ -4,6 +4,8 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
+- [2026-05-01] Add persistent permission grants and reusable allow rules after
+  the run-local permission control plane has more production usage.
 - [2026-04-29] Add run retention/cleanup for completed supervised run subtrees after durable run state and TUI inspection needs are clearer.
 - [2026-04-28] Add a dedicated low-latency edit workflow for simple single-agent file/code mutations after progressive auto routing is stable.
 - [2026-04-26] Add OS-level sandbox and execution policy for future process-capable or network-capable tools.

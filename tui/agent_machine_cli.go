@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -18,6 +19,8 @@ import (
 type streamSession struct {
 	cmd     *exec.Cmd
 	scanner *bufio.Scanner
+	stdin   io.WriteCloser
+	stdinMu sync.Mutex
 	stderr  *bytes.Buffer
 }
 
@@ -68,10 +71,21 @@ func compactCommand(config runConfig, messages []chatMessage) tea.Cmd {
 }
 
 func runSkillsCLICommand(args []string) tea.Cmd {
+	return runSkillsCLICommandWithEnv(args, nil)
+}
+
+func runSkillsCLICommandWithConfig(args []string, config runConfig) tea.Cmd {
+	return runSkillsCLICommandWithEnv(args, commandEnv(os.Environ(), config))
+}
+
+func runSkillsCLICommandWithEnv(args []string, env []string) tea.Cmd {
 	return func() tea.Msg {
 		cmdArgs := append([]string{"agent_machine.skills"}, args...)
 		cmd := exec.Command("mix", cmdArgs...)
 		cmd.Dir = projectRoot()
+		if env != nil {
+			cmd.Env = env
+		}
 		output, err := cmd.CombinedOutput()
 		raw := strings.TrimSpace(string(output))
 		if err != nil {
@@ -183,6 +197,13 @@ func startAgentMachineStream(config runConfig) (*streamSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open AgentMachine stdout: %w", err)
 	}
+	var stdin io.WriteCloser
+	if usesPermissionControl(config) {
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open AgentMachine stdin: %w", err)
+		}
+	}
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 
@@ -191,7 +212,7 @@ func startAgentMachineStream(config runConfig) (*streamSession, error) {
 	}
 
 	scanner := newLineScanner(stdout)
-	return &streamSession{cmd: cmd, scanner: scanner, stderr: stderr}, nil
+	return &streamSession{cmd: cmd, scanner: scanner, stdin: stdin, stderr: stderr}, nil
 }
 
 func newLineScanner(reader io.Reader) *bufio.Scanner {
@@ -270,6 +291,9 @@ func buildRunArgs(config runConfig) []string {
 			"--tool-max-rounds", config.ToolMaxRounds,
 			"--tool-approval-mode", config.ToolApproval,
 		)
+		if usesPermissionControl(config) {
+			args = append(args, "--permission-control", "jsonl-stdio")
+		}
 		if config.ToolRoot != "" {
 			args = append(args, "--tool-root", config.ToolRoot)
 		}
@@ -335,6 +359,37 @@ func buildRunArgs(config runConfig) []string {
 	}
 
 	return append(args, config.Task)
+}
+
+func usesPermissionControl(config runConfig) bool {
+	return config.ToolApproval == "ask-before-write" &&
+		(config.ToolHarness != "" || strings.TrimSpace(config.MCPConfig) != "")
+}
+
+func sendPermissionDecisionCommand(session *streamSession, requestID string, decision string, reason string) tea.Cmd {
+	return func() tea.Msg {
+		if session == nil || session.stdin == nil {
+			return permissionDecisionMsg{RequestID: requestID, Decision: decision, Err: errors.New("permission control stdin is not available")}
+		}
+
+		payload := map[string]string{
+			"type":       "permission_decision",
+			"request_id": requestID,
+			"decision":   decision,
+			"reason":     reason,
+		}
+		line, err := json.Marshal(payload)
+		if err != nil {
+			return permissionDecisionMsg{RequestID: requestID, Decision: decision, Err: err}
+		}
+
+		session.stdinMu.Lock()
+		defer session.stdinMu.Unlock()
+		if _, err := session.stdin.Write(append(line, '\n')); err != nil {
+			return permissionDecisionMsg{RequestID: requestID, Decision: decision, Err: err}
+		}
+		return permissionDecisionMsg{RequestID: requestID, Decision: decision}
+	}
 }
 
 func maxSteps(workflow runWorkflow) string {

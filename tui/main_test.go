@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,6 +18,14 @@ var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(text string) string {
 	return ansiEscapePattern.ReplaceAllString(text, "")
+}
+
+type closeBuffer struct {
+	bytes.Buffer
+}
+
+func (buffer *closeBuffer) Close() error {
+	return nil
 }
 
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
@@ -376,6 +386,23 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 			t.Fatalf("arg %d mismatch: expected %q, got %q", i, expected[i], args[i])
 		}
 	}
+}
+
+func TestBuildRunArgsIncludesPermissionControlForAskBeforeWriteTools(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "edit app",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/tmp/agent-machine-project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "3",
+		ToolApproval:  "ask-before-write",
+	})
+
+	assertContainsSequence(t, args, []string{"--tool-approval-mode", "ask-before-write"})
+	assertContainsSequence(t, args, []string{"--permission-control", "jsonl-stdio"})
+	assertContainsSequence(t, args, []string{"--tool-root", "/tmp/agent-machine-project"})
 }
 
 func TestBuildRunArgsIncludesRunLogFile(t *testing.T) {
@@ -1026,7 +1053,7 @@ func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
 func TestChatViewRendersMatrixWorkSignalWithoutStreamedText(t *testing.T) {
 	m := model{
 		running:       true,
-		streamFrame:   1,
+		streamFrame:   matrixSignalFrameHold,
 		theme:         themeMatrix,
 		liveAssistant: "hidden streamed content",
 		messages:      []chatMessage{{Role: "user", Text: "hello"}},
@@ -1045,6 +1072,31 @@ func TestChatViewRendersMatrixWorkSignalWithoutStreamedText(t *testing.T) {
 	}
 	if strings.Contains(view, "hidden streamed content") {
 		t.Fatalf("expected streamed text to stay hidden, got %q", view)
+	}
+}
+
+func TestMatrixWorkSignalChangesMoreSlowlyThanStreamFrame(t *testing.T) {
+	first := matrixWorkSignal(0)
+	lastHeldFrame := matrixWorkSignal(matrixSignalFrameHold - 1)
+	next := matrixWorkSignal(matrixSignalFrameHold)
+
+	if first != lastHeldFrame {
+		t.Fatalf("expected matrix signal to hold for %d frames, got %q then %q", matrixSignalFrameHold, first, lastHeldFrame)
+	}
+	if first == next {
+		t.Fatalf("expected matrix signal to advance after hold, still got %q", first)
+	}
+}
+
+func TestMatrixGradientTextAnimatesWithoutChangingPlainText(t *testing.T) {
+	first := matrixGradientText("construct loading", 0)
+	next := matrixGradientText("construct loading", 1)
+
+	if matrixGradientColor(0, 0) == matrixGradientColor(0, 1) {
+		t.Fatalf("expected gradient color to advance between frames")
+	}
+	if stripANSI(first) != "construct loading" || stripANSI(next) != "construct loading" {
+		t.Fatalf("expected gradient to preserve plain text, got %q and %q", first, next)
 	}
 }
 
@@ -1660,6 +1712,9 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	if !strings.Contains(help, "/theme classic|matrix") {
 		t.Fatalf("expected help to mention theme command, got %q", help)
 	}
+	if !strings.Contains(help, "/skills list|show <name>|install <name>|generate <name> <description>|off") {
+		t.Fatalf("expected help to mention skill generation command, got %q", help)
+	}
 	if !strings.Contains(help, "read-only tool") {
 		t.Fatalf("expected help to mention read-only tool route, got %q", help)
 	}
@@ -2024,7 +2079,7 @@ func TestMCPAddPlaywrightCreatesManagedConfig(t *testing.T) {
 	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" {
 		t.Fatalf("expected MCP preset to disable filesystem tools, got %#v", result.savedConfig)
 	}
-	if result.savedConfig.ToolTimeout != "120000" || result.savedConfig.ToolMaxRounds != "6" || result.savedConfig.ToolApproval != "full-access" {
+	if result.savedConfig.ToolTimeout != "120000" || result.savedConfig.ToolMaxRounds != "6" || result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("expected MCP tool budget, got %#v", result.savedConfig)
 	}
 
@@ -2207,6 +2262,72 @@ func TestSkillsCommandPersistsExplicitSkill(t *testing.T) {
 	}
 }
 
+func TestSkillsGenerateCommandRequiresSkillsDir(t *testing.T) {
+	m := model{provider: providerEcho, providerSet: true}
+
+	updated, _ := m.handleCommand("/skills generate docs-helper Helps write concise docs")
+	result := updated.(model)
+
+	if len(result.messages) == 0 ||
+		!strings.Contains(result.messages[len(result.messages)-1].Text, "set /skills dir <skills-dir> before generating skills") {
+		t.Fatalf("expected missing skills dir message, got %#v", result.messages)
+	}
+}
+
+func TestSkillsGenerateCommandRequiresProvider(t *testing.T) {
+	m := model{savedConfig: savedConfig{SkillsDir: "/tmp/skills"}}
+
+	updated, _ := m.handleCommand("/skills generate docs-helper Helps write concise docs")
+	result := updated.(model)
+
+	if result.view != viewSetup {
+		t.Fatalf("expected setup view, got %v", result.view)
+	}
+	if len(result.messages) == 0 ||
+		!strings.Contains(result.messages[len(result.messages)-1].Text, "select a provider before generating skills") {
+		t.Fatalf("expected missing provider message, got %#v", result.messages)
+	}
+}
+
+func TestBuildSkillsGenerateCLIArgsIncludesProviderRuntime(t *testing.T) {
+	args, err := buildSkillsGenerateCLIArgs(
+		runConfig{
+			Provider:     providerOpenRouter,
+			Model:        "openai/gpt-5.1",
+			HTTPTimeout:  "120000",
+			InputPrice:   "1.25",
+			OutputPrice:  "2.50",
+			SkillsDir:    "/tmp/skills",
+			ToolApproval: "read-only",
+		},
+		"docs-helper",
+		"Helps write concise docs",
+	)
+	if err != nil {
+		t.Fatalf("expected generate args, got %v", err)
+	}
+
+	assertContainsSequence(t, args, []string{
+		"generate",
+		"docs-helper",
+		"--skills-dir",
+		"/tmp/skills",
+		"--description",
+		"Helps write concise docs",
+		"--provider",
+		"openrouter",
+		"--model",
+		"openai/gpt-5.1",
+		"--http-timeout-ms",
+		"120000",
+		"--input-price-per-million",
+		"1.25",
+		"--output-price-per-million",
+		"2.50",
+		"--json",
+	})
+}
+
 func TestSkillsClawHubCLIArgsStayThin(t *testing.T) {
 	args, err := buildSkillsCLIArgs(
 		[]string{"search", "docs", "--source", "clawhub", "--sort", "downloads", "--limit", "20"},
@@ -2385,7 +2506,7 @@ func TestFilesystemWritePromptRequiresToolPermissionWhenToolsOff(t *testing.T) {
 		t.Fatalf("expected permission prompt, got %q", last)
 	}
 	view := result.View()
-	if !strings.Contains(view, "Tool Permission") || !strings.Contains(view, "> Allow writes") || !strings.Contains(view, "Full access") || !strings.Contains(view, "Deny") {
+	if !strings.Contains(view, "Tool Permission") || !strings.Contains(view, "> Ask each use") || !strings.Contains(view, "Allow writes") || !strings.Contains(view, "Full access") || !strings.Contains(view, "Deny") {
 		t.Fatalf("expected permission selector, got %q", view)
 	}
 }
@@ -2599,13 +2720,14 @@ func TestRouterWebBrowseApprovalErrorShowsMCPBrowserSelector(t *testing.T) {
 	}
 	last := updated.messages[len(updated.messages)-1].Text
 	if !strings.Contains(last, "MCP browser permission required") ||
-		!strings.Contains(last, "full-access") ||
+		!strings.Contains(last, "ask-before-write") ||
 		!strings.Contains(last, "/tmp/agent-machine.mcp.json") {
 		t.Fatalf("expected MCP browser permission prompt, got %q", last)
 	}
 	view := updated.View()
 	if !strings.Contains(view, "harness: "+pendingHarnessMCPBrowser) ||
-		!strings.Contains(view, "> Full access") ||
+		!strings.Contains(view, "> Ask each use") ||
+		!strings.Contains(view, "Full access") ||
 		!strings.Contains(view, "Deny") {
 		t.Fatalf("expected MCP browser permission selector, got %q", view)
 	}
@@ -2637,7 +2759,7 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	if !result.running {
 		t.Fatal("expected run to start after allowing tools")
 	}
-	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
+	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.activeConfig.Workflow != workflowAgentic {
@@ -2684,7 +2806,7 @@ func TestAllowToolsApprovesPendingMCPBrowserRun(t *testing.T) {
 	if result.savedConfig.MCPConfig != "/tmp/agent-machine.mcp.json" ||
 		result.savedConfig.ToolTimeout != defaultMCPToolTimeout ||
 		result.savedConfig.ToolMaxRounds != defaultMCPToolMaxRounds ||
-		result.savedConfig.ToolApproval != "full-access" {
+		result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected MCP browser tool config: %#v", result.savedConfig)
 	}
 	if result.activeConfig.Workflow != workflowAuto {
@@ -2715,7 +2837,7 @@ func TestAllowToolsApprovesPendingCodeEditRun(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command after allowing code-edit tools")
 	}
-	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolRoot != "/tmp/agent-machine-home" || result.savedConfig.ToolApproval != "auto-approved-safe" {
+	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolRoot != "/tmp/agent-machine-home" || result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.activeConfig.Workflow != workflowAgentic {
@@ -2783,7 +2905,7 @@ func TestPendingToolSelectorApprovesWithKeyboard(t *testing.T) {
 	if !result.running {
 		t.Fatal("expected run to start after selector approval")
 	}
-	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "auto-approved-safe" {
+	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.pendingToolTask != "" {
@@ -2807,17 +2929,8 @@ func TestPendingToolSelectorCanChooseFullAccessAndDeny(t *testing.T) {
 		pendingToolHarness: "code-edit",
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	result := updated.(model)
-	if cmd != nil {
-		t.Fatal("expected no command while moving selector")
-	}
-	if result.pendingToolChoice != 1 {
-		t.Fatalf("expected full-access selection, got %d", result.pendingToolChoice)
-	}
-
-	updated, cmd = result.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	result = updated.(model)
 	if cmd == nil {
 		t.Fatal("expected run command after full-access selector approval")
 	}
@@ -2831,7 +2944,7 @@ func TestPendingToolSelectorCanChooseFullAccessAndDeny(t *testing.T) {
 		pendingToolTask:    "fix the existing app",
 		pendingToolRoot:    "/tmp/agent-machine-home",
 		pendingToolHarness: "code-edit",
-		pendingToolChoice:  2,
+		pendingToolChoice:  3,
 	}
 	updated, cmd = deny.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	result = updated.(model)
@@ -3400,6 +3513,46 @@ func TestJSONLRunTimeoutMarksRunningAgentsTimedOut(t *testing.T) {
 	}
 	if !strings.Contains(agent.Error, "hard timeout") {
 		t.Fatalf("expected timeout reason, got %#v", agent)
+	}
+}
+
+func TestStreamLineTracksRuntimePermissionRequests(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"permission_requested","run_id":"run-1","request_id":"req-1","kind":"tool_execution","agent_id":"worker","parent_agent_id":"planner","tool_call_id":"call-1","tool":"write_file","permission":"local_files_write","approval_risk":"write","approval_mode":"ask_before_write","summary":"worker requested write_file"}}`)
+	if len(updated.pendingPermissionID) != 1 || updated.pendingPermissionID[0] != "req-1" {
+		t.Fatalf("expected pending permission id, got %#v", updated.pendingPermissionID)
+	}
+	request, ok := updated.currentPendingPermission()
+	if !ok || request.RequestID != "req-1" || request.AgentID != "worker" || request.ParentAgentID != "planner" || request.Tool != "write_file" {
+		t.Fatalf("expected pending permission details, got %#v ok=%v", request, ok)
+	}
+
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"permission_decided","run_id":"run-1","request_id":"req-1","kind":"tool_execution","decision":"deny","summary":"permission denied"}}`)
+	if len(updated.pendingPermissionID) != 0 || len(updated.pendingPermissions) != 0 {
+		t.Fatalf("expected permission to clear after decision, got ids=%#v map=%#v", updated.pendingPermissionID, updated.pendingPermissions)
+	}
+}
+
+func TestSendPermissionDecisionCommandWritesJSONL(t *testing.T) {
+	stdin := &closeBuffer{}
+	session := &streamSession{stdin: stdin}
+
+	msg := sendPermissionDecisionCommand(session, "req-1", "approve", "TUI approve")()
+	decision, ok := msg.(permissionDecisionMsg)
+	if !ok {
+		t.Fatalf("expected permission decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "req-1" || decision.Decision != "approve" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "permission_decision" || payload["request_id"] != "req-1" || payload["decision"] != "approve" || payload["reason"] != "TUI approve" {
+		t.Fatalf("unexpected permission decision payload: %#v", payload)
 	}
 }
 

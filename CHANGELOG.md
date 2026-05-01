@@ -4,6 +4,16 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added JSONL stdio permission control for interactive `ask-before-write` runs,
+  including runtime permission request, decision, and cancellation events.
+- Added current-attempt `request_capability` negotiation for local-files,
+  code-edit, MCP tools, and exact allowlisted test commands.
+- Changed the TUI to prefer interactive `ask-before-write` for local tools and
+  MCP browser runs, with inline approve/deny actions for runtime permissions.
+- Added provider-backed skill generation through `mix agent_machine.skills
+  generate` and TUI `/skills generate <name> <description>`.
+- Slowed Matrix-themed TUI work phrase rotation while keeping a moving green
+  gradient sweep across the active phrase.
 - Fixed Matrix-themed TUI Markdown code blocks so Chroma receives valid hex
   colors instead of ANSI palette numbers.
 - Added selectable TUI themes with `/theme classic|matrix`, including a

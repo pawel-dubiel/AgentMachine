@@ -134,7 +134,8 @@ defmodule AgentMachine.Orchestrator do
       idle_deadline_ms: now + idle_timeout_ms,
       hard_deadline_ms: now + hard_timeout_ms,
       last_health_count: health_event_count(run),
-      last_extension_at_ms: now - @lease_extension_min_interval_ms
+      last_extension_at_ms: now - @lease_extension_min_interval_ms,
+      permission_pause_started_ms: nil
     }
 
     await_leased_loop(run_id, state)
@@ -160,30 +161,70 @@ defmodule AgentMachine.Orchestrator do
         {:error, {:timeout, run}}
 
       run ->
-        now = System.monotonic_time(:millisecond)
-        lease = maybe_extend_lease(run_id, run, lease, now)
-
-        cond do
-          now >= lease.hard_deadline_ms ->
-            timeout_run(
-              run_id,
-              "hard timeout reached after #{lease.hard_timeout_ms}ms",
-              timeout_metadata(lease, now)
-            )
-
-          now >= lease.idle_deadline_ms ->
-            timeout_run(
-              run_id,
-              "idle lease expired after #{lease.idle_timeout_ms}ms without runtime activity",
-              timeout_metadata(lease, now)
-            )
-
-          true ->
-            sleep_ms = next_sleep_ms(lease, now)
-            Process.sleep(sleep_ms)
-            await_leased_loop(run_id, lease)
-        end
+        await_active_run(run_id, run, lease)
     end
+  end
+
+  defp await_active_run(run_id, run, lease) do
+    now = System.monotonic_time(:millisecond)
+
+    lease = maybe_extend_lease(run_id, run, lease, now)
+    lease = maybe_pause_for_permission_wait(run, lease, now)
+
+    continue_or_timeout(run_id, lease, now)
+  end
+
+  defp continue_or_timeout(run_id, lease, now) do
+    case lease_decision(lease, now) do
+      :continue ->
+        sleep_and_await(run_id, lease, now)
+
+      :permission_pause ->
+        sleep_and_await(run_id, lease, now)
+
+      {:timeout, reason} ->
+        timeout_run(run_id, reason, timeout_metadata(lease, now))
+    end
+  end
+
+  defp lease_decision(%{permission_pause_started_ms: pause_started}, _now)
+       when is_integer(pause_started),
+       do: :permission_pause
+
+  defp lease_decision(lease, now) when now >= lease.hard_deadline_ms,
+    do: {:timeout, "hard timeout reached after #{lease.hard_timeout_ms}ms"}
+
+  defp lease_decision(lease, now) when now >= lease.idle_deadline_ms,
+    do: {:timeout, "idle lease expired after #{lease.idle_timeout_ms}ms without runtime activity"}
+
+  defp lease_decision(_lease, _now), do: :continue
+
+  defp sleep_and_await(run_id, lease, now) do
+    sleep_ms = next_sleep_ms(lease, now)
+    Process.sleep(sleep_ms)
+    await_leased_loop(run_id, lease)
+  end
+
+  defp maybe_pause_for_permission_wait(%{permission_waiting_count: count}, lease, now)
+       when is_integer(count) and count > 0 do
+    case lease.permission_pause_started_ms do
+      nil -> %{lease | permission_pause_started_ms: now}
+      _started_at -> lease
+    end
+  end
+
+  defp maybe_pause_for_permission_wait(_run, %{permission_pause_started_ms: nil} = lease, _now),
+    do: lease
+
+  defp maybe_pause_for_permission_wait(_run, lease, now) do
+    paused_ms = max(now - lease.permission_pause_started_ms, 0)
+
+    %{
+      lease
+      | idle_deadline_ms: lease.idle_deadline_ms + paused_ms,
+        hard_deadline_ms: lease.hard_deadline_ms + paused_ms,
+        permission_pause_started_ms: nil
+    }
   end
 
   defp maybe_extend_lease(run_id, run, lease, now) do

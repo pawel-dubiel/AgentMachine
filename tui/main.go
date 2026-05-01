@@ -85,12 +85,22 @@ type eventSummary struct {
 	AgentID           string         `json:"agent_id"`
 	ParentAgentID     string         `json:"parent_agent_id"`
 	DelegatedAgentIDs []string       `json:"delegated_agent_ids"`
+	RequestID         string         `json:"request_id"`
+	Kind              string         `json:"kind"`
 	Status            string         `json:"status"`
+	Decision          string         `json:"decision"`
 	Attempt           int            `json:"attempt"`
 	NextAttempt       int            `json:"next_attempt"`
 	Round             int            `json:"round"`
 	ToolCallID        string         `json:"tool_call_id"`
 	Tool              string         `json:"tool"`
+	Permission        string         `json:"permission"`
+	ApprovalRisk      string         `json:"approval_risk"`
+	ApprovalMode      string         `json:"approval_mode"`
+	Capability        string         `json:"capability"`
+	RequestedRoot     string         `json:"requested_root"`
+	RequestedTool     string         `json:"requested_tool"`
+	RequestedCommand  string         `json:"requested_command"`
 	DurationMS        *int           `json:"duration_ms"`
 	Reason            string         `json:"reason"`
 	Summary           string         `json:"summary"`
@@ -134,6 +144,12 @@ type streamStartedMsg struct {
 type streamLineMsg struct {
 	Session *streamSession
 	Line    string
+}
+
+type permissionDecisionMsg struct {
+	RequestID string
+	Decision  string
+	Err       error
 }
 
 type streamDoneMsg struct {
@@ -356,6 +372,8 @@ type model struct {
 	pendingToolRoot     string
 	pendingToolHarness  string
 	pendingToolChoice   int
+	pendingPermissions  map[string]eventSummary
+	pendingPermissionID []string
 	eventSessionID      string
 	eventLogFile        string
 	width               int
@@ -546,6 +564,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if request, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
+			switch msg.String() {
+			case "enter", "a":
+				return m.answerPendingPermission(request, "approve")
+			case "d", "esc":
+				return m.answerPendingPermission(request, "deny")
+			}
+		}
+
 		if m.pendingToolTask != "" && m.view == viewChat && !m.running && strings.TrimSpace(m.input.Value()) == "" {
 			switch msg.String() {
 			case "up", "k":
@@ -681,6 +708,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stream = nil
 		m.running = false
+		m.pendingPermissions = nil
+		m.pendingPermissionID = nil
 		m.view = viewChat
 		if msg.Err != nil {
 			if updated, handled := m.withRunPermissionError(msg.Err); handled {
@@ -697,6 +726,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
 		}
 		return m.startNextQueuedRun()
+
+	case permissionDecisionMsg:
+		if msg.Err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "permission decision failed: " + msg.Err.Error()})
+		}
+		return m, nil
 
 	case skillsCommandMsg:
 		if msg.Err != nil {
@@ -938,11 +973,13 @@ func routerWriteCapabilityError(text string) bool {
 	return strings.Contains(text, "auto workflow detected mutation intent but no write-capable tool harness is configured") ||
 		strings.Contains(text, "auto workflow detected code mutation intent but :code_edit tool harness is not configured") ||
 		strings.Contains(text, "auto workflow detected test intent but :code_edit tool harness is not configured") ||
-		strings.Contains(text, "auto workflow detected test intent but :tool_approval_mode must be :full_access")
+		(strings.Contains(text, "auto workflow detected test intent") &&
+			strings.Contains(text, ":tool_approval_mode"))
 }
 
 func routerWebBrowseApprovalError(text string) bool {
-	return strings.Contains(text, "auto workflow detected web browse intent but :tool_approval_mode must be :full_access")
+	return strings.Contains(text, "auto workflow detected web browse intent") &&
+		strings.Contains(text, ":tool_approval_mode")
 }
 
 func requiredHarnessForRouterError(text string, task string) string {
@@ -963,8 +1000,8 @@ func (m model) permissionReasonForHarness(harness string) string {
 		return "filesystem tools are off"
 	case m.savedConfig.ToolHarness != harness:
 		return "active tool harness cannot perform this filesystem action"
-	case m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access":
-		return "active tool approval mode cannot perform writes without an interactive approval bridge"
+	case m.savedConfig.ToolApproval != "ask-before-write" && m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access":
+		return "active tool approval mode cannot perform writes"
 	default:
 		return "runtime did not receive a write-capable tool harness"
 	}
@@ -1164,7 +1201,7 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	case "mcp":
 		return m.handleMCPCommand(args)
 	case "allow-tools":
-		return m.handleAllowToolsCommand(args, "auto-approved-safe")
+		return m.handleAllowToolsCommand(args, "ask-before-write")
 	case "yolo-tools":
 		return m.handleAllowToolsCommand(args, "full-access")
 	case "deny-tools":
@@ -1505,7 +1542,7 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 		return m, nil
 	}
 	if len(args) > 1 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /allow-tools [auto-approved-safe|full-access]"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /allow-tools [ask-before-write|auto-approved-safe|full-access]"})
 		return m, nil
 	}
 
@@ -1513,8 +1550,8 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	if len(args) == 1 {
 		approval = args[0]
 	}
-	if approval != "auto-approved-safe" && approval != "full-access" {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "write tool approval must be auto-approved-safe or full-access"})
+	if approval != "ask-before-write" && approval != "auto-approved-safe" && approval != "full-access" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "write tool approval must be ask-before-write, auto-approved-safe, or full-access"})
 		return m, nil
 	}
 
@@ -1558,11 +1595,6 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 }
 
 func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string) (tea.Model, tea.Cmd) {
-	if len(args) == 1 && approval != "full-access" {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP browser tools require full-access approval"})
-		return m, nil
-	}
-
 	if strings.TrimSpace(m.savedConfig.MCPConfig) == "" {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP browser tools require an MCP config"})
 		return m, nil
@@ -1573,7 +1605,7 @@ func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string)
 	m.savedConfig.TestCommands = nil
 	m.savedConfig.ToolTimeout = defaultMCPToolTimeout
 	m.savedConfig.ToolMaxRounds = defaultMCPToolMaxRounds
-	m.savedConfig.ToolApproval = "full-access"
+	m.savedConfig.ToolApproval = approval
 
 	if err := validateToolConfig(runConfig{
 		ToolTimeout:   m.savedConfig.ToolTimeout,
@@ -1595,7 +1627,7 @@ func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string)
 	m.pendingToolRoot = ""
 	m.pendingToolHarness = ""
 	m.pendingToolChoice = 0
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed MCP browser tools approval=full-access"})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed MCP browser tools approval=" + approval})
 	return m.startRunWithWorkflow(task, workflowAuto)
 }
 
@@ -1608,6 +1640,11 @@ type pendingToolOption struct {
 
 func pendingToolOptions() []pendingToolOption {
 	return []pendingToolOption{
+		{
+			Label:       "Ask each use",
+			Description: "Enable required tools for this root with interactive ask-before-write approval and retry now.",
+			Approval:    "ask-before-write",
+		},
 		{
 			Label:       "Allow writes",
 			Description: "Enable required tools for this root with auto-approved-safe approval and retry now.",
@@ -1630,8 +1667,13 @@ func (m model) pendingToolOptions() []pendingToolOption {
 	if m.pendingToolHarness == pendingHarnessMCPBrowser {
 		return []pendingToolOption{
 			{
+				Label:       "Ask each use",
+				Description: "Enable MCP browser network tools with interactive ask-before-write approval and retry now.",
+				Approval:    "ask-before-write",
+			},
+			{
 				Label:       "Full access",
-				Description: "Enable MCP browser network tools and retry now.",
+				Description: "Enable MCP browser network tools with full-access approval and retry now.",
 				Approval:    "full-access",
 			},
 			{
@@ -1681,6 +1723,55 @@ func (m model) handleDenyToolsCommand(args []string) (tea.Model, tea.Cmd) {
 	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool request denied; no run started"})
 	return m, nil
+}
+
+func (m *model) addPendingPermission(event eventSummary) {
+	if strings.TrimSpace(event.RequestID) == "" {
+		return
+	}
+	if m.pendingPermissions == nil {
+		m.pendingPermissions = map[string]eventSummary{}
+	}
+	if _, exists := m.pendingPermissions[event.RequestID]; !exists {
+		m.pendingPermissionID = append(m.pendingPermissionID, event.RequestID)
+	}
+	m.pendingPermissions[event.RequestID] = event
+}
+
+func (m *model) removePendingPermission(requestID string) {
+	if strings.TrimSpace(requestID) == "" || m.pendingPermissions == nil {
+		return
+	}
+	delete(m.pendingPermissions, requestID)
+	next := m.pendingPermissionID[:0]
+	for _, id := range m.pendingPermissionID {
+		if id != requestID {
+			next = append(next, id)
+		}
+	}
+	m.pendingPermissionID = next
+	if len(m.pendingPermissionID) == 0 {
+		m.pendingPermissionID = nil
+		m.pendingPermissions = nil
+	}
+}
+
+func (m model) currentPendingPermission() (eventSummary, bool) {
+	for _, id := range m.pendingPermissionID {
+		if request, ok := m.pendingPermissions[id]; ok {
+			return request, true
+		}
+	}
+	return eventSummary{}, false
+}
+
+func (m model) answerPendingPermission(request eventSummary, decision string) (tea.Model, tea.Cmd) {
+	if decision != "approve" && decision != "deny" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unsupported permission decision: " + decision})
+		return m, nil
+	}
+	m.removePendingPermission(request.RequestID)
+	return m, sendPermissionDecisionCommand(m.stream, request.RequestID, decision, "TUI "+decision)
 }
 
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
@@ -1893,7 +1984,7 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.savedConfig.TestCommands) > 0 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access"})
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access or ask-before-write"})
 			return m, nil
 		}
 		m.savedConfig.ToolHarness = args[0]
@@ -1922,8 +2013,8 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 			return m, nil
 		}
-		if len(m.savedConfig.TestCommands) > 0 && (args[0] != "code-edit" || args[4] != "full-access") {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access"})
+		if len(m.savedConfig.TestCommands) > 0 && (args[0] != "code-edit" || (args[4] != "full-access" && args[4] != "ask-before-write")) {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved test commands require /tools code-edit <root> <timeout-ms> <max-rounds> full-access or ask-before-write"})
 			return m, nil
 		}
 		m.savedConfig.ToolHarness = args[0]
@@ -2172,8 +2263,31 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.skillsCLICommand("create", args[1], "--description", strings.Join(args[2:], " "))
+	case "generate":
+		if len(args) < 3 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills generate <name> <description>"})
+			return m, nil
+		}
+		if strings.TrimSpace(m.savedConfig.SkillsDir) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "set /skills dir <skills-dir> before generating skills"})
+			return m, nil
+		}
+		if !m.providerSet {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider before generating skills"})
+			m.view = viewSetup
+			return m, nil
+		}
+		if !validSkillName(args[1]) {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "invalid skill name: " + args[1]})
+			return m, nil
+		}
+		config, err := resolveConfig(m.runConfig("generate skill " + args[1]))
+		if err != nil {
+			return m.withRunPreparationError(err), nil
+		}
+		return m, m.skillsGenerateCommand(config, args[1], strings.Join(args[2:], " "))
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off|auto|dir|add|remove|clear|scripts|list|search|show|install|update|create"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills off|auto|dir|add|remove|clear|scripts|list|search|show|install|update|create|generate"})
 		return m, nil
 	}
 
@@ -2216,6 +2330,16 @@ func (m model) skillsCLINoDirCommand(args ...string) tea.Cmd {
 	return runSkillsCLICommand(cliArgs)
 }
 
+func (m model) skillsGenerateCommand(config runConfig, name string, description string) tea.Cmd {
+	cliArgs, err := buildSkillsGenerateCLIArgs(config, name, description)
+	if err != nil {
+		return func() tea.Msg {
+			return skillsCommandMsg{Err: err}
+		}
+	}
+	return runSkillsCLICommandWithConfig(cliArgs, config)
+}
+
 func buildSkillsCLIArgs(args []string, skillsDir string, requireDir bool) ([]string, error) {
 	if requireDir && strings.TrimSpace(skillsDir) == "" {
 		return nil, errors.New("set /skills dir <skills-dir> before running skills commands")
@@ -2226,6 +2350,50 @@ func buildSkillsCLIArgs(args []string, skillsDir string, requireDir bool) ([]str
 	}
 	cliArgs = append(cliArgs, "--json")
 	return cliArgs, nil
+}
+
+func buildSkillsGenerateCLIArgs(config runConfig, name string, description string) ([]string, error) {
+	if strings.TrimSpace(config.SkillsDir) == "" {
+		return nil, errors.New("set /skills dir <skills-dir> before generating skills")
+	}
+	if !validSkillName(name) {
+		return nil, fmt.Errorf("invalid skill name: %s", name)
+	}
+	if strings.TrimSpace(description) == "" {
+		return nil, errors.New("skill description must not be empty")
+	}
+	if strings.TrimSpace(config.Model) == "" {
+		return nil, errors.New("model must not be empty for skill generation")
+	}
+	if strings.TrimSpace(config.HTTPTimeout) == "" {
+		return nil, errors.New("HTTP timeout is missing for skill generation")
+	}
+	if strings.TrimSpace(config.InputPrice) == "" {
+		return nil, errors.New("input pricing is missing for skill generation")
+	}
+	if strings.TrimSpace(config.OutputPrice) == "" {
+		return nil, errors.New("output pricing is missing for skill generation")
+	}
+
+	return []string{
+		"generate",
+		name,
+		"--skills-dir",
+		config.SkillsDir,
+		"--description",
+		description,
+		"--provider",
+		string(config.Provider),
+		"--model",
+		config.Model,
+		"--http-timeout-ms",
+		config.HTTPTimeout,
+		"--input-price-per-million",
+		config.InputPrice,
+		"--output-price-per-million",
+		config.OutputPrice,
+		"--json",
+	}, nil
 }
 
 func validClawHubSort(value string) bool {
@@ -2402,6 +2570,12 @@ func (m *model) applyEvent(event eventSummary) {
 	}
 	if event.Type == "run_timed_out" {
 		m.markRunningAgentsTimedOut(event)
+	}
+	if event.Type == "permission_requested" {
+		m.addPendingPermission(event)
+	}
+	if event.Type == "permission_decided" || event.Type == "permission_cancelled" {
+		m.removePendingPermission(event.RequestID)
 	}
 	if event.Type == "context_budget" {
 		budget := event
@@ -3211,8 +3385,8 @@ func validateToolConfig(config runConfig) error {
 			if config.ToolHarness != "code-edit" {
 				return errors.New("test commands require code-edit tool harness")
 			}
-			if config.ToolApproval != "full-access" {
-				return errors.New("test commands require full-access approval mode")
+			if config.ToolApproval != "full-access" && config.ToolApproval != "ask-before-write" {
+				return errors.New("test commands require full-access or ask-before-write approval mode")
 			}
 			if err := validateTestCommands(config.TestCommands); err != nil {
 				return err
@@ -3301,9 +3475,9 @@ func (m model) toolPermissionPrompt(task string) (string, string, string, bool) 
 				m.savedConfig.ToolRoot,
 			), root, requiredHarness, true
 		}
-		if m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access" {
+		if m.savedConfig.ToolApproval != "ask-before-write" && m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access" {
 			return toolPermissionText(
-				"active tool approval mode cannot perform writes without an interactive approval bridge",
+				"active tool approval mode cannot perform writes",
 				requiredHarness,
 				root,
 				m.savedConfig.ToolRoot,
@@ -3337,10 +3511,10 @@ func toolPermissionText(reason string, harness string, root string, activeRoot s
 
 func mcpBrowserPermissionText(configPath string) string {
 	return strings.Join([]string{
-		"MCP browser permission required: browser navigation uses network-risk tools and requires full-access approval.",
+		"MCP browser permission required: browser navigation uses network-risk tools.",
 		"mcp config: " + configPath,
 		"Use the selector below to approve or deny this request.",
-		"Run /allow-tools or /yolo-tools to enable MCP browser full-access and retry now.",
+		"Run /allow-tools to enable interactive ask-before-write approval or /yolo-tools for full-access and retry now.",
 		"Run /deny-tools to decline.",
 	}, "\n")
 }

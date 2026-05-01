@@ -103,6 +103,9 @@ defmodule AgentMachine.Providers.Echo do
       compaction_response?(agent) ->
         compaction_output(agent)
 
+      skill_generation_response?(agent) ->
+        skill_generation_output(agent)
+
       swarm_delegation_response?(agent) ->
         swarm_output(agent, opts)
 
@@ -199,6 +202,34 @@ defmodule AgentMachine.Providers.Echo do
   end
 
   defp covered_items(_payload), do: []
+
+  defp skill_generation_response?(%Agent{metadata: metadata}) when is_map(metadata) do
+    Map.get(metadata, :agent_machine_response) == "skill_generation" ||
+      Map.get(metadata, "agent_machine_response") == "skill_generation"
+  end
+
+  defp skill_generation_response?(_agent), do: false
+
+  defp skill_generation_output(%Agent{} = agent) do
+    payload = JSON.decode!(agent.input)
+    name = Map.fetch!(payload, "name")
+    description = Map.fetch!(payload, "description")
+
+    JSON.encode!(%{
+      "name" => name,
+      "description" => description,
+      "instructions" => """
+      Use this skill when the task matches: #{description}.
+
+      ## Workflow
+
+      - Confirm the request fits the skill description.
+      - Apply the requested command-specific behavior directly and concisely.
+      - Keep generated output focused on the user's current task.
+      - Fail fast when required input is missing instead of inventing defaults.
+      """
+    })
+  end
 
   defp structured_delegation_response?(%Agent{metadata: metadata}) when is_map(metadata) do
     Map.get(metadata, :agent_machine_response) == "delegation" ||

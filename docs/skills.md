@@ -93,6 +93,28 @@ mix agent_machine.skills create docs-helper \
 
 Fails if the skill already exists unless `--force` is provided.
 
+### Generate
+
+Asks the selected provider to draft a local skill, then writes and validates
+only `<skills-dir>/<name>/SKILL.md`. The command requires explicit provider,
+model, timeout, and pricing values. Remote provider API keys are read from the
+same environment variables used by runs, such as `OPENAI_API_KEY` or
+`OPENROUTER_API_KEY`.
+
+```sh
+mix agent_machine.skills generate docs-helper \
+  --skills-dir ~/.agent_machine/skills \
+  --description "Helps write concise project documentation" \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 120000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price>
+```
+
+Generation fails if the skill already exists. It does not create scripts,
+assets, references, README files, or other extra files.
+
 ### Validate
 
 Validates a skill folder or `SKILL.md` path:
@@ -335,6 +357,7 @@ Inspect and install via Elixir CLI:
 /skills update docs-helper
 /skills update --all
 /skills create docs-helper Helps write concise documentation
+/skills generate docs-helper Helps write concise documentation
 ```
 
 Control script exposure:

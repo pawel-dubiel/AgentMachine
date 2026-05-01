@@ -548,7 +548,7 @@ defmodule AgentMachine.RunSpec do
   defp validate_test_commands!(harnesses, _approval_mode, test_commands) do
     if :code_edit in harnesses do
       raise ArgumentError,
-            "run spec :test_commands require :tool_approval_mode :full_access"
+            "run spec :test_commands require :tool_approval_mode :full_access or :ask_before_write"
     else
       raise ArgumentError,
             "run spec :test_commands require :tool_harness :code_edit, got: #{inspect(harnesses)} with #{inspect(test_commands)}"

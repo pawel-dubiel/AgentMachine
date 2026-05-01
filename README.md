@@ -371,9 +371,16 @@ most common harnesses are:
 | `skills` | Selected skill references and assets. |
 
 Local file and code tools require `--tool-root`. Paths outside that root fail.
-Write operations require an approval mode that permits the requested risk. The
-TUI asks before enabling broader filesystem permissions and lets you allow safe
-writes, allow full access, or deny the request.
+Tool permissions have two layers:
+
+- Capability grants decide which narrow tools are visible to the current agent
+  attempt, such as `code-edit` under one root, selected MCP tools from the
+  already loaded MCP config, or exact allowlisted test commands.
+- Execution approvals decide whether one concrete risky tool call may run, such
+  as one write, delete, command, or network call.
+
+The runtime enforces both layers. The TUI only displays permission requests and
+sends approve/deny decisions back to the CLI.
 
 Approval modes:
 
@@ -382,13 +389,32 @@ Approval modes:
 - `auto-approved-safe`
 - `full-access`
 
+Interactive permission control is available only for JSONL runs:
+
+```sh
+mix agent_machine.run \
+  --jsonl \
+  --permission-control jsonl-stdio \
+  --tool-harness code-edit \
+  --tool-root /path/to/project \
+  --tool-timeout-ms 30000 \
+  --tool-max-rounds 6 \
+  --tool-approval-mode ask-before-write \
+  "fix the failing tests"
+```
+
+In interactive runs, `ask-before-write` exposes a safe `request_capability`
+negotiation tool so a worker can ask for a current-attempt grant mid-run. Grants
+are run-local, are not inherited by sibling workers, and are not persisted.
+`full-access` bypasses approval prompts for already allowed risk classes, but it
+does not bypass tool allowlists, MCP config allowlists, path guards, or exact
+test-command matching.
+
 Test commands are intentionally narrow. A model can run tests only through
 `code-edit` and only when the exact command was allowlisted with
-`--test-command`. CLI runs are non-interactive, so allowlisted test commands
-must use `full-access` there. `ClientRunner` callers may use
-`ask-before-write` without a callback only when the exposed tools are read-only;
-if any exposed tool has write, delete, command, or network risk,
-`tool_approval_callback` is required before the run starts.
+`--test-command`. `ask-before-write` requires an approval callback, or
+`--permission-control jsonl-stdio` in a JSONL CLI/TUI run, whenever exposed tools
+include write, delete, command, or network risk.
 
 Rollback for code-edit checkpoints:
 
@@ -412,8 +438,9 @@ snapshot tools, and keeps the setup visible in `/setup` and run banners.
 When using a standalone MCP config, pass an explicit tool budget with
 `/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>`.
 
-Browser navigation is a network-capable action, so it requires the appropriate
-approval level. A prompt should clearly request browser/MCP work, for example:
+Browser navigation is a network-capable action, so it requires either
+interactive `ask-before-write` permission control or explicit `full-access`. A
+prompt should clearly request browser/MCP work, for example:
 
 ```text
 Use agents and Playwright MCP to open https://example.com and report the page title.
@@ -422,7 +449,7 @@ Use agents and Playwright MCP to open https://example.com and report the page ti
 Auto mode also treats Google/search/news-style research prompts as browser work
 when the Playwright MCP browser tools are configured.
 If browser work is detected while approval is too narrow, the TUI prompts for
-MCP browser full-access and retries as an MCP-only run.
+interactive approval or full-access and retries as an MCP-only run.
 
 For a standalone example config, see [examples/playwright.mcp.json](examples/playwright.mcp.json).
 
@@ -441,6 +468,15 @@ Common commands:
 mix agent_machine.skills create docs-helper \
   --skills-dir ~/.agent_machine/skills \
   --description "Helps write concise project documentation"
+
+mix agent_machine.skills generate docs-helper \
+  --skills-dir ~/.agent_machine/skills \
+  --description "Helps write concise project documentation" \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 120000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price>
 
 mix agent_machine.skills list --skills-dir ~/.agent_machine/skills
 mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills

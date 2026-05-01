@@ -604,7 +604,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert Enum.count(run.events, fn event ->
              event.type == :tool_call_failed and event.agent_machine_role == "swarm_variant" and
                String.contains?(event.reason || "", "tool approval denied")
-           end) == 3
+           end) == 6
   end
 
   test "parses opt-in structured delegation output into follow-up agents" do
@@ -1523,6 +1523,8 @@ defmodule AgentMachine.OrchestratorTest do
     ]
 
     callback = fn context ->
+      assert is_binary(context.request_id)
+      assert context.kind == :tool_execution
       assert context.tool_call_id == "uppercase"
       assert context.risk == :write
       :approved
@@ -1541,6 +1543,58 @@ defmodule AgentMachine.OrchestratorTest do
 
     assert run.results["tool-user"].status == :ok
     assert run.results["tool-user"].tool_results["uppercase"].value == "HELLO"
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :permission_requested and event.kind == :tool_execution and
+               event.tool_call_id == "uppercase" and event.approval_risk == :write and
+               is_binary(event.request_id)
+           end)
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :permission_decided and event.kind == :tool_execution and
+               event.tool_call_id == "uppercase" and event.decision == :approved
+           end)
+  end
+
+  test "denied approval fingerprints avoid repeating identical prompts" do
+    parent = self()
+
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.RetryDeniedTool,
+        model: "test",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:approval_context, context.tool_call_id})
+      {:denied, "not now"}
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.TestTools.Uppercase],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:test_uppercase]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 3,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert_receive {:approval_context, "uppercase-1"}
+    refute_received {:approval_context, "uppercase-2"}
+
+    permission_requests =
+      Enum.filter(run.events, fn event ->
+        event.type == :permission_requested and event.kind == :tool_execution
+      end)
+
+    assert length(permission_requests) == 1
   end
 
   test "tool approval callback and events include swarm metadata" do
@@ -1592,6 +1646,48 @@ defmodule AgentMachine.OrchestratorTest do
                event.agent_machine_role == "swarm_variant" and event.variant_id == "minimal" and
                event.workspace == ".agent_machine/swarm/run-approval/minimal" and
                event.spawn_depth == 0
+           end)
+  end
+
+  test "request_capability can grant local files to the current agent attempt" do
+    root = tmp_root("agent-machine-capability-grant")
+    parent = self()
+
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.CapabilityRequesting,
+        model: "test",
+        input: root,
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:approval_context, context.kind, context.tool_call_id})
+      :approved
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.RequestCapability],
+               tool_policy:
+                 AgentMachine.ToolPolicy.new!(permissions: [:permission_control_request]),
+               tool_timeout_ms: 100,
+               tool_max_rounds: 3,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    assert run.results["tool-user"].status == :ok
+    assert File.read!(Path.join(root, "granted.txt")) == "granted"
+    assert_receive {:approval_context, :capability_grant, "capability"}
+    assert_receive {:approval_context, :tool_execution, "write"}
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :permission_requested and event.kind == :capability_grant and
+               event.capability == "local_files" and event.requested_root == root
            end)
   end
 
@@ -2380,6 +2476,60 @@ defmodule AgentMachine.TestProviders.SwarmCodeEdit do
   end
 end
 
+defmodule AgentMachine.TestProviders.CapabilityRequesting do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    usage = usage(agent, "ok")
+
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        {:ok,
+         %{
+           output: "requesting capability",
+           usage: usage,
+           tool_calls: [
+             %{
+               id: "capability",
+               tool: AgentMachine.Tools.RequestCapability,
+               input: %{capability: "local_files", root: agent.input, reason: "write granted.txt"}
+             }
+           ],
+           tool_state: %{stage: "capability"}
+         }}
+
+      %{state: %{stage: "capability"}} ->
+        {:ok,
+         %{
+           output: "writing file",
+           usage: usage,
+           tool_calls: [
+             %{
+               id: "write",
+               tool: AgentMachine.Tools.WriteFile,
+               input: %{path: "granted.txt", content: "granted"}
+             }
+           ],
+           tool_state: %{stage: "write"}
+         }}
+
+      %{state: %{stage: "write"}} ->
+        {:ok, %{output: "done", usage: usage}}
+    end
+  end
+
+  defp usage(agent, output) do
+    %{
+      input_tokens: String.length(agent.input),
+      output_tokens: String.length(output),
+      total_tokens: String.length(agent.input) + String.length(output)
+    }
+  end
+end
+
 defmodule AgentMachine.TestProviders.InvalidDynamicGraph do
   @behaviour AgentMachine.Provider
 
@@ -2915,6 +3065,73 @@ defmodule AgentMachine.TestProviders.ToolUsing do
        ],
        tool_state: %{round: 1},
        usage: usage(agent, output)
+     }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.RetryDeniedTool do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        tool_request(agent, "uppercase-1")
+
+      %{results: [%{result: %{status: "denied"}}], state: %{round: 1}} ->
+        tool_request(agent, "uppercase-2")
+
+      %{results: [%{result: %{status: "denied"}}]} ->
+        final_response("denied twice")
+    end
+  end
+
+  defp tool_request(agent, id) do
+    output = "requested uppercase"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: id,
+           tool: AgentMachine.TestTools.Uppercase,
+           input: %{value: agent.input}
+         }
+       ],
+       tool_state: %{round: if(id == "uppercase-1", do: 1, else: 2)},
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp final_response(output) do
+    {:ok,
+     %{
+       output: output,
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
      }}
   end
 

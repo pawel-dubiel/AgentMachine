@@ -6,13 +6,15 @@ defmodule AgentMachine.AgentRunner do
     AgentResult,
     ContextBudget,
     DelegationResponse,
-    MCP.Session,
     ToolHarness,
     ToolPolicy,
     ToolSessionSupervisor,
     Usage,
     UsageLedger
   }
+
+  alias AgentMachine.MCP.{Session, ToolFactory}
+  alias AgentMachine.Tools.{PathGuard, RequestCapability}
 
   def run(%Agent{} = agent, opts) when is_list(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
@@ -148,6 +150,7 @@ defmodule AgentMachine.AgentRunner do
       usage: empty_usage(),
       tool_results: %{},
       tool_call_ids: MapSet.new(),
+      denied_approval_fingerprints: MapSet.new(),
       events: []
     }
 
@@ -194,7 +197,7 @@ defmodule AgentMachine.AgentRunner do
   defp do_complete_agent(agent, opts, context, state) do
     opts = maybe_disable_tools(agent, opts)
 
-    case complete_provider(agent, opts, context) do
+    case safe_complete_provider(agent, opts, context) do
       {:ok,
        %{payload: %{output: output, usage: provider_usage} = payload, events: provider_events}}
       when is_binary(output) ->
@@ -225,9 +228,18 @@ defmodule AgentMachine.AgentRunner do
            tool_results: state.tool_results
          }}
 
+      {:provider_exception, reason} ->
+        error_completion(reason, state)
+
       other ->
         {:invalid, other}
     end
+  end
+
+  defp safe_complete_provider(agent, opts, context) do
+    complete_provider(agent, opts, context)
+  rescue
+    exception -> {:provider_exception, Exception.format(:error, exception, __STACKTRACE__)}
   end
 
   defp complete_provider(agent, opts, context) do
@@ -395,14 +407,15 @@ defmodule AgentMachine.AgentRunner do
     else
       with {:ok, tool_state} <- tool_state_from_payload(payload),
            {:ok, tool_call_ids} <- validate_new_tool_call_ids(tool_calls, state.tool_call_ids),
-           {:ok, round_results, round_events} <-
+           {:ok, round_results, round_events, opts, denied_approval_fingerprints} <-
              run_tool_calls(
                tool_calls,
                opts,
                context.run_id,
                agent.id,
                context.attempt,
-               state.round + 1
+               state.round + 1,
+               state.denied_approval_fingerprints
              ) do
         continuation = %{state: tool_state, results: round_results}
         opts = Keyword.put(opts, :tool_continuation, continuation)
@@ -412,6 +425,7 @@ defmodule AgentMachine.AgentRunner do
           | round: state.round + 1,
             tool_results: merge_tool_results!(state.tool_results, round_results),
             tool_call_ids: tool_call_ids,
+            denied_approval_fingerprints: denied_approval_fingerprints,
             events: state.events ++ round_events
         }
 
@@ -533,35 +547,414 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round) do
+  defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round, denied_fingerprints) do
     allowed_tools = allowed_tools_from_opts!(opts)
     tool_policy = tool_policy_from_opts!(opts)
     tool_approval_mode = tool_approval_mode_from_opts!(opts)
     tool_timeout_ms = tool_timeout_ms_from_opts!(opts)
 
-    Enum.reduce_while(tool_calls, {:ok, [], []}, fn tool_call, {:ok, results, events} ->
-      case run_tool_call(
-             tool_call,
-             opts,
-             allowed_tools,
-             tool_policy,
-             tool_approval_mode,
-             tool_timeout_ms,
-             %{
-               run_id: run_id,
-               agent_id: agent_id,
-               attempt: attempt,
-               round: round
-             }
-             |> Map.merge(agent_event_metadata(opts))
-           ) do
-        {:ok, result, call_events} ->
-          {:cont, {:ok, results ++ [result], events ++ call_events}}
+    event_context =
+      %{
+        run_id: run_id,
+        agent_id: agent_id,
+        attempt: attempt,
+        round: round
+      }
+      |> Map.merge(agent_event_metadata(opts))
 
-        {:error, reason, call_events} ->
-          {:halt, {:error, reason, events ++ call_events}}
+    if capability_request_round?(tool_calls) do
+      run_capability_request_round(
+        tool_calls,
+        opts,
+        allowed_tools,
+        tool_policy,
+        tool_timeout_ms,
+        event_context,
+        denied_fingerprints
+      )
+    else
+      run_regular_tool_call_round(
+        tool_calls,
+        opts,
+        allowed_tools,
+        tool_policy,
+        tool_approval_mode,
+        tool_timeout_ms,
+        event_context,
+        denied_fingerprints
+      )
+    end
+  end
+
+  defp run_regular_tool_call_round(
+         tool_calls,
+         opts,
+         allowed_tools,
+         tool_policy,
+         tool_approval_mode,
+         tool_timeout_ms,
+         event_context,
+         denied_fingerprints
+       ) do
+    Enum.reduce_while(
+      tool_calls,
+      {:ok, [], [], opts, denied_fingerprints},
+      fn tool_call, {:ok, results, events, opts, denied_fingerprints} ->
+        tool_call_result =
+          run_tool_call(
+            tool_call,
+            opts,
+            allowed_tools,
+            tool_policy,
+            tool_approval_mode,
+            tool_timeout_ms,
+            event_context,
+            denied_fingerprints
+          )
+
+        handle_tool_call_result(tool_call_result, results, events, opts)
       end
+    )
+  end
+
+  defp handle_tool_call_result(
+         {:ok, result, call_events, denied_fingerprints},
+         results,
+         events,
+         opts
+       ) do
+    {:cont, {:ok, results ++ [result], events ++ call_events, opts, denied_fingerprints}}
+  end
+
+  defp handle_tool_call_result({:error, reason, call_events}, _results, events, _opts) do
+    {:halt, {:error, reason, events ++ call_events}}
+  end
+
+  defp capability_request_round?(tool_calls) do
+    Enum.any?(tool_calls, fn
+      tool_call when is_map(tool_call) -> safe_tool_call_tool(tool_call) == RequestCapability
+      _other -> false
     end)
+  end
+
+  defp run_capability_request_round(
+         [tool_call],
+         opts,
+         allowed_tools,
+         tool_policy,
+         _tool_timeout_ms,
+         event_context,
+         denied_fingerprints
+       ) do
+    started_at = DateTime.utc_now()
+    id = safe_tool_call_id(tool_call)
+    tool = safe_tool_call_tool(tool_call)
+
+    with {:ok, id} <- validate_tool_call_id(id),
+         {:ok, ^tool} <- validate_tool_module(tool),
+         :ok <- validate_request_capability_tool(tool),
+         :ok <- validate_allowed_tool(tool, allowed_tools),
+         :ok <- validate_tool_permission(tool_policy, tool),
+         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)) do
+      started_event = tool_call_started_event(event_context, id, tool, started_at, opts, input)
+      emit_event!(opts, started_event)
+
+      case request_capability_grant(opts, id, input, event_context) do
+        {:ok, updated_opts, result, permission_events} ->
+          finished_at = DateTime.utc_now()
+
+          finished_event =
+            tool_call_finished_event(
+              event_context,
+              id,
+              tool,
+              started_at,
+              finished_at,
+              opts,
+              result
+            )
+
+          emit_event!(opts, finished_event)
+
+          {:ok, [%{id: id, result: result}],
+           [started_event] ++ permission_events ++ [finished_event], updated_opts,
+           denied_fingerprints}
+
+        {:denied, reason, permission_events} ->
+          {:ok, result, denied_events} =
+            denied_tool_call(opts, event_context, id, tool, started_at, reason)
+
+          {:ok, [result], [started_event] ++ permission_events ++ denied_events, opts,
+           denied_fingerprints}
+
+        {:error, reason, permission_events} ->
+          {:error, reason, failed_events} =
+            failed_tool_call(opts, event_context, id, tool, started_at, reason, false)
+
+          {:error, reason, [started_event] ++ permission_events ++ failed_events}
+      end
+    else
+      {:error, reason} ->
+        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+    end
+  end
+
+  defp run_capability_request_round(
+         tool_calls,
+         _opts,
+         _allowed_tools,
+         _tool_policy,
+         _tool_timeout_ms,
+         _event_context,
+         _denied_fingerprints
+       ) do
+    {:error,
+     "request_capability must be the only tool call in its provider round, got #{length(tool_calls)} call(s)",
+     []}
+  end
+
+  defp validate_request_capability_tool(RequestCapability), do: :ok
+
+  defp validate_request_capability_tool(tool) do
+    {:error,
+     "request_capability round must call #{inspect(RequestCapability)}, got: #{inspect(tool)}"}
+  end
+
+  defp request_capability_grant(opts, tool_call_id, input, event_context) do
+    request_id = permission_request_id(event_context.run_id, event_context.agent_id, tool_call_id)
+    capability = input_value(input, "capability")
+    reason = input_value(input, "reason")
+
+    request_event =
+      permission_requested_event(
+        event_context,
+        %{
+          request_id: request_id,
+          kind: :capability_grant,
+          tool_call_id: tool_call_id,
+          tool: tool_name(RequestCapability),
+          permission: RequestCapability.permission(),
+          approval_risk: RequestCapability.approval_risk(),
+          approval_mode: Keyword.get(opts, :tool_approval_mode),
+          capability: capability,
+          requested_root: input_value(input, "root"),
+          requested_tool: input_value(input, "tool"),
+          requested_command: input_value(input, "command"),
+          reason: reason,
+          input_summary: summarize_tool_input(input)
+        }
+      )
+
+    approval_context =
+      Map.merge(event_context, %{
+        request_id: request_id,
+        kind: :capability_grant,
+        tool_call_id: tool_call_id,
+        tool: RequestCapability,
+        input: input,
+        risk: :read,
+        capability: capability
+      })
+
+    case request_permission(opts, request_event, approval_context) do
+      {:approved, approval_reason, events} ->
+        case apply_capability_grant(opts, input) do
+          {:ok, updated_opts, result} ->
+            {:ok, updated_opts, Map.put(result, :approval_reason, approval_reason), events}
+
+          {:error, reason} ->
+            {:error, reason, events}
+        end
+
+      {:denied, denied_reason, events} ->
+        {:denied, permission_denied_reason(denied_reason), events}
+
+      {:cancelled, cancel_reason, events} ->
+        {:denied, permission_denied_reason(cancel_reason), events}
+
+      {:error, reason, events} ->
+        {:error, reason, events}
+    end
+  end
+
+  defp apply_capability_grant(opts, input) do
+    case input_value(input, "capability") do
+      "local_files" ->
+        root = input_value(input, "root")
+        add_harness_capability(opts, :local_files, root)
+
+      "code_edit" ->
+        root = input_value(input, "root")
+        add_harness_capability(opts, :code_edit, root)
+
+      "mcp_tool" ->
+        add_mcp_tool_capability(opts, input_value(input, "tool"))
+
+      "test_command" ->
+        add_test_command_capability(opts, input_value(input, "command"))
+
+      capability ->
+        {:error, "unsupported capability request: #{inspect(capability)}"}
+    end
+  end
+
+  defp add_harness_capability(opts, harness, root) when harness in [:local_files, :code_edit] do
+    with {:ok, root} <- validate_capability_root(root),
+         {:ok, opts} <- put_capability_root(opts, root) do
+      tools = ToolHarness.builtin_many!([harness], tool_harness_opts(opts))
+      updated_opts = add_capability_tools(opts, harness, tools)
+
+      {:ok, updated_opts,
+       %{
+         status: "ok",
+         capability: Atom.to_string(harness),
+         root: Keyword.fetch!(updated_opts, :tool_root),
+         tools: provider_tool_names(tools)
+       }}
+    end
+  end
+
+  defp add_mcp_tool_capability(opts, provider_name) do
+    with {:ok, provider_name} <- validate_non_empty_binary(provider_name, "tool"),
+         {:ok, config} <- fetch_required_opt(opts, :mcp_config, "MCP config"),
+         {:ok, tool} <- configured_mcp_tool(config, provider_name) do
+      updated_opts = add_capability_tools(opts, :mcp, [tool])
+
+      {:ok, updated_opts,
+       %{
+         status: "ok",
+         capability: "mcp_tool",
+         tool: provider_name,
+         tools: [provider_name]
+       }}
+    end
+  end
+
+  defp add_test_command_capability(opts, command) do
+    with {:ok, command} <- validate_non_empty_binary(command, "command"),
+         {:ok, commands} <- fetch_required_opt(opts, :test_commands, "test commands"),
+         :ok <- validate_exact_test_command(command, commands) do
+      tools = [AgentMachine.Tools.RunTestCommand]
+      updated_opts = add_capability_tools(opts, :code_edit, tools)
+
+      {:ok, updated_opts,
+       %{
+         status: "ok",
+         capability: "test_command",
+         command: command,
+         tools: provider_tool_names(tools)
+       }}
+    end
+  end
+
+  defp validate_capability_root(root) do
+    with {:ok, root} <- validate_non_empty_binary(root, "root") do
+      {:ok, Path.expand(root)}
+    end
+  end
+
+  defp put_capability_root(opts, root) do
+    case Keyword.fetch(opts, :tool_root) do
+      {:ok, active_root} when is_binary(active_root) and active_root != "" ->
+        active_root = PathGuard.root!(opts)
+        requested_root = PathGuard.existing_target!(active_root, root)
+
+        case File.stat!(requested_root) do
+          %{type: :directory} ->
+            {:ok, Keyword.put(opts, :tool_root, requested_root)}
+
+          %{type: type} ->
+            {:error, "requested root must be a directory, got: #{inspect(type)}"}
+        end
+
+      _other ->
+        case File.stat(root) do
+          {:ok, %{type: :directory}} ->
+            {:ok, Keyword.put(opts, :tool_root, root)}
+
+          {:ok, %{type: type}} ->
+            {:error, "requested root must be a directory, got: #{inspect(type)}"}
+
+          {:error, reason} ->
+            {:error, "requested root does not exist: #{inspect(root)} (#{inspect(reason)})"}
+        end
+    end
+  rescue
+    exception in ArgumentError -> {:error, Exception.message(exception)}
+  end
+
+  defp configured_mcp_tool(config, provider_name) do
+    tools = ToolFactory.tools!(config)
+
+    case Enum.find(tools, &(tool_name(&1) == provider_name)) do
+      nil -> {:error, "MCP tool #{inspect(provider_name)} is not configured"}
+      tool -> {:ok, tool}
+    end
+  rescue
+    exception in ArgumentError -> {:error, Exception.message(exception)}
+  end
+
+  defp validate_exact_test_command(command, commands) when is_list(commands) do
+    if command in commands do
+      :ok
+    else
+      {:error, "test command must exactly match a configured allowlist entry"}
+    end
+  end
+
+  defp validate_exact_test_command(_command, commands) do
+    {:error, "test commands must be a list, got: #{inspect(commands)}"}
+  end
+
+  defp add_capability_tools(opts, harness, tools) when is_list(tools) do
+    allowed_tools =
+      opts
+      |> Keyword.get(:allowed_tools, [])
+      |> Kernel.++(tools)
+      |> Enum.uniq()
+
+    permissions = Enum.map(allowed_tools, &ToolPolicy.tool_permission!/1)
+    harnesses = merge_policy_harness(Keyword.get(opts, :tool_policy), harness)
+
+    opts
+    |> Keyword.put(:allowed_tools, allowed_tools)
+    |> Keyword.put(:tool_policy, ToolPolicy.new!(harness: harnesses, permissions: permissions))
+  end
+
+  defp merge_policy_harness(%ToolPolicy{harness: existing}, harness) when is_list(existing),
+    do: Enum.uniq(existing ++ [harness])
+
+  defp merge_policy_harness(%ToolPolicy{harness: existing}, harness) when is_atom(existing),
+    do: Enum.uniq([existing, harness])
+
+  defp merge_policy_harness(_policy, harness), do: [harness]
+
+  defp tool_harness_opts(opts) do
+    [
+      test_commands: Keyword.get(opts, :test_commands),
+      mcp_config: Keyword.get(opts, :mcp_config),
+      allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false)
+    ]
+  end
+
+  defp provider_tool_names(tools) do
+    tools
+    |> ToolHarness.definitions!()
+    |> Enum.map(& &1.name)
+  end
+
+  defp fetch_required_opt(opts, key, label) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when not is_nil(value) -> {:ok, value}
+      _other -> {:error, "#{label} is not configured for this run"}
+    end
+  end
+
+  defp validate_non_empty_binary(value, _field) when is_binary(value) and byte_size(value) > 0,
+    do: {:ok, value}
+
+  defp validate_non_empty_binary(value, field) do
+    {:error, "capability request #{field} must be a non-empty string, got: #{inspect(value)}"}
   end
 
   defp run_tool_call(
@@ -571,7 +964,8 @@ defmodule AgentMachine.AgentRunner do
          tool_policy,
          tool_approval_mode,
          tool_timeout_ms,
-         event_context
+         event_context,
+         denied_fingerprints
        )
        when is_map(tool_call) do
     started_at = DateTime.utc_now()
@@ -582,9 +976,25 @@ defmodule AgentMachine.AgentRunner do
          {:ok, tool} <- validate_tool_module(tool),
          :ok <- validate_allowed_tool(tool, allowed_tools),
          :ok <- validate_tool_permission(tool_policy, tool),
-         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)),
-         :ok <- validate_tool_approval(opts, tool_approval_mode, tool, id, input, event_context) do
-      do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at)
+         {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)) do
+      approval_fingerprint = approval_fingerprint(tool, input)
+
+      if MapSet.member?(denied_fingerprints, approval_fingerprint) do
+        repeat_denied_tool_call(opts, event_context, id, tool, started_at, denied_fingerprints)
+      else
+        run_tool_call_after_approval(%{
+          opts: opts,
+          tool_approval_mode: tool_approval_mode,
+          tool_timeout_ms: tool_timeout_ms,
+          event_context: event_context,
+          id: id,
+          tool: tool,
+          input: input,
+          started_at: started_at,
+          approval_fingerprint: approval_fingerprint,
+          denied_fingerprints: denied_fingerprints
+        })
+      end
     else
       {:error, reason} ->
         failed_tool_call(opts, event_context, id, tool, started_at, reason)
@@ -598,9 +1008,116 @@ defmodule AgentMachine.AgentRunner do
          _tool_policy,
          _tool_approval_mode,
          _tool_timeout_ms,
-         _event_context
+         _event_context,
+         _denied_fingerprints
        ) do
     raise ArgumentError, "tool call must be a map, got: #{inspect(tool_call)}"
+  end
+
+  defp repeat_denied_tool_call(opts, event_context, id, tool, started_at, denied_fingerprints) do
+    {:ok, result, events} =
+      denied_tool_call(
+        opts,
+        event_context,
+        id,
+        tool,
+        started_at,
+        "tool approval denied previously for the same request"
+      )
+
+    {:ok, result, events, denied_fingerprints}
+  end
+
+  defp run_tool_call_after_approval(context) do
+    case validate_tool_approval(
+           context.opts,
+           context.tool_approval_mode,
+           context.tool,
+           context.id,
+           context.input,
+           context.event_context
+         ) do
+      {:approved, approval_events} ->
+        run_approved_tool_call(
+          context.opts,
+          context.tool_timeout_ms,
+          context.event_context,
+          context.id,
+          context.tool,
+          context.input,
+          approval_events,
+          context.denied_fingerprints
+        )
+
+      {:denied, reason, approval_events} ->
+        run_denied_tool_call(
+          context.opts,
+          context.event_context,
+          context.id,
+          context.tool,
+          reason,
+          approval_events,
+          context.approval_fingerprint,
+          context.denied_fingerprints
+        )
+
+      {:error, reason, approval_events} ->
+        {:error, reason, events} =
+          failed_tool_call(
+            context.opts,
+            context.event_context,
+            context.id,
+            context.tool,
+            context.started_at,
+            reason
+          )
+
+        {:error, reason, approval_events ++ events}
+    end
+  end
+
+  defp run_approved_tool_call(
+         opts,
+         tool_timeout_ms,
+         event_context,
+         id,
+         tool,
+         input,
+         approval_events,
+         denied_fingerprints
+       ) do
+    execution_started_at = DateTime.utc_now()
+
+    {:ok, result, events} =
+      do_run_tool_call(
+        tool,
+        id,
+        input,
+        opts,
+        tool_timeout_ms,
+        event_context,
+        execution_started_at
+      )
+
+    {:ok, result, approval_events ++ events, denied_fingerprints}
+  end
+
+  defp run_denied_tool_call(
+         opts,
+         event_context,
+         id,
+         tool,
+         reason,
+         approval_events,
+         approval_fingerprint,
+         denied_fingerprints
+       ) do
+    denied_at = DateTime.utc_now()
+
+    {:ok, result, events} = denied_tool_call(opts, event_context, id, tool, denied_at, reason)
+
+    {:ok, result, approval_events ++ events,
+     MapSet.put(denied_fingerprints, approval_fingerprint)}
   end
 
   defp do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at) do
@@ -680,6 +1197,24 @@ defmodule AgentMachine.AgentRunner do
 
   defp tool_error_text(reason) when is_binary(reason), do: reason
   defp tool_error_text(reason), do: inspect(reason)
+
+  defp denied_tool_call(opts, event_context, id, tool, started_at, reason) do
+    finished_at = DateTime.utc_now()
+    error = tool_error_text(reason)
+
+    failed_event =
+      tool_call_failed_event(event_context, id, tool, started_at, finished_at, opts, error)
+
+    emit_event!(opts, failed_event)
+
+    result = %{
+      status: "denied",
+      error: error,
+      tool: tool_name(tool)
+    }
+
+    {:ok, %{id: id, result: result}, [failed_event]}
+  end
 
   defp failed_tool_call(opts, event_context, id, tool, started_at, reason, emit_started? \\ true) do
     finished_at = DateTime.utc_now()
@@ -804,22 +1339,29 @@ defmodule AgentMachine.AgentRunner do
     {:error, "tool input must be a map, got: #{inspect(input)}"}
   end
 
+  defp approval_fingerprint(tool, input) do
+    :sha256
+    |> :crypto.hash(:erlang.term_to_binary({tool, input}))
+    |> Base.encode16(case: :lower)
+  end
+
   defp validate_tool_approval(opts, mode, tool, id, input, event_context) do
     risk = ToolPolicy.approval_risk!(tool)
 
     cond do
       approval_allowed?(mode, risk) ->
-        :ok
+        {:approved, []}
 
       mode == :ask_before_write and risk in [:write, :delete, :command, :network] ->
         request_tool_approval(opts, tool, id, input, event_context, risk)
 
       true ->
         {:error,
-         "tool #{inspect(tool)} with approval risk #{inspect(risk)} is not allowed by tool approval mode #{inspect(mode)}"}
+         "tool #{inspect(tool)} with approval risk #{inspect(risk)} is not allowed by tool approval mode #{inspect(mode)}",
+         []}
     end
   rescue
-    exception in ArgumentError -> {:error, Exception.message(exception)}
+    exception in ArgumentError -> {:error, Exception.message(exception), []}
   end
 
   defp approval_allowed?(:read_only, :read), do: true
@@ -834,34 +1376,94 @@ defmodule AgentMachine.AgentRunner do
   defp request_tool_approval(opts, tool, id, input, event_context, risk) do
     case Keyword.fetch(opts, :tool_approval_callback) do
       {:ok, callback} when is_function(callback, 1) ->
-        approval_context =
-          Map.merge(event_context, %{tool_call_id: id, tool: tool, input: input, risk: risk})
+        request_id = permission_request_id(event_context.run_id, event_context.agent_id, id)
 
-        callback.(approval_context)
-        |> approval_callback_result()
+        request_event =
+          permission_requested_event(
+            event_context,
+            %{
+              request_id: request_id,
+              kind: :tool_execution,
+              tool_call_id: id,
+              tool: tool_name(tool),
+              permission: safe_tool_permission(tool),
+              approval_risk: risk,
+              approval_mode: Keyword.get(opts, :tool_approval_mode),
+              requested_root: input_value(input, "root") || input_value(input, "cwd"),
+              requested_command: input_value(input, "command"),
+              input_summary: summarize_tool_input(input)
+            }
+          )
+
+        approval_context =
+          Map.merge(event_context, %{
+            request_id: request_id,
+            kind: :tool_execution,
+            tool_call_id: id,
+            tool: tool,
+            input: input,
+            risk: risk
+          })
+
+        case request_permission(opts, request_event, approval_context) do
+          {:approved, _reason, events} -> {:approved, events}
+          {:denied, reason, events} -> {:denied, permission_denied_reason(reason), events}
+          {:cancelled, reason, events} -> {:denied, permission_denied_reason(reason), events}
+          {:error, reason, events} -> {:error, reason, events}
+        end
 
       {:ok, callback} ->
         {:error,
-         ":tool_approval_callback must be a function of arity 1, got: #{inspect(callback)}"}
+         ":tool_approval_callback must be a function of arity 1, got: #{inspect(callback)}", []}
 
       :error ->
         {:error,
-         "tool #{inspect(tool)} with approval risk #{inspect(risk)} requires approval for tool approval mode :ask_before_write"}
+         "tool #{inspect(tool)} with approval risk #{inspect(risk)} requires approval for tool approval mode :ask_before_write",
+         []}
     end
   end
 
-  defp approval_callback_result(:approved), do: :ok
-  defp approval_callback_result(true), do: :ok
-  defp approval_callback_result({:approved, _reason}), do: :ok
+  defp request_permission(opts, request_event, approval_context) do
+    emit_event!(opts, request_event)
+    callback = Keyword.fetch!(opts, :tool_approval_callback)
+
+    decision = approval_callback_result(callback.(approval_context))
+    decision_event = permission_decision_event(request_event, decision)
+    emit_event!(opts, decision_event)
+
+    append_decision_events(decision, [request_event, decision_event])
+  rescue
+    exception ->
+      reason = Exception.message(exception)
+      cancel_event = permission_cancelled_event(request_event, reason)
+      emit_event!(opts, cancel_event)
+      {:error, reason, [request_event, cancel_event]}
+  end
+
+  defp approval_callback_result(:approved), do: {:approved, ""}
+  defp approval_callback_result(true), do: {:approved, ""}
+  defp approval_callback_result({:approved, reason}), do: {:approved, stringify_reason(reason)}
+  defp approval_callback_result({:cancelled, reason}), do: {:cancelled, stringify_reason(reason)}
 
   defp approval_callback_result({:denied, reason}),
-    do: {:error, "tool approval denied: #{inspect(reason)}"}
+    do: {:denied, stringify_reason(reason)}
 
-  defp approval_callback_result(false), do: {:error, "tool approval denied"}
+  defp approval_callback_result(false), do: {:denied, ""}
 
   defp approval_callback_result(result) do
     {:error, "tool approval callback returned invalid result: #{inspect(result)}"}
   end
+
+  defp append_decision_events({:approved, reason}, events), do: {:approved, reason, events}
+  defp append_decision_events({:denied, reason}, events), do: {:denied, reason, events}
+  defp append_decision_events({:cancelled, reason}, events), do: {:cancelled, reason, events}
+  defp append_decision_events({:error, reason}, events), do: {:error, reason, events}
+
+  defp permission_denied_reason(""), do: "tool approval denied"
+  defp permission_denied_reason(reason), do: "tool approval denied: #{reason}"
+
+  defp stringify_reason(reason) when is_binary(reason), do: reason
+  defp stringify_reason(reason), do: inspect(reason)
 
   defp tool_approval_mode_from_opts!(opts) do
     case Keyword.fetch(opts, :tool_approval_mode) do
@@ -960,6 +1562,107 @@ defmodule AgentMachine.AgentRunner do
       reason: reason,
       at: finished_at
     }
+  end
+
+  defp permission_requested_event(context, attrs) do
+    %{
+      type: :permission_requested,
+      run_id: context.run_id,
+      agent_id: context.agent_id,
+      attempt: context.attempt,
+      round: context.round,
+      request_id: Map.fetch!(attrs, :request_id),
+      kind: Map.fetch!(attrs, :kind),
+      tool_call_id: Map.fetch!(attrs, :tool_call_id),
+      tool: Map.fetch!(attrs, :tool),
+      permission: Map.fetch!(attrs, :permission),
+      approval_risk: Map.fetch!(attrs, :approval_risk),
+      approval_mode: Map.fetch!(attrs, :approval_mode),
+      capability: Map.get(attrs, :capability),
+      requested_root: Map.get(attrs, :requested_root),
+      requested_tool: Map.get(attrs, :requested_tool),
+      requested_command: Map.get(attrs, :requested_command),
+      input_summary: Map.get(attrs, :input_summary),
+      reason: Map.get(attrs, :reason),
+      at: DateTime.utc_now()
+    }
+    |> Map.merge(tool_event_metadata(context))
+    |> reject_nil_values()
+  end
+
+  defp permission_decision_event(request_event, {decision, reason})
+       when decision in [:approved, :denied] do
+    request_event
+    |> Map.take([
+      :run_id,
+      :agent_id,
+      :parent_agent_id,
+      :attempt,
+      :round,
+      :request_id,
+      :kind,
+      :tool_call_id,
+      :tool,
+      :permission,
+      :approval_risk,
+      :approval_mode,
+      :capability,
+      :requested_root,
+      :requested_tool,
+      :requested_command,
+      :agent_machine_role,
+      :swarm_id,
+      :variant_id,
+      :workspace,
+      :spawn_depth
+    ])
+    |> Map.merge(%{
+      type: :permission_decided,
+      decision: decision,
+      reason: reason,
+      at: DateTime.utc_now()
+    })
+    |> reject_nil_values()
+  end
+
+  defp permission_decision_event(request_event, {:error, reason}),
+    do: permission_cancelled_event(request_event, reason)
+
+  defp permission_decision_event(request_event, {:cancelled, reason}),
+    do: permission_cancelled_event(request_event, reason)
+
+  defp permission_cancelled_event(request_event, reason) do
+    request_event
+    |> Map.take([
+      :run_id,
+      :agent_id,
+      :parent_agent_id,
+      :attempt,
+      :round,
+      :request_id,
+      :kind,
+      :tool_call_id,
+      :tool,
+      :permission,
+      :approval_risk,
+      :approval_mode,
+      :capability,
+      :requested_root,
+      :requested_tool,
+      :requested_command,
+      :agent_machine_role,
+      :swarm_id,
+      :variant_id,
+      :workspace,
+      :spawn_depth
+    ])
+    |> Map.merge(%{type: :permission_cancelled, reason: reason, at: DateTime.utc_now()})
+    |> reject_nil_values()
+  end
+
+  defp permission_request_id(run_id, agent_id, tool_call_id) do
+    entropy = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    Enum.join(["perm", run_id, agent_id, tool_call_id, entropy], "-")
   end
 
   defp tool_call_started_event(context, id, tool, at, opts, input) do
@@ -1121,6 +1824,14 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
+  defp input_value(input, key) when is_map(input) and is_binary(key) do
+    atom_key = String.to_existing_atom(key)
+
+    Map.get(input, key) || Map.get(input, atom_key)
+  rescue
+    ArgumentError -> Map.get(input, key)
+  end
+
   defp merge_result_display_metadata(nil, _result), do: nil
 
   defp merge_result_display_metadata(summary, result) when is_map(summary) do
@@ -1130,6 +1841,10 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp merge_result_display_metadata(summary, _result), do: summary
+
+  defp reject_nil_values(map) when is_map(map) do
+    Map.reject(map, fn {_key, value} -> is_nil(value) end)
+  end
 
   defp maybe_put_result_path(summary, result) do
     case Map.get(result, :path) || Map.get(result, "path") do

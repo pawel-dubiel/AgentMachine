@@ -12,6 +12,7 @@ defmodule AgentMachine.ClientRunner do
     RunSpec,
     Telemetry,
     ToolPolicy,
+    Tools.RequestCapability,
     WorkflowRouter
   }
 
@@ -27,6 +28,7 @@ defmodule AgentMachine.ClientRunner do
     write_workflow_route_event(spec, workflow_route)
     skill_selection = Selector.select!(spec)
     {agents, run_opts} = build_workflow(spec, workflow_route)
+    run_opts = put_permission_control(run_opts, opts)
     validate_runtime_opts!(run_opts, opts)
     run_opts = put_skill_opts(run_opts, spec, skill_selection)
     run_opts = put_timeout_lease_opts(run_opts, spec)
@@ -124,7 +126,7 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp validate_opts!(opts) do
-    allowed_keys = [:event_sink, :tool_approval_callback]
+    allowed_keys = [:event_sink, :permission_control, :tool_approval_callback]
     unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
 
     if unknown_keys != [] do
@@ -133,6 +135,36 @@ defmodule AgentMachine.ClientRunner do
 
     validate_optional_callback!(opts, :event_sink)
     validate_optional_callback!(opts, :tool_approval_callback)
+  end
+
+  defp put_permission_control(run_opts, opts) do
+    case Keyword.fetch(opts, :permission_control) do
+      :error ->
+        run_opts
+
+      {:ok, control} ->
+        run_opts
+        |> Keyword.put(:permission_control, control)
+        |> maybe_put_request_capability_tool()
+    end
+  end
+
+  defp maybe_put_request_capability_tool(run_opts) do
+    case {Keyword.fetch(run_opts, :allowed_tools), Keyword.fetch(run_opts, :tool_policy)} do
+      {{:ok, tools}, {:ok, %ToolPolicy{} = policy}} ->
+        tools = Enum.uniq(tools ++ [RequestCapability])
+        permissions = tools |> Enum.map(&ToolPolicy.tool_permission!/1) |> Enum.uniq()
+
+        run_opts
+        |> Keyword.put(:allowed_tools, tools)
+        |> Keyword.put(
+          :tool_policy,
+          ToolPolicy.new!(harness: policy.harness, permissions: permissions)
+        )
+
+      _other ->
+        run_opts
+    end
   end
 
   defp validate_optional_callback!(opts, key) do

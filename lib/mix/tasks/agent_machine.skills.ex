@@ -9,6 +9,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     JSON,
     Skills.ClawHub,
     Skills.Creator,
+    Skills.Generator,
     Skills.Installer,
     Skills.Loader,
     Skills.Manifest,
@@ -24,6 +25,10 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     ref: :string,
     path: :string,
     description: :string,
+    provider: :string,
+    model: :string,
+    input_price_per_million: :float,
+    output_price_per_million: :float,
     resources: :string,
     source: :string,
     sort: :string,
@@ -46,7 +51,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
 
       [] ->
         Mix.raise(
-          "usage: mix agent_machine.skills <list|search|show|validate|install|install-git|create|remove|update>"
+          "usage: mix agent_machine.skills <list|search|show|validate|install|install-git|create|generate|remove|update>"
         )
     end
   end
@@ -70,6 +75,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
   defp dispatch!("install", opts, positional), do: install!(opts, positional)
   defp dispatch!("install-git", opts, positional), do: install_git!(opts, positional)
   defp dispatch!("create", opts, positional), do: create!(opts, positional)
+  defp dispatch!("generate", opts, positional), do: generate!(opts, positional)
   defp dispatch!("remove", opts, positional), do: remove!(opts, positional)
   defp dispatch!("update", opts, positional), do: update!(opts, positional)
 
@@ -237,6 +243,26 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     )
   end
 
+  defp generate!(opts, [name]) do
+    skill =
+      Generator.generate!(name,
+        skills_dir: skills_dir!(opts),
+        description: fetch_required_option!(opts, :description),
+        provider: provider_from_opts!(opts),
+        model: fetch_required_option!(opts, :model),
+        http_timeout_ms: fetch_required_value!(opts, :http_timeout_ms),
+        pricing: pricing_from_opts!(opts)
+      )
+
+    %{created: Manifest.catalog_entry(skill)}
+  end
+
+  defp generate!(_opts, _positional) do
+    Mix.raise(
+      "usage: mix agent_machine.skills generate <name> --description <text> --skills-dir <path> --provider <echo|openai|openrouter> --model <id> --http-timeout-ms <ms> --input-price-per-million <n> --output-price-per-million <n>"
+    )
+  end
+
   defp remove!(opts, [name]) do
     Installer.remove!(name, skills_dir: skills_dir!(opts))
   end
@@ -317,6 +343,47 @@ defmodule Mix.Tasks.AgentMachine.Skills do
       {:ok, value} when is_binary(value) and byte_size(value) > 0 -> value
       {:ok, value} -> Mix.raise("--#{option_name(key)} must be non-empty, got: #{inspect(value)}")
       :error -> Mix.raise("missing required --#{option_name(key)} option")
+    end
+  end
+
+  defp fetch_required_value!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> value
+      :error -> Mix.raise("missing required --#{option_name(key)} option")
+    end
+  end
+
+  defp provider_from_opts!(opts) do
+    case fetch_required_option!(opts, :provider) do
+      "echo" ->
+        :echo
+
+      "openai" ->
+        :openai
+
+      "openrouter" ->
+        :openrouter
+
+      provider ->
+        Mix.raise("--provider must be echo, openai, or openrouter, got: #{inspect(provider)}")
+    end
+  end
+
+  defp pricing_from_opts!(opts) do
+    case {Keyword.fetch(opts, :input_price_per_million),
+          Keyword.fetch(opts, :output_price_per_million)} do
+      {{:ok, input}, {:ok, output}} ->
+        %{input_per_million: input, output_per_million: output}
+
+      {:error, :error} ->
+        Mix.raise(
+          "missing required --input-price-per-million and --output-price-per-million options"
+        )
+
+      _other ->
+        Mix.raise(
+          "--input-price-per-million and --output-price-per-million must be provided together"
+        )
     end
   end
 

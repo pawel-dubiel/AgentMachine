@@ -14,7 +14,7 @@ import (
 const (
 	defaultMCPToolTimeout   = "120000"
 	defaultMCPToolMaxRounds = "6"
-	defaultMCPToolApproval  = "full-access"
+	defaultMCPToolApproval  = "ask-before-write"
 )
 
 type mcpConfigFile struct {
@@ -102,7 +102,7 @@ func (m model) handleMCPAddCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "added MCP playwright config=" + configPath + " approval=full-access; filesystem tools disabled for this MCP-only preset"})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "added MCP playwright config=" + configPath + " approval=ask-before-write; filesystem tools disabled for this MCP-only preset"})
 	return m, nil
 }
 

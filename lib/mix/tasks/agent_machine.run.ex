@@ -20,6 +20,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     tool_max_rounds: :integer,
     tool_root: :string,
     tool_approval_mode: :string,
+    permission_control: :string,
     test_command: :keep,
     mcp_config: :string,
     skills: :string,
@@ -59,6 +60,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
     validate_output_mode!(opts)
     validate_event_log_opts!(opts)
+    validate_permission_control_opts!(opts)
 
     attrs = attrs_from_opts(opts, positional)
 
@@ -71,15 +73,9 @@ defmodule Mix.Tasks.AgentMachine.Run do
     cond do
       Keyword.get(opts, :jsonl, false) ->
         output = Process.group_leader()
+        event_sink = jsonl_event_sink(output, log_io)
 
-        summary =
-          AgentMachine.ClientRunner.run!(attrs,
-            event_sink: fn event ->
-              line = AgentMachine.ClientRunner.jsonl_event!(event)
-              IO.puts(output, line)
-              write_log_line!(log_io, line)
-            end
-          )
+        summary = with_permission_control(opts, attrs, event_sink)
 
         summary_line = AgentMachine.ClientRunner.jsonl_summary!(summary)
         IO.puts(output, summary_line)
@@ -96,6 +92,36 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
         write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
         print_text_summary(summary)
+    end
+  end
+
+  defp jsonl_event_sink(output, log_io) do
+    fn event ->
+      line = AgentMachine.ClientRunner.jsonl_event!(event)
+      IO.puts(output, line)
+      write_log_line!(log_io, line)
+    end
+  end
+
+  defp with_permission_control(opts, attrs, event_sink) do
+    case Keyword.fetch(opts, :permission_control) do
+      {:ok, "jsonl-stdio"} ->
+        {:ok, control} = AgentMachine.PermissionControl.start_link(input: :stdio)
+
+        try do
+          AgentMachine.ClientRunner.run!(attrs,
+            event_sink: event_sink,
+            permission_control: control,
+            tool_approval_callback: fn context ->
+              AgentMachine.PermissionControl.request(control, context)
+            end
+          )
+        after
+          AgentMachine.PermissionControl.cancel_all(control, "run ended")
+        end
+
+      :error ->
+        AgentMachine.ClientRunner.run!(attrs, event_sink: event_sink)
     end
   end
 
@@ -163,6 +189,21 @@ defmodule Mix.Tasks.AgentMachine.Run do
   defp validate_event_log_opts!(opts) do
     if Keyword.has_key?(opts, :event_session_id) and not Keyword.has_key?(opts, :event_log_file) do
       Mix.raise("--event-session-id requires --event-log-file")
+    end
+  end
+
+  defp validate_permission_control_opts!(opts) do
+    case Keyword.fetch(opts, :permission_control) do
+      :error ->
+        :ok
+
+      {:ok, "jsonl-stdio"} ->
+        unless Keyword.get(opts, :jsonl, false) do
+          Mix.raise("--permission-control jsonl-stdio requires --jsonl")
+        end
+
+      {:ok, value} ->
+        Mix.raise("--permission-control must be jsonl-stdio, got: #{inspect(value)}")
     end
   end
 

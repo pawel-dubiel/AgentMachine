@@ -18,6 +18,9 @@ defmodule AgentMachine.RunServer do
                            :provider_request_failed,
                            :assistant_delta,
                            :assistant_done,
+                           :permission_requested,
+                           :permission_decided,
+                           :permission_cancelled,
                            :tool_call_started,
                            :tool_call_finished,
                            :tool_call_failed
@@ -90,7 +93,8 @@ defmodule AgentMachine.RunServer do
       finished_at: nil,
       heartbeat_interval_ms: heartbeat_interval_ms_from_opts(opts),
       health_event_count: health_event_count(events),
-      last_health_at: last_event_time(events)
+      last_health_at: last_event_time(events),
+      permission_waiting_count: 0
     }
 
     schedule_heartbeat(run)
@@ -919,6 +923,8 @@ defmodule AgentMachine.RunServer do
   end
 
   defp record_health(run, event) when is_map(event) do
+    run = record_permission_wait(run, event)
+
     if health_event?(event) do
       %{
         run
@@ -929,6 +935,17 @@ defmodule AgentMachine.RunServer do
       run
     end
   end
+
+  defp record_permission_wait(run, %{type: :permission_requested}) do
+    Map.update(run, :permission_waiting_count, 1, &(&1 + 1))
+  end
+
+  defp record_permission_wait(run, %{type: type})
+       when type in [:permission_decided, :permission_cancelled] do
+    Map.update(run, :permission_waiting_count, 0, &max(&1 - 1, 0))
+  end
+
+  defp record_permission_wait(run, _event), do: run
 
   defp health_event?(%{type: :run_lease_extended}), do: false
   defp health_event?(%{type: type}) when is_atom(type), do: true

@@ -25,6 +25,10 @@ partition "TUI or Mix CLI boundary" {
       stop
     else (no)
       :Build mix agent_machine.run args;
+      if (ask-before-write tools configured?) then (yes)
+        :Add --permission-control jsonl-stdio;
+        :Open child stdin for approval decisions;
+      endif
     endif
   else (CLI)
     :Use explicit CLI flags;
@@ -49,6 +53,12 @@ partition "Mix.Tasks.AgentMachine.Run" {
   if (--event-log-file present?) then (yes)
     :Configure AgentMachine.EventLog\nwith path and optional session_id;
     :Collector writes event_log_configured;
+  endif
+
+  if (--permission-control jsonl-stdio?) then (yes)
+    :Require --jsonl;
+    :Start PermissionControl stdin reader;
+    :Forward JSONL permission decisions\nto pending runtime requests;
   endif
 }
 
@@ -134,7 +144,7 @@ partition "ClientRunner" {
         stop
       endif
     elseif (test command intent?) then (agentic)
-      if (code-edit + full-access + allowlisted test command?) then (yes)
+      if (code-edit + full-access/ask-before-write\n+ allowlisted test command?) then (yes)
         :selected = agentic;
         :tools_exposed = true;
       else (no)
@@ -161,6 +171,10 @@ partition "ClientRunner" {
   endif
 
   :Build selected workflow only;
+  if (permission control active and tools exposed?) then (yes)
+    :Expose safe request_capability tool;
+    :Install runtime approval callback;
+  endif
 }
 
 partition "Workflow construction" {
@@ -192,7 +206,9 @@ partition "Workflow construction" {
       note right
         Planner and finalizer see tool availability
         in run context, but cannot call tools.
-        Delegated workers inherit the run tool options.
+        Delegated workers inherit the base run tool options.
+        Mid-run capability grants stay on the current
+        worker attempt only.
       end note
     endif
   endif
@@ -219,7 +235,7 @@ partition "Tool harness assembly" {
     if (code-edit harness?) then (yes)
       :Full harness includes code edit tools:\nfile_info, list_files, read_file,\nsearch_files, apply_edits,\napply_patch, rollback_checkpoint;
       if (test commands configured?) then (yes)
-        :Add run_test_command only when\napproval_mode=full_access and command is allowlisted;
+        :Add run_test_command only when\napproval_mode=full_access or ask-before-write\nand command is allowlisted exactly;
       endif
     endif
 
@@ -250,6 +266,7 @@ partition "Orchestrator" {
   :Emit run_started before spawning agents;
   :Event sink forwards runtime events\nto AgentMachine.EventLog and any client sink;
   :Spawn ready initial agents with Task.Supervisor;
+  :Pause idle and hard timeout accounting\nwhile human permission requests are pending;
 }
 
 partition "AgentRunner and provider loop" {
@@ -266,24 +283,46 @@ partition "AgentRunner and provider loop" {
       break
     else (provider returns tool_calls)
       :Validate tool call ids are unique and new;
-      :Validate tool is allowed by harness and policy;
-      :Validate permission and approval mode;
+      if (single request_capability call?) then (capability grant)
+        :Emit permission_requested kind=capability_grant;
+        :Wait for human/TUI decision;
+        if (approved?) then (yes)
+          :Validate requested capability against\nruntime-supported catalog;
+          :Add granted tools only to this agent attempt;
+          :Send grant result back to provider\nas tool_continuation;
+        else (denied/cancelled)
+          :Send denied result back to provider\nas tool_continuation;
+        endif
+      else (normal tools)
+        :Validate tool is allowed by harness and policy;
+        :Validate permission and approval mode;
 
-      if (security or contract validation fails?) then (hard fail)
-        :Agent result = error;
-        break
-      else (execute tool)
-        :Run tool with tool_timeout_ms;
-        if (tool returns {:ok, map}) then (ok)
-          :Store tool result;
-          :Send result back to provider\nas tool_continuation;
-        elseif (tool execution error or timeout?) then (recoverable)
-          :Emit tool_call_failed event;
-          :Store error-shaped tool_result;
-          :Send error back to provider\nas tool_continuation;
-        else (invalid tool payload)
+        if (ask-before-write and risky call?) then (approval)
+          :Emit permission_requested kind=tool_execution\nbefore tool_call_started;
+          :Wait for exact call approval;
+          if (denied/cancelled?) then (denied)
+            :Cache denied fingerprint for this attempt;
+            :Store denied-shaped tool_result;
+            :Send denied result back to provider;
+          endif
+        endif
+
+        if (security or contract validation fails?) then (hard fail)
           :Agent result = error;
           break
+        else (execute tool)
+          :Run exact tool call with tool_timeout_ms;
+          if (tool returns {:ok, map}) then (ok)
+            :Store tool result;
+            :Send result back to provider\nas tool_continuation;
+          elseif (tool execution error or timeout?) then (recoverable)
+            :Emit tool_call_failed event;
+            :Store error-shaped tool_result;
+            :Send error back to provider\nas tool_continuation;
+          else (invalid tool payload)
+            :Agent result = error;
+            break
+          endif
         endif
       endif
     endif
