@@ -20,16 +20,17 @@ import (
 const pendingHarnessMCPBrowser = "mcp-browser"
 
 type summary struct {
-	RunID         string                      `json:"run_id"`
-	Status        string                      `json:"status"`
-	Error         string                      `json:"error"`
-	FinalOutput   string                      `json:"final_output"`
-	WorkflowRoute workflowRoute               `json:"workflow_route"`
-	Results       map[string]runResultSummary `json:"results"`
-	Skills        []skillSummary              `json:"skills"`
-	Checklist     []workItem                  `json:"checklist"`
-	Usage         usageSummary                `json:"usage"`
-	Events        []eventSummary              `json:"events"`
+	RunID              string                      `json:"run_id"`
+	Status             string                      `json:"status"`
+	Error              string                      `json:"error"`
+	FinalOutput        string                      `json:"final_output"`
+	WorkflowRoute      workflowRoute               `json:"workflow_route"`
+	Results            map[string]runResultSummary `json:"results"`
+	Skills             []skillSummary              `json:"skills"`
+	Checklist          []workItem                  `json:"checklist"`
+	Usage              usageSummary                `json:"usage"`
+	Events             []eventSummary              `json:"events"`
+	CapabilityRequired capabilityRequired          `json:"capability_required"`
 }
 
 type skillSummary struct {
@@ -64,6 +65,26 @@ type workflowRoute struct {
 	ClassifiedIntent string   `json:"classified_intent"`
 }
 
+type capabilityRequired struct {
+	Reason                string   `json:"reason"`
+	Intent                string   `json:"intent"`
+	Message               string   `json:"message"`
+	RequiredHarness       string   `json:"required_harness"`
+	RequiredHarnesses     []string `json:"required_harnesses"`
+	RequiredApprovalModes []string `json:"required_approval_modes"`
+	RequiredMCPTool       string   `json:"required_mcp_tool"`
+	RequestedRoot         string   `json:"requested_root"`
+	Detail                string   `json:"detail"`
+}
+
+func (request capabilityRequired) empty() bool {
+	return strings.TrimSpace(request.Reason) == "" &&
+		strings.TrimSpace(request.Intent) == "" &&
+		strings.TrimSpace(request.RequiredHarness) == "" &&
+		len(request.RequiredHarnesses) == 0 &&
+		strings.TrimSpace(request.RequiredMCPTool) == ""
+}
+
 type usageSummary struct {
 	Agents       int     `json:"agents"`
 	InputTokens  int     `json:"input_tokens"`
@@ -80,43 +101,48 @@ type compactSummary struct {
 }
 
 type eventSummary struct {
-	Type              string         `json:"type"`
-	RunID             string         `json:"run_id"`
-	AgentID           string         `json:"agent_id"`
-	ParentAgentID     string         `json:"parent_agent_id"`
-	DelegatedAgentIDs []string       `json:"delegated_agent_ids"`
-	RequestID         string         `json:"request_id"`
-	Kind              string         `json:"kind"`
-	Status            string         `json:"status"`
-	Decision          string         `json:"decision"`
-	Attempt           int            `json:"attempt"`
-	NextAttempt       int            `json:"next_attempt"`
-	Round             int            `json:"round"`
-	ToolCallID        string         `json:"tool_call_id"`
-	Tool              string         `json:"tool"`
-	Permission        string         `json:"permission"`
-	ApprovalRisk      string         `json:"approval_risk"`
-	ApprovalMode      string         `json:"approval_mode"`
-	Capability        string         `json:"capability"`
-	RequestedRoot     string         `json:"requested_root"`
-	RequestedTool     string         `json:"requested_tool"`
-	RequestedCommand  string         `json:"requested_command"`
-	DurationMS        *int           `json:"duration_ms"`
-	Reason            string         `json:"reason"`
-	Summary           string         `json:"summary"`
-	Delta             string         `json:"delta"`
-	Measurement       string         `json:"measurement"`
-	UsedTokens        int            `json:"used_tokens"`
-	ContextWindow     int            `json:"context_window_tokens"`
-	ReservedOutput    int            `json:"reserved_output_tokens"`
-	AvailableTokens   *int           `json:"available_tokens"`
-	UsedPercent       *float64       `json:"used_percent"`
-	RemainingPercent  *float64       `json:"remaining_percent"`
-	Breakdown         map[string]int `json:"breakdown"`
-	InputSummary      map[string]any `json:"input_summary"`
-	ResultSummary     map[string]any `json:"result_summary"`
-	Details           map[string]any `json:"details"`
-	At                string         `json:"at"`
+	Type                  string         `json:"type"`
+	RunID                 string         `json:"run_id"`
+	AgentID               string         `json:"agent_id"`
+	ParentAgentID         string         `json:"parent_agent_id"`
+	DelegatedAgentIDs     []string       `json:"delegated_agent_ids"`
+	RequestID             string         `json:"request_id"`
+	Kind                  string         `json:"kind"`
+	Status                string         `json:"status"`
+	Decision              string         `json:"decision"`
+	Attempt               int            `json:"attempt"`
+	NextAttempt           int            `json:"next_attempt"`
+	Round                 int            `json:"round"`
+	ToolCallID            string         `json:"tool_call_id"`
+	Tool                  string         `json:"tool"`
+	Permission            string         `json:"permission"`
+	ApprovalRisk          string         `json:"approval_risk"`
+	ApprovalMode          string         `json:"approval_mode"`
+	Capability            string         `json:"capability"`
+	Intent                string         `json:"intent"`
+	RequiredHarness       string         `json:"required_harness"`
+	RequiredHarnesses     []string       `json:"required_harnesses"`
+	RequiredApprovalModes []string       `json:"required_approval_modes"`
+	RequiredMCPTool       string         `json:"required_mcp_tool"`
+	RequestedRoot         string         `json:"requested_root"`
+	RequestedTool         string         `json:"requested_tool"`
+	RequestedCommand      string         `json:"requested_command"`
+	DurationMS            *int           `json:"duration_ms"`
+	Reason                string         `json:"reason"`
+	Summary               string         `json:"summary"`
+	Delta                 string         `json:"delta"`
+	Measurement           string         `json:"measurement"`
+	UsedTokens            int            `json:"used_tokens"`
+	ContextWindow         int            `json:"context_window_tokens"`
+	ReservedOutput        int            `json:"reserved_output_tokens"`
+	AvailableTokens       *int           `json:"available_tokens"`
+	UsedPercent           *float64       `json:"used_percent"`
+	RemainingPercent      *float64       `json:"remaining_percent"`
+	Breakdown             map[string]int `json:"breakdown"`
+	InputSummary          map[string]any `json:"input_summary"`
+	ResultSummary         map[string]any `json:"result_summary"`
+	Details               map[string]any `json:"details"`
+	At                    string         `json:"at"`
 }
 
 type workItem struct {
@@ -693,7 +719,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = viewChat
 
 		if msg.Err != nil {
-			if updated, handled := m.withRunPermissionError(msg.Err); handled {
+			if updated, handled := m.withCapabilityRequired(msg.Summary.CapabilityRequired); handled {
 				return updated, nil
 			}
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
@@ -748,7 +774,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Session != nil && msg.Session.persistent && msg.Err == nil {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine session ended"})
 		} else if msg.Err != nil {
-			if updated, handled := m.withRunPermissionError(msg.Err); handled {
+			if updated, handled := m.withCapabilityRequired(m.lastSummary.CapabilityRequired); handled {
 				return updated, nil
 			}
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
@@ -894,16 +920,6 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	}
 
 	permissionTask := m.taskWithConversationContext(task)
-	if prompt, root, harness, needsPermission := m.toolPermissionPrompt(permissionTask); needsPermission {
-		m.pendingToolTask = task
-		m.pendingToolRoot = root
-		m.pendingToolHarness = harness
-		m.pendingToolChoice = 0
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: prompt})
-		m.view = viewChat
-		return m, nil
-	}
-
 	runTask := permissionTask
 	config, err := resolveConfig(m.runConfig(runTask))
 	if err != nil {
@@ -969,29 +985,46 @@ func (m model) withRunPreparationError(err error) model {
 	return m
 }
 
-func (m model) withRunPermissionError(err error) (model, bool) {
-	if err == nil {
+func (m model) withCapabilityRequired(request capabilityRequired) (model, bool) {
+	if request.empty() {
 		return m, false
 	}
 
-	return m.withRunPermissionText(err.Error())
+	harness := pendingHarnessForCapability(request)
+	if harness == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: capabilityRequiredText(request)})
+		m.view = viewChat
+		return m, true
+	}
+
+	if harness == pendingHarnessMCPBrowser {
+		if strings.TrimSpace(m.savedConfig.MCPConfig) == "" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: capabilityRequiredText(request)})
+			m.view = viewChat
+			return m, true
+		}
+		return m.withPendingToolRequest("", harness, mcpBrowserPermissionText(m.savedConfig.MCPConfig))
+	}
+
+	root := strings.TrimSpace(request.RequestedRoot)
+	if root == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: capabilityRootRequiredText(request, harness)})
+		m.view = viewChat
+		return m, true
+	}
+
+	return m.withPendingToolRequest(
+		root,
+		harness,
+		toolPermissionText(capabilityReasonText(request), harness, root, m.savedConfig.ToolRoot),
+	)
 }
 
-func (m model) withRunPermissionText(text string) (model, bool) {
-	if strings.TrimSpace(text) == "" {
-		return m, false
-	}
-
-	prompt, root, harness, ok := m.permissionPromptFromRunError(text)
-	if !ok {
-		return m, false
-	}
-
+func (m model) withPendingToolRequest(root string, harness string, prompt string) (model, bool) {
 	task := m.latestUserTask()
 	if strings.TrimSpace(task) == "" {
 		task = m.activeConfig.Task
 	}
-
 	m.pendingToolTask = task
 	m.pendingToolRoot = root
 	m.pendingToolHarness = harness
@@ -1001,72 +1034,68 @@ func (m model) withRunPermissionText(text string) (model, bool) {
 	return m, true
 }
 
-func (m model) permissionPromptFromRunError(text string) (string, string, string, bool) {
-	if routerWebBrowseApprovalError(text) {
-		if strings.TrimSpace(m.savedConfig.MCPConfig) == "" {
-			return "", "", "", false
+func pendingHarnessForCapability(request capabilityRequired) string {
+	switch request.Reason {
+	case "missing_browser_approval":
+		if request.RequiredHarness == "mcp" && request.RequiredMCPTool == "browser_navigate" {
+			return pendingHarnessMCPBrowser
 		}
-		return mcpBrowserPermissionText(m.savedConfig.MCPConfig), "", pendingHarnessMCPBrowser, true
+	case "missing_write_harness", "missing_code_edit_harness", "missing_test_code_edit_harness", "missing_test_approval":
+		if request.RequiredHarness == "local-files" || request.RequiredHarness == "code-edit" {
+			return request.RequiredHarness
+		}
 	}
-
-	if !routerWriteCapabilityError(text) {
-		return "", "", "", false
-	}
-
-	task := m.latestUserTask()
-	if strings.TrimSpace(task) == "" {
-		task = m.activeConfig.Task
-	}
-	if strings.TrimSpace(task) == "" {
-		return "", "", "", false
-	}
-
-	harness := requiredHarnessForRouterError(text, task)
-	root := inferredToolRoot(task)
-	if root == "" {
-		return "", "", "", false
-	}
-
-	reason := m.permissionReasonForHarness(harness)
-	return toolPermissionText(reason, harness, root, m.savedConfig.ToolRoot), root, harness, true
+	return ""
 }
 
-func routerWriteCapabilityError(text string) bool {
-	return strings.Contains(text, "auto workflow detected mutation intent but no write-capable tool harness is configured") ||
-		strings.Contains(text, "auto workflow detected code mutation intent but :code_edit tool harness is not configured") ||
-		strings.Contains(text, "auto workflow detected test intent but :code_edit tool harness is not configured") ||
-		(strings.Contains(text, "auto workflow detected test intent") &&
-			strings.Contains(text, ":tool_approval_mode"))
+func capabilityReasonText(request capabilityRequired) string {
+	parts := []string{emptyAs(request.Reason, "capability_required")}
+	if len(request.RequiredApprovalModes) > 0 {
+		parts = append(parts, "approval modes: "+strings.Join(request.RequiredApprovalModes, ", "))
+	}
+	if strings.TrimSpace(request.Detail) != "" {
+		parts = append(parts, request.Detail)
+	}
+	return strings.Join(parts, "; ")
 }
 
-func routerWebBrowseApprovalError(text string) bool {
-	return strings.Contains(text, "auto workflow detected web browse intent") &&
-		strings.Contains(text, ":tool_approval_mode")
+func capabilityRequiredText(request capabilityRequired) string {
+	lines := []string{
+		"runtime capability required: " + emptyAs(request.Reason, "capability_required"),
+	}
+	if strings.TrimSpace(request.Intent) != "" {
+		lines = append(lines, "intent: "+request.Intent)
+	}
+	if strings.TrimSpace(request.RequiredHarness) != "" {
+		lines = append(lines, "required harness: "+request.RequiredHarness)
+	}
+	if len(request.RequiredHarnesses) > 0 {
+		lines = append(lines, "required harnesses: "+strings.Join(request.RequiredHarnesses, ", "))
+	}
+	if len(request.RequiredApprovalModes) > 0 {
+		lines = append(lines, "required approval modes: "+strings.Join(request.RequiredApprovalModes, ", "))
+	}
+	if strings.TrimSpace(request.RequiredMCPTool) != "" {
+		lines = append(lines, "required MCP tool: "+request.RequiredMCPTool)
+	}
+	if strings.TrimSpace(request.Detail) != "" {
+		lines = append(lines, "detail: "+request.Detail)
+	}
+	lines = append(lines, "Configure the required runtime capability explicitly and retry.")
+	return strings.Join(lines, "\n")
 }
 
-func requiredHarnessForRouterError(text string, task string) string {
-	if strings.Contains(text, "code mutation intent") ||
-		strings.Contains(text, "test intent") ||
-		strings.Contains(text, ":code_edit") {
-		return "code-edit"
+func capabilityRootRequiredText(request capabilityRequired, harness string) string {
+	lines := []string{
+		"runtime capability required: " + emptyAs(request.Reason, "capability_required"),
+		"required harness: " + harness,
+		"tool root is required",
+		"Run /tools " + harness + " <root> <timeout-ms> <max-rounds> <approval-mode> and retry.",
 	}
-	if harness := requiredWriteHarness(task); harness != "" {
-		return harness
+	if len(request.RequiredApprovalModes) > 0 {
+		lines = append(lines, "required approval modes: "+strings.Join(request.RequiredApprovalModes, ", "))
 	}
-	return "local-files"
-}
-
-func (m model) permissionReasonForHarness(harness string) string {
-	switch {
-	case m.savedConfig.ToolHarness == "":
-		return "filesystem tools are off"
-	case m.savedConfig.ToolHarness != harness:
-		return "active tool harness cannot perform this filesystem action"
-	case m.savedConfig.ToolApproval != "ask-before-write" && m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access":
-		return "active tool approval mode cannot perform writes"
-	default:
-		return "runtime did not receive a write-capable tool harness"
-	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) latestUserTask() string {
@@ -1630,17 +1659,14 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 
 	root := m.pendingToolRoot
 	if root == "" {
-		var err error
-		root, err = os.UserHomeDir()
-		if err != nil {
-			m.messages = append(m.messages, chatMessage{Role: "system", Text: "could not resolve home directory: " + err.Error()})
-			return m, nil
-		}
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool root is required for pending tool request"})
+		return m, nil
 	}
 
 	harness := m.pendingToolHarness
 	if harness == "" {
-		harness = "local-files"
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool harness is required for pending tool request"})
+		return m, nil
 	}
 
 	m.savedConfig.ToolHarness = harness
@@ -2711,7 +2737,7 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 			m.pendingPermissionChoice = 0
 			if envelope.Summary.Status == "failed" {
 				errorText := summaryError(envelope.Summary)
-				if updated, handled := m.withRunPermissionText(errorText); handled {
+				if updated, handled := m.withCapabilityRequired(envelope.Summary.CapabilityRequired); handled {
 					return updated, nil
 				}
 				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + errorText})
@@ -2764,25 +2790,27 @@ func (m *model) applyEvent(event eventSummary) {
 		budget := event
 		m.latestContextBudget = &budget
 	}
-	if event.Type == "session_agent_failed" {
-		m.applySessionAgentPermissionPrompt(event)
+	if event.Type == "capability_required" {
+		updated, handled := m.withCapabilityRequired(capabilityRequiredFromEvent(event))
+		if handled {
+			*m = updated
+		}
 	}
 
 	m.applyWorkEvent(event)
 	m.applyNonDeltaEvent(event)
 }
 
-func (m *model) applySessionAgentPermissionPrompt(event eventSummary) {
-	if m.pendingToolTask != "" {
-		return
-	}
-	text := event.Reason
-	if strings.TrimSpace(text) == "" {
-		text = event.Summary
-	}
-	updated, handled := m.withRunPermissionText(text)
-	if handled {
-		*m = updated
+func capabilityRequiredFromEvent(event eventSummary) capabilityRequired {
+	return capabilityRequired{
+		Reason:                event.Reason,
+		Intent:                event.Intent,
+		RequiredHarness:       event.RequiredHarness,
+		RequiredHarnesses:     event.RequiredHarnesses,
+		RequiredApprovalModes: event.RequiredApprovalModes,
+		RequiredMCPTool:       event.RequiredMCPTool,
+		RequestedRoot:         event.RequestedRoot,
+		Detail:                event.Summary,
 	}
 }
 
@@ -3695,43 +3723,6 @@ func validateExistingFile(path string, label string) error {
 	return nil
 }
 
-func (m model) toolPermissionPrompt(task string) (string, string, string, bool) {
-	requiredHarness := requiredWriteHarness(task)
-	if requiredHarness == "" {
-		return "", "", "", false
-	}
-
-	root := inferredToolRoot(task)
-	if root == "" {
-		return "", "", "", false
-	}
-
-	switch {
-	case m.savedConfig.ToolHarness == requiredHarness:
-		if !pathInsideRoot(root, m.savedConfig.ToolRoot) {
-			return toolPermissionText(
-				"requested filesystem location is outside the active tool root",
-				requiredHarness,
-				root,
-				m.savedConfig.ToolRoot,
-			), root, requiredHarness, true
-		}
-		if m.savedConfig.ToolApproval != "ask-before-write" && m.savedConfig.ToolApproval != "auto-approved-safe" && m.savedConfig.ToolApproval != "full-access" {
-			return toolPermissionText(
-				"active tool approval mode cannot perform writes",
-				requiredHarness,
-				root,
-				m.savedConfig.ToolRoot,
-			), root, requiredHarness, true
-		}
-		return "", "", "", false
-	case m.savedConfig.ToolHarness == "":
-		return toolPermissionText("filesystem tools are off", requiredHarness, root, ""), root, requiredHarness, true
-	default:
-		return toolPermissionText("active tool harness cannot perform this filesystem action", requiredHarness, root, m.savedConfig.ToolRoot), root, requiredHarness, true
-	}
-}
-
 func toolPermissionText(reason string, harness string, root string, activeRoot string) string {
 	lines := []string{
 		"filesystem permission required: " + reason,
@@ -3758,96 +3749,6 @@ func mcpBrowserPermissionText(configPath string) string {
 		"Run /allow-tools to enable interactive ask-before-write approval or /yolo-tools for full-access and retry now.",
 		"Run /deny-tools to decline.",
 	}, "\n")
-}
-
-func requiredWriteHarness(task string) string {
-	switch {
-	case codeWriteIntent(task):
-		return "code-edit"
-	case filesystemWriteIntent(task):
-		return "local-files"
-	default:
-		return ""
-	}
-}
-
-func codeWriteIntent(task string) bool {
-	text := strings.ToLower(task)
-	codeVerb := containsAny(text, []string{
-		"create", "make", "scaffold", "generate", "rewrite", "fix", "patch", "edit", "update", "change", "repair",
-	})
-	codeNoun := containsAny(text, []string{
-		"code", "script", "app", "python", ".py", ".js", ".ts", ".go", ".ex", ".exs", "weather_app.py",
-		"nextjs", "next.js", "react", "vite", "package.json",
-	})
-	return codeVerb && codeNoun
-}
-
-func filesystemWriteIntent(task string) bool {
-	text := strings.ToLower(task)
-	writeVerb := containsAny(text, []string{
-		"create", "make", "write", "append", "replace", "edit", "update", "delete", "remove", "rename",
-	})
-	fileNoun := containsAny(text, []string{
-		"file", "folder", "directory", "dir", "path", "home", "~/", "/users/", "/tmp/",
-	})
-	return writeVerb && fileNoun
-}
-
-func inferredToolRoot(task string) string {
-	text := strings.ToLower(task)
-	if strings.Contains(text, "home folder") ||
-		strings.Contains(text, "home directory") ||
-		strings.Contains(text, "my home") ||
-		strings.Contains(text, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return home
-		}
-	}
-
-	if path := firstAbsolutePath(task); path != "" {
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			return path
-		}
-		if parent := filepath.Dir(path); parent != "." && parent != "/" {
-			return parent
-		}
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return home
-}
-
-func firstAbsolutePath(text string) string {
-	for _, field := range strings.Fields(text) {
-		candidate := strings.Trim(field, ".,;:()[]{}\"'")
-		if strings.HasPrefix(candidate, "/") {
-			return filepath.Clean(candidate)
-		}
-	}
-	return ""
-}
-
-func containsAny(text string, needles []string) bool {
-	for _, needle := range needles {
-		if strings.Contains(text, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func pathInsideRoot(path string, root string) bool {
-	path = filepath.Clean(strings.TrimSpace(path))
-	root = filepath.Clean(strings.TrimSpace(root))
-	if path == "" || root == "" {
-		return false
-	}
-	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
 func resolveConfig(config runConfig) (runConfig, error) {
