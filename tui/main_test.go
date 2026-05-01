@@ -168,6 +168,8 @@ func TestBuildRunArgsIncludesContextOptions(t *testing.T) {
 		Provider:          providerEcho,
 		ContextWindow:     "128000",
 		ContextWarning:    "80",
+		ContextTokenizer:  "/tmp/context-tokenizer.json",
+		ReservedOutput:    "4096",
 		RunContextCompact: "on",
 		ContextCompactPct: "90",
 		MaxContextCompact: "2",
@@ -175,9 +177,84 @@ func TestBuildRunArgsIncludesContextOptions(t *testing.T) {
 
 	assertContainsSequence(t, args, []string{"--context-window-tokens", "128000"})
 	assertContainsSequence(t, args, []string{"--context-warning-percent", "80"})
+	assertContainsSequence(t, args, []string{"--context-tokenizer-path", "/tmp/context-tokenizer.json"})
+	assertContainsSequence(t, args, []string{"--reserved-output-tokens", "4096"})
 	assertContainsSequence(t, args, []string{"--run-context-compaction", "on"})
 	assertContainsSequence(t, args, []string{"--run-context-compact-percent", "90"})
 	assertContainsSequence(t, args, []string{"--max-context-compactions", "2"})
+}
+
+func TestContextTokenizerAndReserveCommandsPersistConfig(t *testing.T) {
+	dir := t.TempDir()
+	tokenizerPath := filepath.Join(dir, "tokenizer.json")
+	if err := os.WriteFile(tokenizerPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("failed to write tokenizer fixture: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.json")
+	m := model{configPath: configPath}
+
+	updated, _ := m.handleContextTokenizerCommand([]string{tokenizerPath})
+	result := updated.(model)
+	if result.savedConfig.ContextTokenizer != tokenizerPath {
+		t.Fatalf("expected tokenizer path to persist in model, got %q", result.savedConfig.ContextTokenizer)
+	}
+
+	updated, _ = result.handleContextReserveCommand([]string{"4096"})
+	result = updated.(model)
+	if result.savedConfig.ReservedOutput != "4096" {
+		t.Fatalf("expected reserved output to persist in model, got %q", result.savedConfig.ReservedOutput)
+	}
+
+	saved, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config, got %v", err)
+	}
+	if saved.ContextTokenizer != tokenizerPath || saved.ReservedOutput != "4096" {
+		t.Fatalf("unexpected saved context config: %#v", saved)
+	}
+}
+
+func TestStatusLineRendersContextBudgetEvents(t *testing.T) {
+	available := 69000
+	used := 42.3
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		latestContextBudget: &eventSummary{
+			Type:            "context_budget",
+			Status:          "ok",
+			UsedTokens:      54123,
+			ContextWindow:   128000,
+			AvailableTokens: &available,
+			UsedPercent:     &used,
+		},
+	}
+	if status := m.statusLine(); !strings.Contains(status, "ctx=42.3% 54123/128000 avail=69000") {
+		t.Fatalf("expected known context budget in status, got %q", status)
+	}
+
+	warning := 86.1
+	m.latestContextBudget = &eventSummary{
+		Type:            "context_budget",
+		Status:          "warning",
+		UsedTokens:      110000,
+		ContextWindow:   128000,
+		AvailableTokens: &available,
+		UsedPercent:     &warning,
+	}
+	if status := m.statusLine(); !strings.Contains(status, "ctx=warning 86.1% 110000/128000 avail=69000") {
+		t.Fatalf("expected warning context budget in status, got %q", status)
+	}
+
+	m.latestContextBudget = &eventSummary{
+		Type:   "context_budget",
+		Status: "unknown",
+		Reason: "missing_context_tokenizer_path",
+	}
+	if status := m.statusLine(); !strings.Contains(status, "ctx=unknown missing_context_tokenizer_path") {
+		t.Fatalf("expected unknown context budget in status, got %q", status)
+	}
 }
 
 func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {

@@ -4,6 +4,12 @@ defmodule AgentMachine.RunContextPrompt do
   alias AgentMachine.{JSON, ToolHarness, ToolPolicy}
 
   def text(opts) when is_list(opts) do
+    opts
+    |> budget_sections()
+    |> Map.fetch!(:full_text)
+  end
+
+  def budget_sections(opts) when is_list(opts) do
     context = Keyword.fetch!(opts, :run_context)
     results = Map.fetch!(context, :results)
     artifacts = Map.fetch!(context, :artifacts)
@@ -11,16 +17,18 @@ defmodule AgentMachine.RunContextPrompt do
     skills = skills_context(opts)
     runtime = runtime_context(opts)
 
-    if map_size(results) == 0 and map_size(artifacts) == 0 and is_nil(tools) and is_nil(runtime) and
-         empty_skills?(skills) do
-      ""
-    else
+    run_context =
       %{results: json_value(results), artifacts: json_value(artifacts)}
       |> maybe_put_runtime(runtime)
       |> maybe_put_tools(tools)
-      |> maybe_put_skills(skills)
-      |> JSON.encode!()
-    end
+
+    full_context = maybe_put_skills(run_context, skills)
+
+    %{
+      full_text: context_text(full_context, skills),
+      run_context: run_context_text(run_context),
+      skills: skills_text(skills)
+    }
   end
 
   def runtime_facts(opts \\ []) when is_list(opts) do
@@ -92,6 +100,23 @@ defmodule AgentMachine.RunContextPrompt do
   defp maybe_put_runtime(context, runtime), do: Map.put(context, :runtime, json_value(runtime))
   defp maybe_put_skills(context, []), do: context
   defp maybe_put_skills(context, skills), do: Map.put(context, :skills, json_value(skills))
+
+  defp context_text(context, skills) do
+    if empty_context?(context) and empty_skills?(skills), do: "", else: JSON.encode!(context)
+  end
+
+  defp run_context_text(context) do
+    if empty_context?(context), do: "", else: JSON.encode!(context)
+  end
+
+  defp skills_text(skills) do
+    if empty_skills?(skills), do: "", else: JSON.encode!(json_value(skills))
+  end
+
+  defp empty_context?(context) do
+    map_size(context.results) == 0 and map_size(context.artifacts) == 0 and
+      not Map.has_key?(context, :tools) and not Map.has_key?(context, :runtime)
+  end
 
   defp runtime_context(opts) do
     case Keyword.get(opts, :runtime_facts, :auto) do

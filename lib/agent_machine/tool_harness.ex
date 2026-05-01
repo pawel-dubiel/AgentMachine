@@ -178,11 +178,25 @@ defmodule AgentMachine.ToolHarness do
     end
   end
 
+  def openai_tool_groups!(opts) when is_list(opts) do
+    opts
+    |> allowed_tools()
+    |> definitions!()
+    |> split_provider_tool_groups(&openai_tool/1)
+  end
+
   def put_openrouter_tools!(body, opts) when is_map(body) do
     case allowed_tools(opts) do
       [] -> body
       tools -> Map.put(body, "tools", Enum.map(definitions!(tools), &openrouter_tool/1))
     end
+  end
+
+  def openrouter_tool_groups!(opts) when is_list(opts) do
+    opts
+    |> allowed_tools()
+    |> definitions!()
+    |> split_provider_tool_groups(&openrouter_tool/1)
   end
 
   def openai_tool_calls!(response, opts) do
@@ -274,6 +288,24 @@ defmodule AgentMachine.ToolHarness do
       }
     }
   end
+
+  defp split_provider_tool_groups(definitions, formatter) do
+    {mcp, local} = Enum.split_with(definitions, &mcp_definition?/1)
+
+    %{
+      tools: Enum.map(local, formatter),
+      mcp_tools: Enum.map(mcp, formatter)
+    }
+  end
+
+  defp mcp_definition?(%{module: module}) when is_atom(module) do
+    module
+    |> Module.split()
+    |> Enum.take(3)
+    |> Kernel.==(["AgentMachine", "MCP", "DynamicTools"])
+  end
+
+  defp mcp_definition?(_definition), do: false
 
   defp provider_tool_call!(call, tools_by_name) do
     name = Map.fetch!(call, "name")

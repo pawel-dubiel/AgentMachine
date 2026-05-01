@@ -234,6 +234,8 @@ defmodule AgentMachine.AgentRunner do
     started_at = DateTime.utc_now()
     started_event = provider_request_started_event(context, agent, started_at)
     emit_event!(opts, started_event)
+    budget_event = ContextBudget.event(agent, context, opts)
+    emit_event!(opts, budget_event)
 
     ref = make_ref()
     owner = self()
@@ -258,17 +260,15 @@ defmodule AgentMachine.AgentRunner do
     stream_events = drain_stream_events(ref, [])
 
     case result do
-      {:ok, %{output: output, usage: provider_usage} = payload} when is_binary(output) ->
+      {:ok, %{output: output, usage: _provider_usage} = payload} when is_binary(output) ->
         finished_at = DateTime.utc_now()
         finished_event = provider_request_finished_event(context, agent, started_at, finished_at)
-        budget_event = ContextBudget.event(agent, context, provider_usage, opts)
         emit_event!(opts, finished_event)
-        emit_event!(opts, budget_event)
 
         {:ok,
          %{
            payload: payload,
-           events: [started_event] ++ stream_events ++ [finished_event, budget_event]
+           events: [started_event, budget_event] ++ stream_events ++ [finished_event]
          }}
 
       {:ok, other} ->
@@ -284,7 +284,12 @@ defmodule AgentMachine.AgentRunner do
           )
 
         emit_event!(opts, failed_event)
-        {:ok, %{payload: other, events: [started_event] ++ stream_events ++ [failed_event]}}
+
+        {:ok,
+         %{
+           payload: other,
+           events: [started_event, budget_event] ++ stream_events ++ [failed_event]
+         }}
 
       {:error, reason} ->
         finished_at = DateTime.utc_now()
@@ -293,7 +298,7 @@ defmodule AgentMachine.AgentRunner do
           provider_request_failed_event(context, agent, started_at, finished_at, inspect(reason))
 
         emit_event!(opts, failed_event)
-        {:error, reason, [started_event] ++ stream_events ++ [failed_event]}
+        {:error, reason, [started_event, budget_event] ++ stream_events ++ [failed_event]}
     end
   end
 

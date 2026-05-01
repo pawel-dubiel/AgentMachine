@@ -7,6 +7,8 @@ defmodule AgentMachine.WorkflowOptions do
     opts
     |> maybe_put(:context_window_tokens, spec.context_window_tokens)
     |> maybe_put(:context_warning_percent, spec.context_warning_percent)
+    |> maybe_put(:context_tokenizer_path, spec.context_tokenizer_path)
+    |> maybe_put(:reserved_output_tokens, spec.reserved_output_tokens)
     |> maybe_put(:run_context_compaction, enabled_compaction(spec.run_context_compaction))
     |> maybe_put(:run_context_compact_percent, spec.run_context_compact_percent)
     |> maybe_put(:max_context_compactions, spec.max_context_compactions)

@@ -318,6 +318,12 @@ func buildRunArgs(config runConfig) []string {
 	if config.ContextWarning != "" {
 		args = append(args, "--context-warning-percent", config.ContextWarning)
 	}
+	if config.ContextTokenizer != "" {
+		args = append(args, "--context-tokenizer-path", config.ContextTokenizer)
+	}
+	if config.ReservedOutput != "" {
+		args = append(args, "--reserved-output-tokens", config.ReservedOutput)
+	}
 	if config.RunContextCompact != "" {
 		args = append(args, "--run-context-compaction", config.RunContextCompact)
 	}

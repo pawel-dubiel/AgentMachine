@@ -29,5 +29,14 @@ defmodule AgentMachine.Provider do
                }}
               | {:error, term()}
 
-  @optional_callbacks stream_complete: 2
+  @callback context_budget_request(Agent.t(), keyword()) ::
+              {:ok,
+               %{
+                 required(:provider) => atom(),
+                 required(:request) => map(),
+                 required(:breakdown) => map()
+               }}
+              | {:unknown, binary()}
+
+  @optional_callbacks stream_complete: 2, context_budget_request: 2
 end

@@ -8,6 +8,10 @@ defmodule AgentMachine.OrchestratorTest do
     :ok
   end
 
+  defp context_tokenizer_path do
+    Path.expand("../fixtures/context_tokenizer.json", __DIR__)
+  end
+
   test "application starts run registry and run supervisor" do
     assert Process.whereis(AgentMachine.RunRegistry)
     assert Process.whereis(AgentMachine.RunSupervisor)
@@ -239,7 +243,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert normalized.cost_usd == 2.0
   end
 
-  test "emits unknown context budget events when context window is missing" do
+  test "emits unknown context budget events when tokenizer path is missing" do
     agents = [
       %{
         id: "assistant",
@@ -254,7 +258,31 @@ defmodule AgentMachine.OrchestratorTest do
 
     assert Enum.any?(run.events, fn event ->
              event.type == :context_budget and event.agent_id == "assistant" and
-               event.status == "unknown" and event.reason == "missing_context_window_tokens"
+               event.status == "unknown" and event.reason == "missing_context_tokenizer_path"
+           end)
+  end
+
+  test "emits unknown context budget events when context window is missing" do
+    agents = [
+      %{
+        id: "assistant",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "hello",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               context_tokenizer_path: context_tokenizer_path()
+             )
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :context_budget and event.agent_id == "assistant" and
+               event.status == "unknown" and event.reason == "missing_context_window_tokens" and
+               event.measurement == "tokenizer_estimate" and event.used_tokens > 0
            end)
   end
 
@@ -273,7 +301,8 @@ defmodule AgentMachine.OrchestratorTest do
              Orchestrator.run(agents,
                timeout: 1_000,
                context_window_tokens: 1,
-               context_warning_percent: 1
+               context_warning_percent: 1,
+               context_tokenizer_path: context_tokenizer_path()
              )
 
     assert Enum.any?(run.events, fn event ->
@@ -299,6 +328,7 @@ defmodule AgentMachine.OrchestratorTest do
                timeout: 1_000,
                max_steps: 2,
                context_window_tokens: 1,
+               context_tokenizer_path: context_tokenizer_path(),
                run_context_compaction: :on,
                run_context_compact_percent: 1,
                max_context_compactions: 1
@@ -321,6 +351,41 @@ defmodule AgentMachine.OrchestratorTest do
              run.events,
              &(&1.type == :run_context_compaction_finished and &1.covered_items == ["planner"])
            )
+  end
+
+  test "run-context compaction skips when request budget measurement is unknown" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.RunContextCompacting,
+        model: "test",
+        input: "plan with large context",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 2,
+               context_window_tokens: 1,
+               run_context_compaction: :on,
+               run_context_compact_percent: 1,
+               max_context_compactions: 1
+             )
+
+    assert run.status == :completed
+
+    assert run.results["worker"].output ==
+             "saw_raw=true saw_plan=true compacted=none"
+
+    assert Enum.any?(
+             run.events,
+             &(&1.type == :run_context_compaction_skipped and
+                 &1.reason == "missing_context_tokenizer_path")
+           )
+
+    refute Enum.any?(run.events, &(&1.type == :run_context_compaction_started))
   end
 
   test "lets an agent delegate follow-up agents with an explicit step limit" do
@@ -2508,6 +2573,30 @@ defmodule AgentMachine.TestProviders.RunContextCompacting do
   @behaviour AgentMachine.Provider
 
   alias AgentMachine.Agent
+  alias AgentMachine.RunContextPrompt
+
+  @impl true
+  def context_budget_request(%Agent{} = agent, opts) do
+    sections = RunContextPrompt.budget_sections(opts)
+
+    {:ok,
+     %{
+       provider: :test_run_context_compacting,
+       request: %{
+         "model" => agent.model,
+         "input" => input(agent, sections)
+       },
+       breakdown: %{
+         instructions: agent.instructions,
+         task_input: agent.input,
+         run_context: sections.run_context,
+         skills: sections.skills,
+         tools: [],
+         mcp_tools: [],
+         tool_continuation: nil
+       }
+     }}
+  end
 
   @impl true
   def complete(%Agent{id: "planner"} = agent, _opts) do
@@ -2548,7 +2637,12 @@ defmodule AgentMachine.TestProviders.RunContextCompacting do
     context = Keyword.fetch!(opts, :run_context)
     saw_raw = Map.has_key?(context.results, "planner")
     saw_plan = Map.has_key?(context.artifacts, :plan)
-    compacted = context.compacted_context.summary
+
+    compacted =
+      if Map.has_key?(context, :compacted_context),
+        do: context.compacted_context.summary,
+        else: "none"
+
     output = "saw_raw=#{saw_raw} saw_plan=#{saw_plan} compacted=#{compacted}"
 
     {:ok,
@@ -2557,6 +2651,11 @@ defmodule AgentMachine.TestProviders.RunContextCompacting do
        usage: usage(agent, output)
      }}
   end
+
+  defp input(%Agent{} = agent, %{full_text: ""}), do: agent.input
+
+  defp input(%Agent{} = agent, %{full_text: context}),
+    do: agent.input <> "\n\nRun context:\n" <> context
 
   defp usage(agent, output) do
     input = token_count(agent.input)

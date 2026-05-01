@@ -10,6 +10,7 @@ defmodule AgentMachine.RunServer do
   @default_heartbeat_interval_ms 10_000
   @runtime_health_events MapSet.new([
                            :provider_request_started,
+                           :context_budget,
                            :provider_request_finished,
                            :provider_request_failed,
                            :assistant_delta,
@@ -222,15 +223,12 @@ defmodule AgentMachine.RunServer do
     end
   end
 
-  defp store_result(run, agent, result) do
+  defp store_result(run, _agent, result) do
     run = %{run | results: Map.put(run.results, result.agent_id, result)}
 
     case merge_result_artifacts(run, result) do
       {:ok, run} ->
-        case maybe_compact_run_context(run, agent) do
-          {:ok, run} -> continue_run_after_result(run, result)
-          {:error, run} -> run
-        end
+        continue_run_after_result(run, result)
 
       {:error, reason} ->
         fail_run(run, reason)
@@ -278,6 +276,7 @@ defmodule AgentMachine.RunServer do
   end
 
   defp finish_or_fail({:ok, updated_run}, _run), do: finish_if_idle(updated_run)
+  defp finish_or_fail({:failed_run, failed_run}, _run), do: failed_run
   defp finish_or_fail({:error, reason}, run), do: fail_run(run, reason)
 
   defp start_ready_pending_agents(%{status: status} = run) when status in [:failed, :timeout],
@@ -289,24 +288,31 @@ defmodule AgentMachine.RunServer do
     if ready_agents == [] do
       finish_if_idle(run)
     else
-      run_context = run_context(run)
-      {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, nil)
+      case maybe_compact_before_spawn(run, ready_agents, nil) do
+        {:ok, run} ->
+          run_context = run_context(run)
+          {new_tasks, events} = spawn_agents(ready_agents, run.opts, run_context, nil)
 
-      run
-      |> Map.merge(%{
-        tasks: Map.merge(run.tasks, new_tasks),
-        pending_agents: pending_agents,
-        agent_order: run.agent_order ++ Enum.map(ready_agents, & &1.id)
-      })
-      |> append_events(events)
-      |> finish_if_idle()
+          run
+          |> Map.merge(%{
+            tasks: Map.merge(run.tasks, new_tasks),
+            pending_agents: pending_agents,
+            agent_order: run.agent_order ++ Enum.map(ready_agents, & &1.id)
+          })
+          |> append_events(events)
+          |> finish_if_idle()
+
+        {:error, failed_run} ->
+          failed_run
+      end
     end
   end
 
   defp schedule_next_agents(run, result) do
     with {:ok, max_steps} <- fetch_max_steps(run.opts),
          {:ok, next_agents} <- validate_next_agents(run, result.next_agents),
-         {:ok, step_count} <- reserve_steps(run.step_count, length(next_agents), max_steps) do
+         {:ok, step_count} <- reserve_steps(run.step_count, length(next_agents), max_steps),
+         {:ok, run} <- maybe_compact_before_spawn(run, next_agents, result.agent_id) do
       run_context = run_context(run)
 
       {new_tasks, events} = spawn_agents(next_agents, run.opts, run_context, result.agent_id)
@@ -320,6 +326,9 @@ defmodule AgentMachine.RunServer do
        |> Map.merge(%{tasks: tasks, agent_order: agent_order, step_count: step_count})
        |> append_event(delegation_event)
        |> append_events(events)}
+    else
+      {:error, %{} = failed_run} -> {:failed_run, failed_run}
+      other -> other
     end
   end
 
@@ -373,20 +382,26 @@ defmodule AgentMachine.RunServer do
   defp start_finalizer(run) do
     case reserve_optional_step(run) do
       {:ok, step_count} ->
-        run_context = run_context(run)
-        {tasks, events} = spawn_agents([run.finalizer], run.opts, run_context, nil)
+        case maybe_compact_before_spawn(run, [run.finalizer], nil) do
+          {:ok, run} ->
+            run_context = run_context(run)
+            {tasks, events} = spawn_agents([run.finalizer], run.opts, run_context, nil)
 
-        run
-        |> Map.merge(%{
-          tasks: tasks,
-          agent_order: run.agent_order ++ [run.finalizer.id],
-          finalizer_started: true,
-          step_count: step_count,
-          status: :running,
-          usage: nil,
-          finished_at: nil
-        })
-        |> append_events(events)
+            run
+            |> Map.merge(%{
+              tasks: tasks,
+              agent_order: run.agent_order ++ [run.finalizer.id],
+              finalizer_started: true,
+              step_count: step_count,
+              status: :running,
+              usage: nil,
+              finished_at: nil
+            })
+            |> append_events(events)
+
+          {:error, failed_run} ->
+            failed_run
+        end
 
       {:error, reason} ->
         fail_run(run, reason)
@@ -457,23 +472,82 @@ defmodule AgentMachine.RunServer do
 
   defp merge_result_artifacts(run, _result), do: {:ok, run}
 
-  defp maybe_compact_run_context(run, agent) do
-    if run_context_compaction_enabled?(run) and
-         run.context_compaction_count < max_context_compactions!(run) do
-      usage = aggregate_usage(run)
+  defp maybe_compact_before_spawn(run, [], _parent_agent_id), do: {:ok, run}
 
-      if ContextBudget.threshold_reached?(
-           usage,
-           Keyword.fetch!(run.opts, :context_window_tokens),
-           Keyword.fetch!(run.opts, :run_context_compact_percent)
-         ) do
-        compact_run_context(run, agent)
-      else
-        {:ok, run}
+  defp maybe_compact_before_spawn(run, agents, parent_agent_id) do
+    if should_measure_compaction_budget?(run) and compactable_result_ids(run) != [] do
+      case compaction_budget_decision(run, agents, parent_agent_id) do
+        {:compact, agent} ->
+          compact_run_context(run, agent)
+
+        {:skip_unknown, agent_id, measurement} ->
+          {:ok,
+           append_event(
+             run,
+             run_context_compaction_skipped_event(
+               run.id,
+               run.context_compaction_count + 1,
+               agent_id,
+               Map.get(measurement, :reason, "unknown_context_budget"),
+               measurement
+             )
+           )}
+
+        :continue ->
+          {:ok, run}
       end
     else
       {:ok, run}
     end
+  end
+
+  defp should_measure_compaction_budget?(run) do
+    run_context_compaction_enabled?(run) and
+      run.context_compaction_count < max_context_compactions!(run)
+  end
+
+  defp compaction_budget_decision(run, agents, parent_agent_id) do
+    measurements =
+      Enum.map(agents, fn agent ->
+        {agent, compaction_budget_measurement(run, agent, parent_agent_id)}
+      end)
+
+    compact_percent = Keyword.fetch!(run.opts, :run_context_compact_percent)
+
+    case threshold_measurement(measurements, compact_percent) do
+      {agent, _measurement} ->
+        {:compact, agent}
+
+      nil ->
+        unknown_budget_decision(measurements)
+    end
+  end
+
+  defp threshold_measurement(measurements, compact_percent) do
+    Enum.find(measurements, fn {_agent, measurement} ->
+      ContextBudget.threshold_reached?(measurement, compact_percent)
+    end)
+  end
+
+  defp unknown_budget_decision(measurements) do
+    case Enum.find(measurements, fn {_agent, measurement} -> measurement.status == "unknown" end) do
+      {agent, measurement} -> {:skip_unknown, agent.id, measurement}
+      nil -> :continue
+    end
+  end
+
+  defp compaction_budget_measurement(run, agent, parent_agent_id) do
+    run_context = run_context(run)
+
+    opts =
+      run.opts
+      |> Keyword.put(:attempt, 1)
+      |> Keyword.put(
+        :run_context,
+        build_agent_context(run.opts, agent, run_context, parent_agent_id)
+      )
+
+    ContextBudget.measure(agent, opts)
   end
 
   defp run_context_compaction_enabled?(run),
@@ -891,6 +965,36 @@ defmodule AgentMachine.RunServer do
       reason: reason,
       at: DateTime.utc_now()
     }
+  end
+
+  defp run_context_compaction_skipped_event(
+         run_id,
+         compaction_count,
+         agent_id,
+         reason,
+         measurement
+       ) do
+    %{
+      type: :run_context_compaction_skipped,
+      run_id: run_id,
+      compaction_count: compaction_count,
+      agent_id: agent_id,
+      reason: reason,
+      at: DateTime.utc_now()
+    }
+    |> Map.merge(
+      Map.take(measurement, [
+        :measurement,
+        :status,
+        :model,
+        :used_tokens,
+        :context_window_tokens,
+        :reserved_output_tokens,
+        :available_tokens,
+        :used_percent,
+        :remaining_percent
+      ])
+    )
   end
 
   defp run_completed_event(run_id) do

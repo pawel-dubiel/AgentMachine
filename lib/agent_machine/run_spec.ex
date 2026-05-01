@@ -3,7 +3,7 @@ defmodule AgentMachine.RunSpec do
   High-level run request used by clients.
   """
 
-  alias AgentMachine.MCP.Config
+  alias AgentMachine.{ContextBudget, MCP.Config}
   alias AgentMachine.Skills.Manifest
   alias AgentMachine.Tools.RunTestCommand
 
@@ -35,6 +35,8 @@ defmodule AgentMachine.RunSpec do
     :stream_response,
     :context_window_tokens,
     :context_warning_percent,
+    :context_tokenizer_path,
+    :reserved_output_tokens,
     :run_context_compaction,
     :run_context_compact_percent,
     :max_context_compactions,
@@ -71,6 +73,8 @@ defmodule AgentMachine.RunSpec do
           stream_response: boolean(),
           context_window_tokens: pos_integer() | nil,
           context_warning_percent: pos_integer() | nil,
+          context_tokenizer_path: binary() | nil,
+          reserved_output_tokens: pos_integer() | nil,
           run_context_compaction: :off | :on,
           run_context_compact_percent: pos_integer() | nil,
           max_context_compactions: pos_integer() | nil,
@@ -218,9 +222,18 @@ defmodule AgentMachine.RunSpec do
   defp validate_context_options!(%__MODULE__{} = spec) do
     require_optional_positive_integer!(spec.context_window_tokens, :context_window_tokens)
     require_optional_percent!(spec.context_warning_percent, :context_warning_percent)
+    validate_context_tokenizer_path!(spec.context_tokenizer_path)
+    require_optional_positive_integer!(spec.reserved_output_tokens, :reserved_output_tokens)
     require_run_context_compaction!(spec.run_context_compaction)
     validate_warning_requires_window!(spec)
     validate_run_context_compaction_options!(spec)
+  end
+
+  defp validate_context_tokenizer_path!(nil), do: :ok
+
+  defp validate_context_tokenizer_path!(path) do
+    ContextBudget.validate_tokenizer_path!(path)
+    :ok
   end
 
   defp validate_warning_requires_window!(%__MODULE__{

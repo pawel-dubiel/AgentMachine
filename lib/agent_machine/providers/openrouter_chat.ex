@@ -116,8 +116,21 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     end
   end
 
+  @impl true
+  def context_budget_request(%Agent{} = agent, opts) do
+    {:ok,
+     %{
+       provider: :openrouter_chat,
+       request: budget_request_body(agent, opts),
+       breakdown: budget_breakdown(agent, opts)
+     }}
+  end
+
   if Mix.env() == :test do
     def request_body_for_test!(%Agent{} = agent, opts), do: request_body(agent, opts)
+
+    def context_budget_request_for_test!(%Agent{} = agent, opts),
+      do: context_budget_request(agent, opts)
   end
 
   defp request_body(%Agent{} = agent, opts) do
@@ -126,6 +139,48 @@ defmodule AgentMachine.Providers.OpenRouterChat do
       "messages" => messages(agent, opts)
     }
     |> ToolHarness.put_openrouter_tools!(opts)
+  end
+
+  defp budget_request_body(%Agent{} = agent, opts) do
+    body = request_body(agent, opts)
+
+    if Keyword.get(opts, :stream_response, false) do
+      body
+      |> Map.put("stream", true)
+      |> Map.put("stream_options", %{"include_usage" => true})
+    else
+      body
+    end
+  end
+
+  defp budget_breakdown(%Agent{} = agent, opts) do
+    tool_groups = ToolHarness.openrouter_tool_groups!(opts)
+
+    case Keyword.fetch(opts, :tool_continuation) do
+      {:ok, _continuation} ->
+        %{
+          instructions: agent.instructions,
+          task_input: nil,
+          run_context: nil,
+          skills: nil,
+          tools: tool_groups.tools,
+          mcp_tools: tool_groups.mcp_tools,
+          tool_continuation: messages(agent, opts)
+        }
+
+      :error ->
+        sections = RunContextPrompt.budget_sections(opts)
+
+        %{
+          instructions: agent.instructions,
+          task_input: agent.input,
+          run_context: sections.run_context,
+          skills: sections.skills,
+          tools: tool_groups.tools,
+          mcp_tools: tool_groups.mcp_tools,
+          tool_continuation: nil
+        }
+    end
   end
 
   defp messages(%Agent{} = agent, opts) do

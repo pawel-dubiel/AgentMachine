@@ -77,13 +77,41 @@ func (m model) statusLine() string {
 	if m.skillsEnabled() {
 		parts = append(parts, "skills="+m.skillsModeLabel())
 	}
-	if strings.TrimSpace(m.contextWindowForModel(m.modelID())) != "" || strings.TrimSpace(m.savedConfig.RunContextCompact) == "on" {
+	if budget := contextBudgetStatus(m.latestContextBudget); budget != "" {
+		parts = append(parts, budget)
+	} else if strings.TrimSpace(m.contextWindowForModel(m.modelID())) != "" || strings.TrimSpace(m.savedConfig.RunContextCompact) == "on" {
 		parts = append(parts, "context=configured")
 	}
 	if m.modelStatus != "" {
 		parts = append(parts, "models="+m.modelStatus)
 	}
 	return strings.Join(parts, " | ")
+}
+
+func contextBudgetStatus(event *eventSummary) string {
+	if event == nil {
+		return ""
+	}
+	if event.Status == "unknown" {
+		return "ctx=unknown " + emptyAs(event.Reason, "unknown_context_budget")
+	}
+	if event.UsedPercent == nil || event.ContextWindow <= 0 {
+		return ""
+	}
+	prefix := "ctx="
+	if event.Status == "warning" {
+		prefix = "ctx=warning "
+	}
+	parts := []string{
+		prefix + fmt.Sprintf("%.1f%%", *event.UsedPercent),
+		fmt.Sprintf("%d/%d", event.UsedTokens, event.ContextWindow),
+	}
+	if event.AvailableTokens != nil {
+		parts = append(parts, fmt.Sprintf("avail=%d", *event.AvailableTokens))
+	} else {
+		parts = append(parts, "avail=unknown")
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m model) chatView() string {
@@ -709,6 +737,8 @@ func (m model) setupView() string {
 		"/router-status",
 		"/context status",
 		"/context window <tokens> [warning-percent]",
+		"/context tokenizer <path>|off",
+		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>",
 		"/context run-compaction off",
 		"/compact",
@@ -1041,6 +1071,8 @@ func helpText() string {
 		"/router-confidence <float>",
 		"/router-status",
 		"/context status|window <tokens> [warning-percent]|window off",
+		"/context tokenizer <path>|off",
+		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",

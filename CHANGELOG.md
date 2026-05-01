@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Reworked context budget monitoring to measure provider request bodies with an
+  explicit tokenizer path, added reserved-output configuration, TUI status-line
+  rendering, and budget-gated run-context compaction skips when measurement is
+  unknown.
 - Added explicit conversation and run-context compaction with a compact CLI,
   TUI `/compact` and `/context` commands, context budget events, and
   opt-in automatic run-context compaction.

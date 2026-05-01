@@ -96,6 +96,14 @@ type eventSummary struct {
 	Reason            string         `json:"reason"`
 	Summary           string         `json:"summary"`
 	Delta             string         `json:"delta"`
+	Measurement       string         `json:"measurement"`
+	UsedTokens        int            `json:"used_tokens"`
+	ContextWindow     int            `json:"context_window_tokens"`
+	ReservedOutput    int            `json:"reserved_output_tokens"`
+	AvailableTokens   *int           `json:"available_tokens"`
+	UsedPercent       *float64       `json:"used_percent"`
+	RemainingPercent  *float64       `json:"remaining_percent"`
+	Breakdown         map[string]int `json:"breakdown"`
 	InputSummary      map[string]any `json:"input_summary"`
 	ResultSummary     map[string]any `json:"result_summary"`
 	Details           map[string]any `json:"details"`
@@ -228,6 +236,8 @@ type runConfig struct {
 	AllowSkillScripts bool
 	ContextWindow     string
 	ContextWarning    string
+	ContextTokenizer  string
+	ReservedOutput    string
 	RunContextCompact string
 	ContextCompactPct string
 	MaxContextCompact string
@@ -260,6 +270,8 @@ type savedConfig struct {
 	AllowSkillScripts bool     `json:"allow_skill_scripts,omitempty"`
 	ContextWindow     string   `json:"context_window_tokens,omitempty"`
 	ContextWarning    string   `json:"context_warning_percent,omitempty"`
+	ContextTokenizer  string   `json:"context_tokenizer_path,omitempty"`
+	ReservedOutput    string   `json:"reserved_output_tokens,omitempty"`
 	RunContextCompact string   `json:"run_context_compaction,omitempty"`
 	ContextCompactPct string   `json:"run_context_compact_percent,omitempty"`
 	MaxContextCompact string   `json:"max_context_compactions,omitempty"`
@@ -299,52 +311,53 @@ const (
 )
 
 type model struct {
-	input              textinput.Model
-	workflow           runWorkflow
-	workflowSet        bool
-	provider           provider
-	providerSet        bool
-	savedConfig        savedConfig
-	configPath         string
-	modelOptions       []modelOption
-	modelIndex         int
-	selectedModel      string
-	modelStatus        string
-	modelPickerOpen    bool
-	modelPickerIndex   int
-	modelPickerPending bool
-	modelPickerQuery   string
-	messages           []chatMessage
-	inputHistory       []string
-	historyIndex       int
-	historyDraft       string
-	queuedMessages     []queuedMessage
-	nextQueueID        int
-	view               viewMode
-	selectedAgent      string
-	selectedAgentIndex int
-	running            bool
-	activeConfig       runConfig
-	lastSummary        summary
-	agents             map[string]agentState
-	agentOrder         []string
-	workItems          map[string]workItem
-	workOrder          []string
-	eventLog           []eventSummary
-	eventScroll        int
-	eventAutoScroll    bool
-	streamFrame        int
-	liveAssistant      string
-	raw                string
-	stream             *streamSession
-	pendingToolTask    string
-	pendingToolRoot    string
-	pendingToolHarness string
-	pendingToolChoice  int
-	eventSessionID     string
-	eventLogFile       string
-	width              int
-	height             int
+	input               textinput.Model
+	workflow            runWorkflow
+	workflowSet         bool
+	provider            provider
+	providerSet         bool
+	savedConfig         savedConfig
+	configPath          string
+	modelOptions        []modelOption
+	modelIndex          int
+	selectedModel       string
+	modelStatus         string
+	modelPickerOpen     bool
+	modelPickerIndex    int
+	modelPickerPending  bool
+	modelPickerQuery    string
+	messages            []chatMessage
+	inputHistory        []string
+	historyIndex        int
+	historyDraft        string
+	queuedMessages      []queuedMessage
+	nextQueueID         int
+	view                viewMode
+	selectedAgent       string
+	selectedAgentIndex  int
+	running             bool
+	activeConfig        runConfig
+	lastSummary         summary
+	agents              map[string]agentState
+	agentOrder          []string
+	workItems           map[string]workItem
+	workOrder           []string
+	eventLog            []eventSummary
+	latestContextBudget *eventSummary
+	eventScroll         int
+	eventAutoScroll     bool
+	streamFrame         int
+	liveAssistant       string
+	raw                 string
+	stream              *streamSession
+	pendingToolTask     string
+	pendingToolRoot     string
+	pendingToolHarness  string
+	pendingToolChoice   int
+	eventSessionID      string
+	eventLogFile        string
+	width               int
+	height              int
 }
 
 var (
@@ -852,6 +865,7 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	m.workItems = map[string]workItem{}
 	m.workOrder = nil
 	m.eventLog = nil
+	m.latestContextBudget = nil
 	m.eventScroll = 0
 	m.eventAutoScroll = true
 	m.streamFrame = 0
@@ -1248,10 +1262,14 @@ func (m model) handleContextCommand(args []string) (tea.Model, tea.Cmd) {
 	switch args[0] {
 	case "window":
 		return m.handleContextWindowCommand(args[1:])
+	case "tokenizer":
+		return m.handleContextTokenizerCommand(args[1:])
+	case "reserve":
+		return m.handleContextReserveCommand(args[1:])
 	case "run-compaction":
 		return m.handleRunContextCompactionCommand(args[1:])
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context [status]|window <tokens> [warning-percent]|window off|run-compaction on <compact-percent> <max-compactions>|run-compaction off"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context [status]|window <tokens> [warning-percent]|window off|tokenizer <path>|tokenizer off|reserve <tokens>|reserve off|run-compaction on <compact-percent> <max-compactions>|run-compaction off"})
 		return m, nil
 	}
 }
@@ -1285,6 +1303,41 @@ func (m model) handleContextWindowCommand(args []string) (tea.Model, tea.Cmd) {
 	m.savedConfig.ContextWindow = args[0]
 	m.savedConfig.ContextWarning = warning
 	return m.saveContextConfig("context window set to " + args[0] + " tokens")
+}
+
+func (m model) handleContextTokenizerCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.ContextTokenizer = ""
+		return m.saveContextConfig("context tokenizer cleared")
+	}
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context tokenizer <path>|off"})
+		return m, nil
+	}
+	path := strings.TrimSpace(args[0])
+	if err := validateExistingFile(path, "context tokenizer path"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.savedConfig.ContextTokenizer = path
+	return m.saveContextConfig("context tokenizer set to " + path)
+}
+
+func (m model) handleContextReserveCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.ReservedOutput = ""
+		return m.saveContextConfig("reserved output tokens cleared")
+	}
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /context reserve <tokens>|off"})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[0], "reserved output tokens"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.savedConfig.ReservedOutput = args[0]
+	return m.saveContextConfig("reserved output tokens set to " + args[0])
 }
 
 func (m model) handleRunContextCompactionCommand(args []string) (tea.Model, tea.Cmd) {
@@ -2325,6 +2378,10 @@ func (m *model) applyEvent(event eventSummary) {
 	if event.Type == "run_timed_out" {
 		m.markRunningAgentsTimedOut(event)
 	}
+	if event.Type == "context_budget" {
+		budget := event
+		m.latestContextBudget = &budget
+	}
 
 	m.applyWorkEvent(event)
 	m.applyNonDeltaEvent(event)
@@ -2644,6 +2701,8 @@ func (m model) runConfig(task string) runConfig {
 		SkillNames:        append([]string(nil), m.savedConfig.SkillNames...),
 		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
 		ContextWarning:    m.savedConfig.ContextWarning,
+		ContextTokenizer:  m.savedConfig.ContextTokenizer,
+		ReservedOutput:    m.savedConfig.ReservedOutput,
 		RunContextCompact: m.savedConfig.RunContextCompact,
 		ContextCompactPct: m.savedConfig.ContextCompactPct,
 		MaxContextCompact: m.savedConfig.MaxContextCompact,
@@ -2881,6 +2940,16 @@ func validateContextConfig(config runConfig) error {
 			return err
 		}
 	}
+	if strings.TrimSpace(config.ContextTokenizer) != "" {
+		if err := validateExistingFile(strings.TrimSpace(config.ContextTokenizer), "context tokenizer path"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.ReservedOutput) != "" {
+		if err := validatePositiveInt(config.ReservedOutput, "reserved output tokens"); err != nil {
+			return err
+		}
+	}
 
 	switch strings.TrimSpace(config.RunContextCompact) {
 	case "":
@@ -2916,6 +2985,8 @@ func validateSavedContextConfig(config savedConfig) error {
 	return validateContextSyntax(runConfig{
 		ContextWindow:     config.ContextWindow,
 		ContextWarning:    config.ContextWarning,
+		ContextTokenizer:  config.ContextTokenizer,
+		ReservedOutput:    config.ReservedOutput,
 		RunContextCompact: config.RunContextCompact,
 		ContextCompactPct: config.ContextCompactPct,
 		MaxContextCompact: config.MaxContextCompact,
@@ -2933,6 +3004,16 @@ func validateContextSyntax(config runConfig) error {
 			return errors.New("context warning percent requires explicit context window tokens")
 		}
 		if err := validatePercent(config.ContextWarning, "context warning percent"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.ContextTokenizer) != "" {
+		if err := validateExistingFile(strings.TrimSpace(config.ContextTokenizer), "context tokenizer path"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.ReservedOutput) != "" {
+		if err := validatePositiveInt(config.ReservedOutput, "reserved output tokens"); err != nil {
 			return err
 		}
 	}
@@ -3156,6 +3237,20 @@ func validatePercent(value string, label string) error {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 || parsed > 100 {
 		return fmt.Errorf("%s must be an integer from 1 to 100", label)
+	}
+	return nil
+}
+
+func validateExistingFile(path string, label string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%s must not be empty", label)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s does not exist: %s", label, path)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s must be a file, got directory: %s", label, path)
 	}
 	return nil
 }
@@ -3463,6 +3558,8 @@ func (m model) contextStatus() string {
 	parts := []string{
 		"context: window_tokens=" + emptyAsNone(window),
 		"warning_percent=" + emptyAsNone(warning),
+		"tokenizer=" + emptyAsNone(m.savedConfig.ContextTokenizer),
+		"reserved_output_tokens=" + emptyAsNone(m.savedConfig.ReservedOutput),
 		"run_compaction=" + compaction,
 	}
 	if compaction == "on" {
@@ -3522,6 +3619,12 @@ func runContextStatus(config runConfig) string {
 	parts := []string{"context window_tokens=" + emptyAsNone(config.ContextWindow)}
 	if strings.TrimSpace(config.ContextWarning) != "" {
 		parts = append(parts, "warning_percent="+config.ContextWarning)
+	}
+	if strings.TrimSpace(config.ContextTokenizer) != "" {
+		parts = append(parts, "tokenizer="+config.ContextTokenizer)
+	}
+	if strings.TrimSpace(config.ReservedOutput) != "" {
+		parts = append(parts, "reserved_output_tokens="+config.ReservedOutput)
 	}
 	if strings.TrimSpace(config.RunContextCompact) == "on" {
 		parts = append(parts,

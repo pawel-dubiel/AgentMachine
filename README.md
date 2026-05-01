@@ -172,6 +172,8 @@ Useful first commands:
 /compact
 /context status
 /context window <tokens> [warning-percent]
+/context tokenizer <path>
+/context reserve <tokens>
 /context run-compaction on <compact-percent> <max-compactions>
 /tools off
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
@@ -296,6 +298,8 @@ mix agent_machine.run \
   --max-attempts 1 \
   --context-window-tokens 128000 \
   --context-warning-percent 80 \
+  --context-tokenizer-path ./tokenizer.json \
+  --reserved-output-tokens 4096 \
   --run-context-compaction on \
   --run-context-compact-percent 90 \
   --max-context-compactions 2 \
@@ -303,10 +307,15 @@ mix agent_machine.run \
   "Plan and execute the task"
 ```
 
-Unknown model context windows are not guessed. Runs emit `context_budget`
-events with `status: "unknown"` when no context window is configured. Automatic
-run-context compaction only runs when enabled with a context window, compact
-threshold, and maximum compaction count.
+Context budgets are separate from cumulative run usage. The runtime emits
+`context_budget` events before provider requests by measuring the exact request
+body with `--context-tokenizer-path`. Unknown model context windows and missing
+tokenizers are not guessed; the event reports `status: "unknown"` with an
+explicit reason. If `--reserved-output-tokens` is omitted, available-token math
+stays unknown instead of assuming zero. Automatic run-context compaction only
+runs when enabled with a context window, compact threshold, maximum compaction
+count, and a known budget measurement; otherwise it emits a skipped event.
+The TUI mirrors the latest budget event in the status line.
 
 Common Make targets:
 

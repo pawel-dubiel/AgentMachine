@@ -8,7 +8,7 @@ defmodule AgentMachine.Providers.Echo do
 
   @behaviour AgentMachine.Provider
 
-  alias AgentMachine.{Agent, JSON}
+  alias AgentMachine.{Agent, JSON, RunContextPrompt}
 
   @impl true
   def complete(%Agent{} = agent, _opts) do
@@ -43,6 +43,30 @@ defmodule AgentMachine.Providers.Echo do
          input_tokens: input_tokens,
          output_tokens: output_tokens,
          total_tokens: input_tokens + output_tokens
+       }
+     }}
+  end
+
+  @impl true
+  def context_budget_request(%Agent{} = agent, opts) do
+    sections = RunContextPrompt.budget_sections(opts)
+
+    {:ok,
+     %{
+       provider: :echo,
+       request: %{
+         "model" => agent.model,
+         "instructions" => agent.instructions,
+         "input" => input(agent, sections)
+       },
+       breakdown: %{
+         instructions: agent.instructions,
+         task_input: agent.input,
+         run_context: sections.run_context,
+         skills: sections.skills,
+         tools: [],
+         mcp_tools: [],
+         tool_continuation: nil
        }
      }}
   end
@@ -93,6 +117,11 @@ defmodule AgentMachine.Providers.Echo do
         "agent #{agent.id}: #{agent.input}"
     end
   end
+
+  defp input(%Agent{} = agent, %{full_text: ""}), do: agent.input
+
+  defp input(%Agent{} = agent, %{full_text: context}),
+    do: agent.input <> "\n\nRun context:\n" <> context
 
   defp compaction_response?(%Agent{metadata: metadata}) when is_map(metadata) do
     Map.get(metadata, :agent_machine_response) == "compaction" ||

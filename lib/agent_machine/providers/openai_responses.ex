@@ -109,8 +109,21 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     end
   end
 
+  @impl true
+  def context_budget_request(%Agent{} = agent, opts) do
+    {:ok,
+     %{
+       provider: :openai_responses,
+       request: budget_request_body(agent, opts),
+       breakdown: budget_breakdown(agent, opts)
+     }}
+  end
+
   if Mix.env() == :test do
     def request_body_for_test!(%Agent{} = agent, opts), do: request_body(agent, opts)
+
+    def context_budget_request_for_test!(%Agent{} = agent, opts),
+      do: context_budget_request(agent, opts)
   end
 
   defp request_body(%Agent{} = agent, opts) do
@@ -119,6 +132,48 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     |> put_optional("instructions", agent.instructions)
     |> put_optional("metadata", agent.metadata)
     |> ToolHarness.put_openai_tools!(opts)
+  end
+
+  defp budget_request_body(%Agent{} = agent, opts) do
+    body = request_body(agent, opts)
+
+    if Keyword.get(opts, :stream_response, false) do
+      Map.put(body, "stream", true)
+    else
+      body
+    end
+  end
+
+  defp budget_breakdown(%Agent{} = agent, opts) do
+    tool_groups = ToolHarness.openai_tool_groups!(opts)
+
+    case Keyword.fetch(opts, :tool_continuation) do
+      {:ok, _continuation} ->
+        request = request_body(agent, opts)
+
+        %{
+          instructions: agent.instructions,
+          task_input: nil,
+          run_context: nil,
+          skills: nil,
+          tools: tool_groups.tools,
+          mcp_tools: tool_groups.mcp_tools,
+          tool_continuation: Map.fetch!(request, "input")
+        }
+
+      :error ->
+        sections = RunContextPrompt.budget_sections(opts)
+
+        %{
+          instructions: agent.instructions,
+          task_input: agent.input,
+          run_context: sections.run_context,
+          skills: sections.skills,
+          tools: tool_groups.tools,
+          mcp_tools: tool_groups.mcp_tools,
+          tool_continuation: nil
+        }
+    end
   end
 
   defp base_request_body(%Agent{} = agent, opts) do
