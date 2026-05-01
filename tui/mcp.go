@@ -31,9 +31,10 @@ type mcpServerConfig struct {
 }
 
 type mcpToolConfig struct {
-	Name       string `json:"name"`
-	Permission string `json:"permission"`
-	Risk       string `json:"risk"`
+	Name        string         `json:"name"`
+	Permission  string         `json:"permission"`
+	Risk        string         `json:"risk"`
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
 }
 
 func (m model) handleMCPCommand(args []string) (tea.Model, tea.Cmd) {
@@ -147,6 +148,82 @@ func managedMCPConfigPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "mcp.json")
 }
 
+func migrateManagedMCPConfig(configPath string, config *savedConfig) error {
+	path := strings.TrimSpace(config.MCPConfig)
+	if path == "" || path != managedMCPConfigPath(configPath) {
+		return nil
+	}
+
+	return migrateManagedPlaywrightMCPConfig(path)
+}
+
+func migrateManagedPlaywrightMCPConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("managed MCP config %s is missing; rerun /mcp add playwright <command> [args...]", path)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read managed MCP config %s: %w", path, err)
+	}
+
+	var config mcpConfigFile
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse managed MCP config %s: %w", path, err)
+	}
+	if !managedPlaywrightConfig(config) {
+		return fmt.Errorf("managed MCP config %s is not the TUI Playwright preset; use /mcp-config for standalone MCP configs", path)
+	}
+
+	changed := false
+	for serverIndex := range config.Servers {
+		for toolIndex := range config.Servers[serverIndex].Tools {
+			tool := &config.Servers[serverIndex].Tools[toolIndex]
+			switch {
+			case tool.Name == "browser_navigate" && tool.Permission == "mcp_playwright_browser_navigate":
+				if !hasPlaywrightNavigateSchema(tool.InputSchema) {
+					tool.InputSchema = playwrightNavigateInputSchema()
+					changed = true
+				}
+			case tool.Name == "browser_snapshot" && tool.Permission == "mcp_playwright_browser_snapshot":
+				if !hasPlaywrightSnapshotSchema(tool.InputSchema) {
+					tool.InputSchema = playwrightSnapshotInputSchema()
+					changed = true
+				}
+			case len(tool.InputSchema) == 0:
+				return fmt.Errorf("managed MCP tool %s is missing inputSchema", tool.Name)
+			}
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return writeMCPConfigFile(path, config)
+}
+
+func managedPlaywrightConfig(config mcpConfigFile) bool {
+	if len(config.Servers) != 1 {
+		return false
+	}
+	server := config.Servers[0]
+	if server.ID != "playwright" || server.Transport != "stdio" || strings.TrimSpace(server.Command) == "" {
+		return false
+	}
+
+	seenNavigate := false
+	seenSnapshot := false
+	for _, tool := range server.Tools {
+		switch {
+		case tool.Name == "browser_navigate" && tool.Permission == "mcp_playwright_browser_navigate" && tool.Risk == "network":
+			seenNavigate = true
+		case tool.Name == "browser_snapshot" && tool.Permission == "mcp_playwright_browser_snapshot" && tool.Risk == "read":
+			seenSnapshot = true
+		}
+	}
+	return seenNavigate && seenSnapshot
+}
+
 func writePlaywrightMCPConfig(path string, commandArgs []string) error {
 	command, args, err := playwrightCommand(commandArgs)
 	if err != nil {
@@ -163,20 +240,26 @@ func writePlaywrightMCPConfig(path string, commandArgs []string) error {
 				Env:       map[string]string{},
 				Tools: []mcpToolConfig{
 					{
-						Name:       "browser_navigate",
-						Permission: "mcp_playwright_browser_navigate",
-						Risk:       "network",
+						Name:        "browser_navigate",
+						Permission:  "mcp_playwright_browser_navigate",
+						Risk:        "network",
+						InputSchema: playwrightNavigateInputSchema(),
 					},
 					{
-						Name:       "browser_snapshot",
-						Permission: "mcp_playwright_browser_snapshot",
-						Risk:       "read",
+						Name:        "browser_snapshot",
+						Permission:  "mcp_playwright_browser_snapshot",
+						Risk:        "read",
+						InputSchema: playwrightSnapshotInputSchema(),
 					},
 				},
 			},
 		},
 	}
 
+	return writeMCPConfigFile(path, config)
+}
+
+func writeMCPConfigFile(path string, config mcpConfigFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("failed to create MCP config directory: %w", err)
 	}
@@ -190,6 +273,61 @@ func writePlaywrightMCPConfig(path string, commandArgs []string) error {
 		return fmt.Errorf("failed to write MCP config %s: %w", path, err)
 	}
 	return nil
+}
+
+func playwrightNavigateInputSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []string{"url"},
+		"properties": map[string]any{
+			"url": map[string]any{
+				"type":        "string",
+				"description": "Absolute URL to navigate to.",
+			},
+		},
+		"additionalProperties": false,
+	}
+}
+
+func playwrightSnapshotInputSchema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func hasPlaywrightNavigateSchema(schema map[string]any) bool {
+	if schema["type"] != "object" {
+		return false
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	urlSchema, ok := properties["url"].(map[string]any)
+	if !ok || urlSchema["type"] != "string" {
+		return false
+	}
+	return schemaRequiredIncludes(schema["required"], "url")
+}
+
+func hasPlaywrightSnapshotSchema(schema map[string]any) bool {
+	return schema["type"] == "object"
+}
+
+func schemaRequiredIncludes(required any, field string) bool {
+	switch values := required.(type) {
+	case []any:
+		for _, value := range values {
+			if value == field {
+				return true
+			}
+		}
+	case []string:
+		for _, value := range values {
+			if value == field {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func playwrightCommand(commandArgs []string) (string, []string, error) {

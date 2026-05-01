@@ -403,6 +403,9 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err := applyStartupOptions(&savedConfig, startup); err != nil {
 		return model{}, err
 	}
+	if err := migrateManagedMCPConfig(configPath, &savedConfig); err != nil {
+		return model{}, err
+	}
 	if startup.hasOverrides() {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err

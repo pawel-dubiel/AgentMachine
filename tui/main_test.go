@@ -2106,11 +2106,93 @@ func TestMCPAddPlaywrightCreatesManagedConfig(t *testing.T) {
 		`"id": "playwright"`,
 		`"command": "npx"`,
 		`"browser_navigate"`,
+		`"inputSchema"`,
+		`"required": [`,
+		`"url"`,
 		`"risk": "network"`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected generated MCP config to contain %q, got %s", expected, text)
 		}
+	}
+}
+
+func TestInitialModelMigratesManagedPlaywrightMCPConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	managedPath := managedMCPConfigPath(configPath)
+
+	if err := os.MkdirAll(filepath.Dir(managedPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldConfig := `{
+  "servers": [
+    {
+      "id": "playwright",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["--yes", "@playwright/mcp@latest", "--headless"],
+      "env": {},
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "permission": "mcp_playwright_browser_navigate",
+          "risk": "network"
+        },
+        {
+          "name": "browser_snapshot",
+          "permission": "mcp_playwright_browser_snapshot",
+          "risk": "read"
+        }
+      ]
+    }
+  ]
+}
+`
+	if err := os.WriteFile(managedPath, []byte(oldConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSavedConfig(configPath, savedConfig{
+		MCPConfig:     managedPath,
+		ToolTimeout:   defaultMCPToolTimeout,
+		ToolMaxRounds: defaultMCPToolMaxRounds,
+		ToolApproval:  defaultMCPToolApproval,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+	if m.savedConfig.MCPConfig != managedPath {
+		t.Fatalf("expected managed MCP config, got %#v", m.savedConfig)
+	}
+
+	data, err := os.ReadFile(managedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{
+		`"inputSchema"`,
+		`"required": [`,
+		`"url"`,
+		`"browser_snapshot"`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected migrated MCP config to contain %q, got %s", expected, text)
+		}
+	}
+}
+
+func TestManagedMCPMigrationLeavesStandaloneConfigAlone(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	standalonePath := filepath.Join(t.TempDir(), "standalone.mcp.json")
+	config := savedConfig{MCPConfig: standalonePath}
+
+	if err := migrateManagedMCPConfig(configPath, &config); err != nil {
+		t.Fatalf("expected standalone config to be ignored, got %v", err)
 	}
 }
 
