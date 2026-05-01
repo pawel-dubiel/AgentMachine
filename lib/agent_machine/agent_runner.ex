@@ -151,6 +151,7 @@ defmodule AgentMachine.AgentRunner do
       tool_results: %{},
       tool_call_ids: MapSet.new(),
       denied_approval_fingerprints: MapSet.new(),
+      failed_tool_fingerprints: MapSet.new(),
       events: []
     }
 
@@ -407,7 +408,8 @@ defmodule AgentMachine.AgentRunner do
     else
       with {:ok, tool_state} <- tool_state_from_payload(payload),
            {:ok, tool_call_ids} <- validate_new_tool_call_ids(tool_calls, state.tool_call_ids),
-           {:ok, round_results, round_events, opts, denied_approval_fingerprints} <-
+           {:ok, round_results, round_events, opts, denied_approval_fingerprints,
+            failed_tool_fingerprints} <-
              run_tool_calls(
                tool_calls,
                opts,
@@ -415,7 +417,8 @@ defmodule AgentMachine.AgentRunner do
                agent.id,
                context.attempt,
                state.round + 1,
-               state.denied_approval_fingerprints
+               state.denied_approval_fingerprints,
+               state.failed_tool_fingerprints
              ) do
         continuation = %{state: tool_state, results: round_results}
         opts = Keyword.put(opts, :tool_continuation, continuation)
@@ -426,6 +429,7 @@ defmodule AgentMachine.AgentRunner do
             tool_results: merge_tool_results!(state.tool_results, round_results),
             tool_call_ids: tool_call_ids,
             denied_approval_fingerprints: denied_approval_fingerprints,
+            failed_tool_fingerprints: failed_tool_fingerprints,
             events: state.events ++ round_events
         }
 
@@ -547,7 +551,16 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp run_tool_calls(tool_calls, opts, run_id, agent_id, attempt, round, denied_fingerprints) do
+  defp run_tool_calls(
+         tool_calls,
+         opts,
+         run_id,
+         agent_id,
+         attempt,
+         round,
+         denied_fingerprints,
+         failed_fingerprints
+       ) do
     allowed_tools = allowed_tools_from_opts!(opts)
     tool_policy = tool_policy_from_opts!(opts)
     tool_approval_mode = tool_approval_mode_from_opts!(opts)
@@ -562,6 +575,14 @@ defmodule AgentMachine.AgentRunner do
       }
       |> Map.merge(agent_event_metadata(opts))
 
+    tool_context = %{
+      allowed_tools: allowed_tools,
+      tool_policy: tool_policy,
+      tool_approval_mode: tool_approval_mode,
+      tool_timeout_ms: tool_timeout_ms,
+      event_context: event_context
+    }
+
     if capability_request_round?(tool_calls) do
       run_capability_request_round(
         tool_calls,
@@ -570,18 +591,16 @@ defmodule AgentMachine.AgentRunner do
         tool_policy,
         tool_timeout_ms,
         event_context,
-        denied_fingerprints
+        denied_fingerprints,
+        failed_fingerprints
       )
     else
       run_regular_tool_call_round(
         tool_calls,
         opts,
-        allowed_tools,
-        tool_policy,
-        tool_approval_mode,
-        tool_timeout_ms,
-        event_context,
-        denied_fingerprints
+        tool_context,
+        denied_fingerprints,
+        failed_fingerprints
       )
     end
   end
@@ -589,27 +608,21 @@ defmodule AgentMachine.AgentRunner do
   defp run_regular_tool_call_round(
          tool_calls,
          opts,
-         allowed_tools,
-         tool_policy,
-         tool_approval_mode,
-         tool_timeout_ms,
-         event_context,
-         denied_fingerprints
+         tool_context,
+         denied_fingerprints,
+         failed_fingerprints
        ) do
     Enum.reduce_while(
       tool_calls,
-      {:ok, [], [], opts, denied_fingerprints},
-      fn tool_call, {:ok, results, events, opts, denied_fingerprints} ->
+      {:ok, [], [], opts, denied_fingerprints, failed_fingerprints},
+      fn tool_call, {:ok, results, events, opts, denied_fingerprints, failed_fingerprints} ->
         tool_call_result =
           run_tool_call(
             tool_call,
             opts,
-            allowed_tools,
-            tool_policy,
-            tool_approval_mode,
-            tool_timeout_ms,
-            event_context,
-            denied_fingerprints
+            tool_context,
+            denied_fingerprints,
+            failed_fingerprints
           )
 
         handle_tool_call_result(tool_call_result, results, events, opts)
@@ -618,12 +631,14 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp handle_tool_call_result(
-         {:ok, result, call_events, denied_fingerprints},
+         {:ok, result, call_events, denied_fingerprints, failed_fingerprints},
          results,
          events,
          opts
        ) do
-    {:cont, {:ok, results ++ [result], events ++ call_events, opts, denied_fingerprints}}
+    {:cont,
+     {:ok, results ++ [result], events ++ call_events, opts, denied_fingerprints,
+      failed_fingerprints}}
   end
 
   defp handle_tool_call_result({:error, reason, call_events}, _results, events, _opts) do
@@ -644,7 +659,8 @@ defmodule AgentMachine.AgentRunner do
          tool_policy,
          _tool_timeout_ms,
          event_context,
-         denied_fingerprints
+         denied_fingerprints,
+         failed_fingerprints
        ) do
     started_at = DateTime.utc_now()
     id = safe_tool_call_id(tool_call)
@@ -678,14 +694,14 @@ defmodule AgentMachine.AgentRunner do
 
           {:ok, [%{id: id, result: result}],
            [started_event] ++ permission_events ++ [finished_event], updated_opts,
-           denied_fingerprints}
+           denied_fingerprints, failed_fingerprints}
 
         {:denied, reason, permission_events} ->
           {:ok, result, denied_events} =
             denied_tool_call(opts, event_context, id, tool, started_at, reason)
 
           {:ok, [result], [started_event] ++ permission_events ++ denied_events, opts,
-           denied_fingerprints}
+           denied_fingerprints, failed_fingerprints}
 
         {:error, reason, permission_events} ->
           {:error, reason, failed_events} =
@@ -706,7 +722,8 @@ defmodule AgentMachine.AgentRunner do
          _tool_policy,
          _tool_timeout_ms,
          _event_context,
-         _denied_fingerprints
+         _denied_fingerprints,
+         _failed_fingerprints
        ) do
     {:error,
      "request_capability must be the only tool call in its provider round, got #{length(tool_calls)} call(s)",
@@ -960,12 +977,9 @@ defmodule AgentMachine.AgentRunner do
   defp run_tool_call(
          tool_call,
          opts,
-         allowed_tools,
-         tool_policy,
-         tool_approval_mode,
-         tool_timeout_ms,
-         event_context,
-         denied_fingerprints
+         tool_context,
+         denied_fingerprints,
+         failed_fingerprints
        )
        when is_map(tool_call) do
     started_at = DateTime.utc_now()
@@ -974,47 +988,71 @@ defmodule AgentMachine.AgentRunner do
 
     with {:ok, id} <- validate_tool_call_id(id),
          {:ok, tool} <- validate_tool_module(tool),
-         :ok <- validate_allowed_tool(tool, allowed_tools),
-         :ok <- validate_tool_permission(tool_policy, tool),
+         :ok <- validate_allowed_tool(tool, tool_context.allowed_tools),
+         :ok <- validate_tool_permission(tool_context.tool_policy, tool),
          {:ok, input} <- validate_tool_input(safe_tool_call_input(tool_call)) do
       approval_fingerprint = approval_fingerprint(tool, input)
 
-      if MapSet.member?(denied_fingerprints, approval_fingerprint) do
-        repeat_denied_tool_call(opts, event_context, id, tool, started_at, denied_fingerprints)
-      else
-        run_tool_call_after_approval(%{
-          opts: opts,
-          tool_approval_mode: tool_approval_mode,
-          tool_timeout_ms: tool_timeout_ms,
-          event_context: event_context,
-          id: id,
-          tool: tool,
-          input: input,
-          started_at: started_at,
-          approval_fingerprint: approval_fingerprint,
-          denied_fingerprints: denied_fingerprints
-        })
+      cond do
+        MapSet.member?(failed_fingerprints, approval_fingerprint) ->
+          repeat_failed_tool_call(opts, tool_context.event_context, id, tool, started_at)
+
+        MapSet.member?(denied_fingerprints, approval_fingerprint) ->
+          repeat_denied_tool_call(
+            opts,
+            tool_context.event_context,
+            id,
+            tool,
+            started_at,
+            denied_fingerprints,
+            failed_fingerprints
+          )
+
+        true ->
+          run_tool_call_after_approval(%{
+            opts: opts,
+            tool_approval_mode: tool_context.tool_approval_mode,
+            tool_timeout_ms: tool_context.tool_timeout_ms,
+            event_context: tool_context.event_context,
+            id: id,
+            tool: tool,
+            input: input,
+            started_at: started_at,
+            approval_fingerprint: approval_fingerprint,
+            denied_fingerprints: denied_fingerprints,
+            failed_fingerprints: failed_fingerprints
+          })
       end
     else
       {:error, reason} ->
-        failed_tool_call(opts, event_context, id, tool, started_at, reason)
+        failed_tool_call(opts, tool_context.event_context, id, tool, started_at, reason)
     end
   end
 
   defp run_tool_call(
          tool_call,
          _opts,
-         _allowed_tools,
-         _tool_policy,
-         _tool_approval_mode,
-         _tool_timeout_ms,
-         _event_context,
-         _denied_fingerprints
+         _tool_context,
+         _denied_fingerprints,
+         _failed_fingerprints
        ) do
     raise ArgumentError, "tool call must be a map, got: #{inspect(tool_call)}"
   end
 
-  defp repeat_denied_tool_call(opts, event_context, id, tool, started_at, denied_fingerprints) do
+  defp repeat_failed_tool_call(opts, event_context, id, tool, started_at) do
+    reason = "provider repeated failed tool call #{tool_name(tool)} with identical input"
+    failed_tool_call(opts, event_context, id, tool, started_at, reason)
+  end
+
+  defp repeat_denied_tool_call(
+         opts,
+         event_context,
+         id,
+         tool,
+         started_at,
+         denied_fingerprints,
+         failed_fingerprints
+       ) do
     {:ok, result, events} =
       denied_tool_call(
         opts,
@@ -1025,7 +1063,7 @@ defmodule AgentMachine.AgentRunner do
         "tool approval denied previously for the same request"
       )
 
-    {:ok, result, events, denied_fingerprints}
+    {:ok, result, events, denied_fingerprints, failed_fingerprints}
   end
 
   defp run_tool_call_after_approval(context) do
@@ -1038,28 +1076,10 @@ defmodule AgentMachine.AgentRunner do
            context.event_context
          ) do
       {:approved, approval_events} ->
-        run_approved_tool_call(
-          context.opts,
-          context.tool_timeout_ms,
-          context.event_context,
-          context.id,
-          context.tool,
-          context.input,
-          approval_events,
-          context.denied_fingerprints
-        )
+        run_approved_tool_call(context, approval_events)
 
       {:denied, reason, approval_events} ->
-        run_denied_tool_call(
-          context.opts,
-          context.event_context,
-          context.id,
-          context.tool,
-          reason,
-          approval_events,
-          context.approval_fingerprint,
-          context.denied_fingerprints
-        )
+        run_denied_tool_call(context, reason, approval_events)
 
       {:error, reason, approval_events} ->
         {:error, reason, events} =
@@ -1076,49 +1096,75 @@ defmodule AgentMachine.AgentRunner do
     end
   end
 
-  defp run_approved_tool_call(
-         opts,
-         tool_timeout_ms,
-         event_context,
-         id,
-         tool,
-         input,
-         approval_events,
-         denied_fingerprints
-       ) do
+  defp run_approved_tool_call(context, approval_events) do
     execution_started_at = DateTime.utc_now()
 
     {:ok, result, events} =
       do_run_tool_call(
-        tool,
-        id,
-        input,
-        opts,
-        tool_timeout_ms,
-        event_context,
+        context.tool,
+        context.id,
+        context.input,
+        context.opts,
+        context.tool_timeout_ms,
+        context.event_context,
         execution_started_at
       )
 
-    {:ok, result, approval_events ++ events, denied_fingerprints}
+    failed_fingerprints =
+      maybe_cache_failed_tool_fingerprint(
+        result,
+        context.approval_fingerprint,
+        context.failed_fingerprints
+      )
+
+    {:ok, result, approval_events ++ events, context.denied_fingerprints, failed_fingerprints}
   end
 
-  defp run_denied_tool_call(
-         opts,
-         event_context,
-         id,
-         tool,
-         reason,
-         approval_events,
-         approval_fingerprint,
-         denied_fingerprints
-       ) do
+  defp run_denied_tool_call(context, reason, approval_events) do
     denied_at = DateTime.utc_now()
 
-    {:ok, result, events} = denied_tool_call(opts, event_context, id, tool, denied_at, reason)
+    {:ok, result, events} =
+      denied_tool_call(
+        context.opts,
+        context.event_context,
+        context.id,
+        context.tool,
+        denied_at,
+        reason
+      )
 
     {:ok, result, approval_events ++ events,
-     MapSet.put(denied_fingerprints, approval_fingerprint)}
+     MapSet.put(context.denied_fingerprints, context.approval_fingerprint),
+     context.failed_fingerprints}
   end
+
+  defp maybe_cache_failed_tool_fingerprint(
+         %{result: result},
+         approval_fingerprint,
+         failed_fingerprints
+       )
+       when is_map(result) do
+    status = Map.get(result, :status, Map.get(result, "status"))
+    error = Map.get(result, :error, Map.get(result, "error"))
+
+    if status == "error" and cacheable_tool_failure?(error) do
+      MapSet.put(failed_fingerprints, approval_fingerprint)
+    else
+      failed_fingerprints
+    end
+  end
+
+  defp maybe_cache_failed_tool_fingerprint(_result, _approval_fingerprint, failed_fingerprints),
+    do: failed_fingerprints
+
+  defp cacheable_tool_failure?(error) when is_binary(error) do
+    String.starts_with?(error, [
+      "MCP tool input requires an arguments object",
+      "MCP tool arguments invalid:"
+    ])
+  end
+
+  defp cacheable_tool_failure?(_error), do: false
 
   defp do_run_tool_call(tool, id, input, opts, tool_timeout_ms, event_context, started_at) do
     started_event = tool_call_started_event(event_context, id, tool, started_at, opts, input)

@@ -284,6 +284,146 @@ defmodule AgentMachine.MCPIntegrationTest do
     refute JSON.encode!(result) =~ "sk-abcdefghijklmnopqrstuvwxyz123456"
   end
 
+  test "MCP tool definitions expose configured input schemas under arguments" do
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => "mcp-playwright",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "browser_navigate",
+                "permission" => "mcp_playwright_browser_navigate",
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["url"],
+                  "properties" => %{"url" => %{"type" => "string"}},
+                  "additionalProperties" => false
+                }
+              }
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+    definition = tool.definition()
+
+    assert get_in(definition.input_schema, ["properties", "arguments", "required"]) == ["url"]
+
+    assert get_in(definition.input_schema, [
+             "properties",
+             "arguments",
+             "properties",
+             "url",
+             "type"
+           ]) ==
+             "string"
+
+    assert get_in(definition.input_schema, ["properties", "arguments", "additionalProperties"]) ==
+             false
+  end
+
+  test "MCP tool runner validates configured input schema before transport call" do
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => "mcp-playwright",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "browser_navigate",
+                "permission" => "mcp_playwright_browser_navigate",
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["url"],
+                  "properties" => %{"url" => %{"type" => "string"}},
+                  "additionalProperties" => false
+                }
+              }
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+
+    assert {:error, reason} =
+             tool.run(%{"arguments" => %{}}, mcp_config: config, tool_timeout_ms: 1_000)
+
+    assert reason == "MCP tool arguments invalid: missing required field arguments.url"
+  end
+
+  test "agent runner fails early when provider repeats the same malformed MCP call" do
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => "mcp-playwright",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "browser_navigate",
+                "permission" => "mcp_playwright_browser_navigate",
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["url"],
+                  "properties" => %{"url" => %{"type" => "string"}},
+                  "additionalProperties" => false
+                }
+              }
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+
+    agents = [
+      %{
+        id: "mcp-user",
+        provider: AgentMachine.TestProviders.RepeatedMalformedMCPToolUsing,
+        model: "test",
+        input: "latest news",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [tool],
+               tool_policy: ToolPolicy.new!(permissions: [:mcp_playwright_browser_navigate]),
+               mcp_config: config,
+               tool_timeout_ms: 1_000,
+               tool_max_rounds: 6,
+               tool_approval_mode: :full_access
+             )
+
+    result = run.results["mcp-user"]
+    assert result.status == :error
+
+    assert result.error ==
+             "provider repeated failed tool call mcp_playwright_browser_navigate with identical input"
+
+    assert result.tool_results["malformed-1"].error =~ "missing required field arguments.url"
+    refute result.error =~ "tool_max_rounds"
+  end
+
   test "MCP session reuses one stdio server across tool calls" do
     script = counting_stdio_server!()
 
@@ -774,6 +914,41 @@ defmodule AgentMachine.TestProviders.MCPToolUsing do
     {:ok,
      %{
        output: output,
+       usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+     }}
+  end
+end
+
+defmodule AgentMachine.TestProviders.RepeatedMalformedMCPToolUsing do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{}, opts) do
+    [tool | _rest] = Keyword.fetch!(opts, :allowed_tools)
+
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        tool_request(tool, "malformed-1", 1)
+
+      %{state: %{round: 1}} ->
+        tool_request(tool, "malformed-2", 2)
+    end
+  end
+
+  defp tool_request(tool, id, round) do
+    {:ok,
+     %{
+       output: "requested malformed mcp call",
+       tool_calls: [
+         %{
+           id: id,
+           tool: tool,
+           input: %{arguments: %{}}
+         }
+       ],
+       tool_state: %{round: round},
        usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
      }}
   end

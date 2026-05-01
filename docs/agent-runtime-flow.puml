@@ -322,6 +322,9 @@ partition "AgentRunner and provider loop" {
           elseif (tool execution error or timeout?) then (recoverable)
             :Emit tool_call_failed event;
             :Store error-shaped tool_result;
+            if (deterministic malformed MCP input?) then (yes)
+              :Cache malformed-call fingerprint\nfor this agent attempt;
+            endif
             :Send error back to provider\nas tool_continuation;
           else (invalid tool payload)
             :Agent result = error;
