@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed runtime permission prompts in the TUI to use an explicit
+  approve/deny selector with Up/Down and Enter, while treating `/a` as approval
+  instead of queuing it as user input.
 - Changed `agent_machine.session` user messages to route through the normal
   workflow router before the coordinator, so toolful requests start primary
   sidechain runs with normal planner, tool authorization, and fail-fast
