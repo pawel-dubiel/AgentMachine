@@ -442,12 +442,24 @@ In interactive runs, `ask-before-write` exposes a safe `request_capability`
 negotiation tool so a worker can ask for a current-attempt grant mid-run. Grants
 are run-local, are not inherited by sibling workers, and are not persisted.
 `full-access` bypasses approval prompts for already allowed risk classes, but it
-does not bypass tool allowlists, MCP config allowlists, path guards, or exact
-test-command matching.
+does not bypass tool allowlists, MCP config allowlists, or path guards.
 
 Test commands are intentionally narrow. A model can run tests only through
 `code-edit` and only when the exact command was allowlisted with
-`--test-command`. `ask-before-write` requires an approval callback, or
+`--test-command` when using the dedicated `run_test_command` tool.
+
+When `code-edit` runs with `ask-before-write` or `full-access`, it also exposes
+foreground and background shell-command tools for project work. Shell commands
+must provide an explicit `cwd` under `--tool-root` and an explicit `timeout_ms`
+no greater than `--tool-timeout-ms`. They run through a POSIX shell, do not
+support interactive stdin, return bounded redacted combined output, and create
+code-edit rollback checkpoints for tracked text-file changes under the tool
+root.
+Background commands can be started, read, listed, and stopped within the owning
+run. This is a broad command capability; commands may still access the host
+environment according to the operating system account that runs AgentMachine.
+
+`ask-before-write` requires an approval callback, or
 `--permission-control jsonl-stdio` in a JSONL CLI/TUI run, whenever exposed tools
 include write, delete, command, or network risk.
 

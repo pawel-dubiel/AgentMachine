@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added foreground and background shell command tools to `code-edit` when
+  running with prompted command approval or `full-access`, including bounded
+  redacted output, per-run background command ownership, and code-edit rollback
+  checkpoints for root-local text-file changes.
 - Changed persistent session user-message routing to run in a supervised task,
   so provider-backed LLM routing no longer blocks the JSONL `user_message`
   acknowledgement or trips the 5s `GenServer.call` timeout.
