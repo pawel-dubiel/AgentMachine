@@ -1132,7 +1132,7 @@ func helpText() string {
 		"/test-command clear",
 		"/mcp add playwright <command> [args...]",
 		"/mcp list|status|remove playwright|off",
-		"/mcp-config <path> [timeout-ms max-rounds approval-mode]",
+		"/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>",
 		"/models reload",
 		"/models",
 		"/model [<id>|next|prev] (use /model to open picker)",

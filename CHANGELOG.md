@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed TUI `/mcp-config` to require an explicit timeout, max rounds, and
+  approval mode instead of inheriting a previously saved tool budget.
 - Tightened the agentic planner prompt with explicit strict JSON rules to reduce
   malformed delegation responses.
 - Changed TUI agent detail views to show each agent's exact streamed text

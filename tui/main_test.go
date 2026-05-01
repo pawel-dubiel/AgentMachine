@@ -1767,6 +1767,36 @@ func TestMCPConfigCommandRejectsMissingToolBudget(t *testing.T) {
 	}
 }
 
+func TestMCPConfigCommandRejectsInheritedToolBudget(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		ToolHarness:   "local-files",
+		ToolRoot:      "/tmp/project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "2",
+		ToolApproval:  "auto-approved-safe",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/mcp-config /tmp/agent-machine.mcp.json")
+	result := modelAfter.(model)
+
+	if result.savedConfig.MCPConfig != "" {
+		t.Fatalf("expected MCP config not to inherit existing tool budget, got %#v", result.savedConfig)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "tool timeout") {
+		t.Fatalf("expected explicit missing budget error, got %#v", result.messages)
+	}
+}
+
 func TestMCPAddPlaywrightCreatesManagedConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)

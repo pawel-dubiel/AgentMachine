@@ -198,6 +198,7 @@ Useful first commands:
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
 /mcp add playwright npx @playwright/mcp@latest
+/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>
 /agents
 /agent <id>
 ```
@@ -404,6 +405,8 @@ The TUI includes a convenient Playwright preset:
 
 That writes a managed MCP config, allowlists browser navigation and page
 snapshot tools, and keeps the setup visible in `/setup` and run banners.
+When using a standalone MCP config, pass an explicit tool budget with
+`/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>`.
 
 Browser navigation is a network-capable action, so it requires the appropriate
 approval level. A prompt should clearly request browser/MCP work, for example:

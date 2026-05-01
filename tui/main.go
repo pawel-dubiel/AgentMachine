@@ -1973,8 +1973,8 @@ func (m model) handleTestCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
-	if len(args) != 1 && len(args) != 4 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config <path> [timeout-ms max-rounds approval-mode]|off"})
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>|off"})
 		return m, nil
 	}
 
@@ -1985,6 +1985,10 @@ func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
 		}
 		m.savedConfig.MCPConfig = ""
 	} else {
+		if len(args) != 4 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "MCP config requires explicit tool timeout, max rounds, and approval mode"})
+			return m, nil
+		}
 		nextConfig := m.savedConfig
 		path := strings.TrimSpace(args[0])
 		if path == "" {
@@ -1992,11 +1996,9 @@ func (m model) handleMCPConfigCommand(args []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		nextConfig.MCPConfig = path
-		if len(args) == 4 {
-			nextConfig.ToolTimeout = args[1]
-			nextConfig.ToolMaxRounds = args[2]
-			nextConfig.ToolApproval = args[3]
-		}
+		nextConfig.ToolTimeout = args[1]
+		nextConfig.ToolMaxRounds = args[2]
+		nextConfig.ToolApproval = args[3]
 		if err := validateToolConfig(runConfig{
 			ToolHarness:   nextConfig.ToolHarness,
 			ToolRoot:      nextConfig.ToolRoot,
