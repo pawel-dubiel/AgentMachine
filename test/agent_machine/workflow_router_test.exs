@@ -1,7 +1,7 @@
 defmodule AgentMachine.WorkflowRouterTest do
   use ExUnit.Case, async: true
 
-  alias AgentMachine.{MCP.Config, RunSpec, WorkflowRouter}
+  alias AgentMachine.{CapabilityRequired, MCP.Config, RunSpec, WorkflowRouter}
 
   defmodule LocalCodeMutationClassifier do
     def classify!(_input) do
@@ -466,48 +466,63 @@ defmodule AgentMachine.WorkflowRouterTest do
   end
 
   test "fails fast for web browse intent without Playwright MCP browser tool" do
-    assert_raise ArgumentError, ~r/no MCP browser network tool/, fn ->
-      WorkflowRouter.route!(%WorkflowRouter{
-        requested_workflow: :auto,
-        task: "open https://example.com",
-        pending_action: nil,
-        recent_context: nil,
-        tool_harnesses: [:mcp],
-        approval_mode: :full_access,
-        test_commands: [],
-        mcp_config: mcp_config("read")
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        WorkflowRouter.route!(%WorkflowRouter{
+          requested_workflow: :auto,
+          task: "open https://example.com",
+          pending_action: nil,
+          recent_context: nil,
+          tool_harnesses: [:mcp],
+          approval_mode: :full_access,
+          test_commands: [],
+          mcp_config: mcp_config("read")
+        })
+      end
+
+    assert exception.reason == :missing_browser_mcp
+    assert CapabilityRequired.to_map(exception).required_mcp_tool == "browser_navigate"
   end
 
   test "fails fast for web browse intent without full access approval" do
-    assert_raise ArgumentError, ~r/tool_approval_mode must be :full_access/, fn ->
-      WorkflowRouter.route!(%WorkflowRouter{
-        requested_workflow: :auto,
-        task: "open https://example.com",
-        pending_action: nil,
-        recent_context: nil,
-        tool_harnesses: [:mcp],
-        approval_mode: :read_only,
-        test_commands: [],
-        mcp_config: playwright_mcp_config()
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        WorkflowRouter.route!(%WorkflowRouter{
+          requested_workflow: :auto,
+          task: "open https://example.com",
+          pending_action: nil,
+          recent_context: nil,
+          tool_harnesses: [:mcp],
+          approval_mode: :read_only,
+          test_commands: [],
+          mcp_config: playwright_mcp_config()
+        })
+      end
+
+    assert exception.reason == :missing_browser_approval
+
+    assert CapabilityRequired.to_map(exception).required_approval_modes == [
+             "full-access",
+             "ask-before-write"
+           ]
   end
 
   test "fails fast for generic tool intent without read-risk tools" do
-    assert_raise ArgumentError, ~r/no read-only tool capability/, fn ->
-      WorkflowRouter.route!(%WorkflowRouter{
-        requested_workflow: :auto,
-        task: "use tool with mcp to update docs",
-        pending_action: nil,
-        recent_context: nil,
-        tool_harnesses: [:mcp],
-        approval_mode: :read_only,
-        test_commands: [],
-        mcp_config: mcp_config("write")
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        WorkflowRouter.route!(%WorkflowRouter{
+          requested_workflow: :auto,
+          task: "use tool with mcp to update docs",
+          pending_action: nil,
+          recent_context: nil,
+          tool_harnesses: [:mcp],
+          approval_mode: :read_only,
+          test_commands: [],
+          mcp_config: mcp_config("write")
+        })
+      end
+
+    assert exception.reason == :missing_read_only_tool_capability
   end
 
   test "uses pending action for affirmative follow-up routing" do
@@ -551,22 +566,25 @@ defmodule AgentMachine.WorkflowRouterTest do
   end
 
   test "local classifier code mutation fails fast without code-edit harness" do
-    assert_raise ArgumentError, ~r/code mutation intent/, fn ->
-      WorkflowRouter.route!(%WorkflowRouter{
-        requested_workflow: :auto,
-        task: "napraw aplikacje",
-        pending_action: nil,
-        recent_context: nil,
-        tool_harnesses: [:local_files],
-        approval_mode: :auto_approved_safe,
-        test_commands: [],
-        router_mode: :local,
-        router_model_dir: "/tmp/router-model",
-        router_timeout_ms: 100,
-        router_confidence_threshold: 0.5,
-        classifier_module: LocalCodeMutationClassifier
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        WorkflowRouter.route!(%WorkflowRouter{
+          requested_workflow: :auto,
+          task: "napraw aplikacje",
+          pending_action: nil,
+          recent_context: nil,
+          tool_harnesses: [:local_files],
+          approval_mode: :auto_approved_safe,
+          test_commands: [],
+          router_mode: :local,
+          router_model_dir: "/tmp/router-model",
+          router_timeout_ms: 100,
+          router_confidence_threshold: 0.5,
+          classifier_module: LocalCodeMutationClassifier
+        })
+      end
+
+    assert exception.reason == :missing_code_edit_harness
   end
 
   test "local classifier low confidence falls back to chat" do
@@ -728,9 +746,13 @@ defmodule AgentMachine.WorkflowRouterTest do
         assert route.tools_exposed
       end
 
-      assert_raise ArgumentError, ~r/read-capable tool harness/, fn ->
-        local_route!(:file_read)
-      end
+      exception = assert_raise CapabilityRequired, fn -> local_route!(:file_read) end
+      assert exception.reason == :missing_read_harness
+
+      assert CapabilityRequired.to_map(exception).required_harnesses == [
+               "local-files",
+               "code-edit"
+             ]
     end
 
     test "file_mutation asks for a write-capable filesystem harness" do
@@ -746,9 +768,9 @@ defmodule AgentMachine.WorkflowRouterTest do
         assert route.tools_exposed
       end
 
-      assert_raise ArgumentError, ~r/write-capable tool harness/, fn ->
-        local_route!(:file_mutation)
-      end
+      exception = assert_raise CapabilityRequired, fn -> local_route!(:file_mutation) end
+      assert exception.reason == :missing_write_harness
+      assert CapabilityRequired.to_map(exception).required_harness == "local-files"
     end
 
     test "code_mutation asks specifically for code-edit" do
@@ -762,12 +784,16 @@ defmodule AgentMachine.WorkflowRouterTest do
       assert route.tool_intent == "code_mutation"
       assert route.tools_exposed
 
-      assert_raise ArgumentError, ~r/:code_edit tool harness/, fn ->
-        local_route!(:code_mutation,
-          tool_harnesses: [:local_files],
-          approval_mode: :auto_approved_safe
-        )
-      end
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:code_mutation,
+            tool_harnesses: [:local_files],
+            approval_mode: :auto_approved_safe
+          )
+        end
+
+      assert exception.reason == :missing_code_edit_harness
+      assert CapabilityRequired.to_map(exception).required_harness == "code-edit"
     end
 
     test "test_command requires code-edit, full-access, and an allowlisted command" do
@@ -782,29 +808,43 @@ defmodule AgentMachine.WorkflowRouterTest do
       assert route.tool_intent == "test_command"
       assert route.tools_exposed
 
-      assert_raise ArgumentError, ~r/:code_edit tool harness/, fn ->
-        local_route!(:test_command,
-          tool_harnesses: [:local_files],
-          approval_mode: :full_access,
-          test_commands: ["mix test"]
-        )
-      end
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:test_command,
+            tool_harnesses: [:local_files],
+            approval_mode: :full_access,
+            test_commands: ["mix test"]
+          )
+        end
 
-      assert_raise ArgumentError, ~r/:tool_approval_mode must be :full_access/, fn ->
-        local_route!(:test_command,
-          tool_harnesses: [:code_edit],
-          approval_mode: :auto_approved_safe,
-          test_commands: ["mix test"]
-        )
-      end
+      assert exception.reason == :missing_test_code_edit_harness
 
-      assert_raise ArgumentError, ~r/no allowlisted :test_commands/, fn ->
-        local_route!(:test_command,
-          tool_harnesses: [:code_edit],
-          approval_mode: :full_access,
-          test_commands: []
-        )
-      end
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:test_command,
+            tool_harnesses: [:code_edit],
+            approval_mode: :auto_approved_safe,
+            test_commands: ["mix test"]
+          )
+        end
+
+      assert exception.reason == :missing_test_approval
+
+      assert CapabilityRequired.to_map(exception).required_approval_modes == [
+               "full-access",
+               "ask-before-write"
+             ]
+
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:test_command,
+            tool_harnesses: [:code_edit],
+            approval_mode: :full_access,
+            test_commands: []
+          )
+        end
+
+      assert exception.reason == :missing_test_commands
     end
 
     test "time intent uses a read-only tool when any tool harness is configured" do
@@ -835,17 +875,19 @@ defmodule AgentMachine.WorkflowRouterTest do
       assert route.selected == "tool"
       assert route.tool_intent == "tool_use"
 
-      assert_raise ArgumentError, ~r/no tool harness/, fn ->
-        local_route!(:tool_use)
-      end
+      exception = assert_raise CapabilityRequired, fn -> local_route!(:tool_use) end
+      assert exception.reason == :missing_tool_harness
 
-      assert_raise ArgumentError, ~r/read-only tool capability/, fn ->
-        local_route!(:tool_use,
-          tool_harnesses: [:mcp],
-          approval_mode: :read_only,
-          mcp_config: mcp_config("write")
-        )
-      end
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:tool_use,
+            tool_harnesses: [:mcp],
+            approval_mode: :read_only,
+            mcp_config: mcp_config("write")
+          )
+        end
+
+      assert exception.reason == :missing_read_only_tool_capability
     end
 
     test "web_browse needs Playwright MCP browser tool and full access" do
@@ -860,23 +902,29 @@ defmodule AgentMachine.WorkflowRouterTest do
       assert route.selected == "agentic"
       assert route.tool_intent == "web_browse"
 
-      assert_raise ArgumentError, ~r/no MCP browser network tool/, fn ->
-        local_route!(:web_browse,
-          task: "open https://example.com",
-          tool_harnesses: [:mcp],
-          approval_mode: :full_access,
-          mcp_config: mcp_config("read")
-        )
-      end
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:web_browse,
+            task: "open https://example.com",
+            tool_harnesses: [:mcp],
+            approval_mode: :full_access,
+            mcp_config: mcp_config("read")
+          )
+        end
 
-      assert_raise ArgumentError, ~r/:tool_approval_mode must be :full_access/, fn ->
-        local_route!(:web_browse,
-          task: "open https://example.com",
-          tool_harnesses: [:mcp],
-          approval_mode: :read_only,
-          mcp_config: playwright_mcp_config()
-        )
-      end
+      assert exception.reason == :missing_browser_mcp
+
+      exception =
+        assert_raise CapabilityRequired, fn ->
+          local_route!(:web_browse,
+            task: "open https://example.com",
+            tool_harnesses: [:mcp],
+            approval_mode: :read_only,
+            mcp_config: playwright_mcp_config()
+          )
+        end
+
+      assert exception.reason == :missing_browser_approval
     end
 
     test "web_browse from local classifier does not ask permission without a concrete target" do
@@ -950,51 +998,65 @@ defmodule AgentMachine.WorkflowRouterTest do
   end
 
   test "fails fast for mutation intent without write-capable harness" do
-    assert_raise ArgumentError, ~r/mutation intent/, fn ->
-      route!(%{task: "create hello.md", workflow: :auto})
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        route!(%{task: "create hello.md", workflow: :auto})
+      end
+
+    assert exception.reason == :missing_write_harness
   end
 
   test "fails fast for code patch without code-edit harness" do
-    assert_raise ArgumentError, ~r/code mutation intent/, fn ->
-      route!(%{
-        task: "patch lib/foo.ex",
-        workflow: :auto,
-        tool_harness: :local_files,
-        tool_root: "/tmp/project",
-        tool_timeout_ms: 100,
-        tool_max_rounds: 2,
-        tool_approval_mode: :auto_approved_safe
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        route!(%{
+          task: "patch lib/foo.ex",
+          workflow: :auto,
+          tool_harness: :local_files,
+          tool_root: "/tmp/project",
+          tool_timeout_ms: 100,
+          tool_max_rounds: 2,
+          tool_approval_mode: :auto_approved_safe
+        })
+      end
+
+    assert exception.reason == :missing_code_edit_harness
+    assert CapabilityRequired.to_map(exception).requested_root == "/tmp/project"
   end
 
   test "fails fast for Next.js project creation without code-edit harness" do
-    assert_raise ArgumentError, ~r/code mutation intent/, fn ->
-      route!(%{
-        task: "in home folder create tt100 dir and create nextjs project",
-        workflow: :auto,
-        tool_harness: :local_files,
-        tool_root: "/tmp/home",
-        tool_timeout_ms: 100,
-        tool_max_rounds: 2,
-        tool_approval_mode: :auto_approved_safe
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        route!(%{
+          task: "in home folder create tt100 dir and create nextjs project",
+          workflow: :auto,
+          tool_harness: :local_files,
+          tool_root: "/tmp/home",
+          tool_timeout_ms: 100,
+          tool_max_rounds: 2,
+          tool_approval_mode: :auto_approved_safe
+        })
+      end
+
+    assert exception.reason == :missing_code_edit_harness
+    assert CapabilityRequired.to_map(exception).requested_root == "/tmp/home"
   end
 
   test "fails fast for test intent without allowlisted commands" do
-    assert_raise ArgumentError, ~r/no allowlisted :test_commands/, fn ->
-      route!(%{
-        task: "run mix test",
-        workflow: :auto,
-        tool_harness: :code_edit,
-        tool_root: "/tmp/project",
-        tool_timeout_ms: 100,
-        tool_max_rounds: 2,
-        tool_approval_mode: :full_access
-      })
-    end
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        route!(%{
+          task: "run mix test",
+          workflow: :auto,
+          tool_harness: :code_edit,
+          tool_root: "/tmp/project",
+          tool_timeout_ms: 100,
+          tool_max_rounds: 2,
+          tool_approval_mode: :full_access
+        })
+      end
+
+    assert exception.reason == :missing_test_commands
   end
 
   test "fails fast when explicit chat receives tool options" do

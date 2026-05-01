@@ -1136,6 +1136,29 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
+  test "client runner returns structured capability requirement before runtime starts" do
+    summary =
+      ClientRunner.run!(%{
+        task: "patch lib/foo.ex",
+        workflow: :auto,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :auto_approved_safe
+      })
+
+    assert summary.status == "failed"
+    assert summary.capability_required.reason == "missing_code_edit_harness"
+    assert summary.capability_required.required_harness == "code-edit"
+    assert summary.capability_required.requested_root == "/tmp/project"
+    assert [%{type: "capability_required"}] = summary.events
+  end
+
   test "mix agent_machine.run writes session event log through collector" do
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)

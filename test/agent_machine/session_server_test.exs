@@ -1,7 +1,7 @@
 defmodule AgentMachine.SessionServerTest do
   use ExUnit.Case, async: false
 
-  alias AgentMachine.{JSON, PermissionControl, SessionServer, SessionWriter}
+  alias AgentMachine.{CapabilityRequired, JSON, PermissionControl, SessionServer, SessionWriter}
 
   test "runs a coordinator turn and writes a summary over JSONL" do
     %{server: server, output: output} = start_session!()
@@ -64,7 +64,7 @@ defmodule AgentMachine.SessionServerTest do
     %{server: server, output: output} = start_session!()
     root = tmp_dir!("agent-machine-session-local-files")
 
-    assert {:error, reason} =
+    assert {:error, %CapabilityRequired{} = reason} =
              SessionServer.user_message(
                server,
                user_message(
@@ -79,8 +79,8 @@ defmodule AgentMachine.SessionServerTest do
                )
              )
 
-    assert reason =~ "auto workflow detected code mutation intent"
-    assert reason =~ ":code_edit tool harness is not configured"
+    assert reason.reason == :missing_code_edit_harness
+    assert CapabilityRequired.to_map(reason).requested_root == root
     assert :sys.get_state(server).coordinator_tasks == %{}
     assert :sys.get_state(server).agents == %{}
     refute output_event?(output, "session_agent_started")
