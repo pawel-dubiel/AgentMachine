@@ -10,18 +10,27 @@ import (
 )
 
 var streamFrames = []string{"|", "/", "-", "\\"}
+var matrixWorkSignals = []string{
+	"operator link open",
+	"construct loading",
+	"trace program running",
+	"green rain active",
+	"exit line ready",
+	"signal lock acquired",
+}
 
 func (m model) View() string {
+	styles := m.styles()
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("AgentMachine TUI"))
+	b.WriteString(styles.Title.Render("AgentMachine TUI"))
 	b.WriteString("\n")
-	b.WriteString(hintStyle.Render(wrapText(m.statusLine(), m.viewWidth())))
+	b.WriteString(styles.Hint.Render(wrapText(m.statusLine(), m.viewWidth())))
 	b.WriteString("\n\n")
 
 	if m.modelPickerOpen {
 		b.WriteString(m.modelPickerView())
 		b.WriteString("\n\n")
-		b.WriteString(hintStyle.Render("Model picker is active. Enter selects; Esc closes."))
+		b.WriteString(styles.Hint.Render("Model picker is active. Enter selects; Esc closes."))
 		return b.String()
 	}
 
@@ -45,17 +54,18 @@ func (m model) View() string {
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 	if m.running {
-		b.WriteString(hintStyle.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
+		b.WriteString(styles.Hint.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
 	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
-		b.WriteString(hintStyle.Render("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."))
+		b.WriteString(styles.Hint.Render("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."))
 	} else {
-		b.WriteString(hintStyle.Render("Type a message or /help. Tab changes view. Esc goes back."))
+		b.WriteString(styles.Hint.Render("Type a message or /help. Tab changes view. Esc goes back."))
 	}
 	return b.String()
 }
 
 func (m model) statusLine() string {
 	parts := []string{"view=" + m.viewName()}
+	parts = append(parts, "theme="+string(m.activeTheme()))
 	if !m.providerSet {
 		parts = append(parts, "provider=missing")
 		return strings.Join(parts, " | ")
@@ -116,7 +126,7 @@ func contextBudgetStatus(event *eventSummary) string {
 
 func (m model) chatView() string {
 	if len(m.messages) == 0 && len(m.queuedMessages) == 0 {
-		return hintStyle.Render("No messages yet.")
+		return m.styles().Hint.Render("No messages yet.")
 	}
 
 	start := len(m.messages) - 14
@@ -166,13 +176,13 @@ func (m model) renderChatMessage(message chatMessage) string {
 	indent := strings.Repeat(" ", len([]rune(prefix)))
 	renderText := func(text string) string {
 		if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
-			return errorStyle.Render(text)
+			return m.styles().Error.Render(text)
 		}
 		return text
 	}
 
 	var b strings.Builder
-	b.WriteString(labelStyle.Render(message.Role))
+	b.WriteString(m.styles().Label.Render(message.Role))
 	b.WriteString(": ")
 	if len(lines) > 0 {
 		b.WriteString(renderText(lines[0]))
@@ -187,7 +197,7 @@ func (m model) renderChatMessage(message chatMessage) string {
 
 func (m model) renderChatMessageText(message chatMessage, width int) string {
 	if chatMessageUsesMarkdown(message) {
-		return renderMarkdownDisplay(message.Text, width)
+		return renderMarkdownDisplayWithTheme(message.Text, width, m.activeTheme())
 	}
 	return wrapText(message.Text, width)
 }
@@ -274,10 +284,11 @@ func splitRunes(text string, width int) (string, string) {
 }
 
 func (m model) pendingToolPermissionView() string {
+	styles := m.styles()
 	root := emptyAsNone(m.pendingToolRoot)
 	harness := emptyAs(m.pendingToolHarness, "local-files")
 	lines := []string{
-		labelStyle.Render("Tool Permission"),
+		styles.Label.Render("Tool Permission"),
 		"harness: " + harness,
 		"root: " + root,
 		"task: " + compactQueueText(m.pendingToolTask),
@@ -302,18 +313,23 @@ func (m model) pendingToolPermissionView() string {
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(styles.Border).
 		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 }
 
 func (m model) thinkingView() string {
 	frame := streamFrames[m.streamFrame%len(streamFrames)]
-	return hintStyle.Render("thinking " + frame)
+	styles := m.styles()
+	if m.activeTheme() == themeMatrix {
+		signal := matrixWorkSignals[m.streamFrame%len(matrixWorkSignals)]
+		return styles.Signal.Render(frame + " " + signal)
+	}
+	return styles.Hint.Render("thinking " + frame)
 }
 
 func (m model) queueView() string {
-	lines := []string{labelStyle.Render("Queued")}
+	lines := []string{m.styles().Label.Render("Queued")}
 	for index, item := range m.queuedMessages {
 		lines = append(lines, fmt.Sprintf("%d. %s", index+1, compactQueueText(item.Text)))
 	}
@@ -330,7 +346,7 @@ func (m model) agentChecklistView() string {
 		return ""
 	}
 
-	lines := []string{labelStyle.Render("Agents")}
+	lines := []string{m.styles().Label.Render("Agents")}
 	for _, id := range visible {
 		lines = append(lines, m.agentChecklistLine(m.agents[id]))
 	}
@@ -360,7 +376,7 @@ func (m model) workChecklistView() string {
 		return m.agentChecklistViewFallback()
 	}
 
-	lines := []string{labelStyle.Render("Work")}
+	lines := []string{m.styles().Label.Render("Work")}
 	for _, id := range m.workOrder {
 		item, ok := m.workItems[id]
 		if !ok {
@@ -377,7 +393,7 @@ func (m model) agentChecklistViewFallback() string {
 		return ""
 	}
 
-	lines := []string{labelStyle.Render("Work")}
+	lines := []string{m.styles().Label.Render("Work")}
 	for _, id := range visible {
 		lines = append(lines, m.agentChecklistLine(m.agents[id]))
 	}
@@ -496,11 +512,12 @@ func compactDuration(duration time.Duration) string {
 }
 
 func (m model) liveActivityView() string {
+	styles := m.styles()
 	if len(m.eventLog) == 0 {
-		return hintStyle.Render(liveActivityHeader(m) + "\nwaiting for events...")
+		return styles.Hint.Render(liveActivityHeader(m) + "\nwaiting for events...")
 	}
 
-	displayLines := compactEventDisplayLines(m.eventLog)
+	displayLines := compactEventDisplayLinesWithTheme(m.eventLog, m.activeTheme())
 
 	start := m.eventScroll
 	if start < 0 {
@@ -517,7 +534,7 @@ func (m model) liveActivityView() string {
 	lines := []string{liveActivityHeader(m)}
 	lines = append(lines, displayLines[start:end]...)
 	if len(displayLines) > liveEventWindowSize {
-		lines = append(lines, hintStyle.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(displayLines))))
+		lines = append(lines, styles.Hint.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(displayLines))))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -527,7 +544,7 @@ func liveActivityHeader(m model) string {
 	if !m.running {
 		frame = " "
 	}
-	return labelStyle.Render(frame + " Live events")
+	return m.styles().Label.Render(frame + " Live events")
 }
 
 func recentEventLine(event eventSummary) string {
@@ -535,6 +552,10 @@ func recentEventLine(event eventSummary) string {
 }
 
 func compactEventDisplayLines(events []eventSummary) []string {
+	return compactEventDisplayLinesWithTheme(events, themeClassic)
+}
+
+func compactEventDisplayLinesWithTheme(events []eventSummary, theme tuiTheme) []string {
 	lines := make([]string, 0, len(events))
 	var heartbeat eventSummary
 	heartbeatCount := 0
@@ -547,9 +568,9 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		if heartbeatCount == 0 {
 			return
 		}
-		line := eventDisplayLine(heartbeat)
+		line := eventDisplayLineWithTheme(heartbeat, theme)
 		if heartbeatCount > 1 {
-			line += hintStyle.Render(fmt.Sprintf(" x%d", heartbeatCount))
+			line += hintTextForTheme(theme, fmt.Sprintf(" x%d", heartbeatCount))
 		}
 		lines = append(lines, line)
 		heartbeat = eventSummary{}
@@ -560,9 +581,9 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		if groupedStreamCount == 0 {
 			return
 		}
-		line := eventDisplayLine(groupedStream)
+		line := eventDisplayLineWithTheme(groupedStream, theme)
 		if groupedStreamCount > 1 {
-			line += hintStyle.Render(fmt.Sprintf(" x%d", groupedStreamCount))
+			line += hintTextForTheme(theme, fmt.Sprintf(" x%d", groupedStreamCount))
 		}
 		lines = append(lines, line)
 		groupedStream = eventSummary{}
@@ -573,9 +594,9 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		if groupedReadCount == 0 {
 			return
 		}
-		line := eventDisplayLine(groupedRead)
+		line := eventDisplayLineWithTheme(groupedRead, theme)
 		if groupedReadCount > 1 {
-			line += hintStyle.Render(fmt.Sprintf(" x%d", groupedReadCount))
+			line += hintTextForTheme(theme, fmt.Sprintf(" x%d", groupedReadCount))
 		}
 		lines = append(lines, line)
 		groupedRead = eventSummary{}
@@ -591,7 +612,7 @@ func compactEventDisplayLines(events []eventSummary) []string {
 				flushHeartbeat()
 				flushGroupedStream()
 				flushGroupedRead()
-				lines = append(lines, eventDisplayLine(next))
+				lines = append(lines, eventDisplayLineWithTheme(next, theme))
 				index++
 				continue
 			}
@@ -636,7 +657,7 @@ func compactEventDisplayLines(events []eventSummary) []string {
 		flushHeartbeat()
 		flushGroupedStream()
 		flushGroupedRead()
-		lines = append(lines, eventDisplayLine(event))
+		lines = append(lines, eventDisplayLineWithTheme(event, theme))
 	}
 
 	flushHeartbeat()
@@ -658,6 +679,10 @@ func collapsibleReadEvent(event eventSummary) bool {
 }
 
 func eventDisplayLine(event eventSummary) string {
+	return eventDisplayLineWithTheme(event, themeClassic)
+}
+
+func eventDisplayLineWithTheme(event eventSummary, theme tuiTheme) string {
 	if text := toolEventDisplayLine(event); text != "" {
 		return text
 	}
@@ -671,7 +696,7 @@ func eventDisplayLine(event eventSummary) string {
 	}
 	extras := eventDetailText(event)
 	if extras != "" {
-		text += "  " + hintStyle.Render(extras)
+		text += "  " + hintTextForTheme(theme, extras)
 	}
 	return text
 }
@@ -754,14 +779,16 @@ func compactDetailValue(value any) string {
 }
 
 func (m model) setupView() string {
+	styles := m.styles()
 	providerValue := "(missing)"
 	if m.providerSet {
 		providerValue = string(m.provider)
 	}
 
 	return strings.Join([]string{
-		labelStyle.Render("Setup"),
+		styles.Label.Render("Setup"),
 		"mode: progressive auto (chat/tool/basic/agentic)",
+		"theme: " + string(m.activeTheme()),
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
 		"key: " + keyStatus(m.apiKey()),
@@ -778,6 +805,7 @@ func (m model) setupView() string {
 		"",
 		"Commands",
 		"/provider echo|openai|openrouter",
+		"/theme classic|matrix",
 		"/key <api-key>",
 		"/router deterministic",
 		"/router local <model-dir>",
@@ -818,12 +846,13 @@ func (m model) modelPickerView() string {
 	if len(m.modelOptions) == 0 {
 		return ""
 	}
+	styles := m.styles()
 
 	indexes := m.filteredModelIndexes()
 	selectedPosition := selectedModelPickerPosition(indexes, m.modelPickerIndex)
 	start, end := modelPickerWindow(len(indexes), selectedPosition, 12)
 	lines := []string{
-		labelStyle.Render("Select model for " + m.provider.Label()),
+		styles.Label.Render("Select model for " + m.provider.Label()),
 		"",
 		"Search: " + emptyAs(m.modelPickerQuery, "(type to filter)"),
 		"Use Up / Down, Enter to select, Esc to cancel, Backspace to edit",
@@ -834,7 +863,7 @@ func (m model) modelPickerView() string {
 		lines = append(lines, "No models match "+m.modelPickerQuery)
 		return lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("240")).
+			BorderForeground(styles.Border).
 			Padding(1, 2).
 			Render(strings.Join(lines, "\n"))
 	}
@@ -857,7 +886,7 @@ func (m model) modelPickerView() string {
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(styles.Border).
 		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 }
@@ -931,9 +960,9 @@ func (m model) agentsView() string {
 		return "No agents yet. Send a message after setup."
 	}
 
-	lines := []string{labelStyle.Render("Agents")}
+	lines := []string{m.styles().Label.Render("Agents")}
 	if len(m.eventLog) > 0 {
-		lines = append(lines, liveActivityHeader(m), recentEventLine(m.eventLog[len(m.eventLog)-1]), "")
+		lines = append(lines, liveActivityHeader(m), eventDisplayLineWithTheme(m.eventLog[len(m.eventLog)-1], m.activeTheme()), "")
 	}
 	if route := workflowRouteLine(m.lastSummary.WorkflowRoute); route != "" {
 		lines = append(lines, route, "")
@@ -981,7 +1010,7 @@ func (m model) agentDetailView() string {
 	}
 
 	return strings.Join([]string{
-		labelStyle.Render("Agent " + m.selectedAgent),
+		m.styles().Label.Render("Agent " + m.selectedAgent),
 		"status: " + emptyAsNone(agent.Status),
 		fmt.Sprintf("attempt: %d", agent.Attempt),
 		"parent: " + emptyAsNone(agent.ParentAgentID),
@@ -989,20 +1018,20 @@ func (m model) agentDetailView() string {
 		"finished: " + emptyAsNone(agent.FinishedAt),
 		"duration: " + duration,
 		"",
-		labelStyle.Render("Decision"),
+		m.styles().Label.Render("Decision"),
 		agentDecisionText(agent),
 		"",
-		labelStyle.Render("Stream"),
+		m.styles().Label.Render("Stream"),
 		agentStreamText(agent),
 		"",
-		labelStyle.Render("Output"),
+		m.styles().Label.Render("Output"),
 		m.renderAgentOutputText(agent),
 		"",
-		labelStyle.Render("Error"),
+		m.styles().Label.Render("Error"),
 		agentErrorText(agent),
 		"",
-		labelStyle.Render("Events"),
-		agentEventLines(agent.Events),
+		m.styles().Label.Render("Events"),
+		m.agentEventLines(agent.Events),
 		"",
 		"Esc or /back",
 	}, "\n")
@@ -1040,7 +1069,7 @@ func agentOutputText(agent agentState) string {
 
 func (m model) renderAgentOutputText(agent agentState) string {
 	if strings.TrimSpace(agent.Output) != "" {
-		return renderMarkdownDisplay(agent.Output, m.viewWidth())
+		return renderMarkdownDisplayWithTheme(agent.Output, m.viewWidth(), m.activeTheme())
 	}
 	return agentOutputText(agent)
 }
@@ -1074,7 +1103,7 @@ func providerRequestOpen(events []eventSummary) bool {
 }
 
 func (m model) helpView() string {
-	return helpText()
+	return m.helpText()
 }
 
 func decisionText(decision plannerDecision) string {
@@ -1098,6 +1127,13 @@ func agentEventLines(events []eventSummary) string {
 	return strings.Join(compactEventDisplayLines(events), "\n")
 }
 
+func (m model) agentEventLines(events []eventSummary) string {
+	if len(events) == 0 {
+		return "(none)"
+	}
+	return strings.Join(compactEventDisplayLinesWithTheme(events, m.activeTheme()), "\n")
+}
+
 func modelListText(models []modelOption, selected int) string {
 	lines := []string{"models:"}
 	limit := len(models)
@@ -1119,8 +1155,16 @@ func modelListText(models []modelOption, selected int) string {
 }
 
 func helpText() string {
+	return helpTextForTheme(themeClassic)
+}
+
+func (m model) helpText() string {
+	return helpTextForTheme(m.activeTheme())
+}
+
+func helpTextForTheme(theme tuiTheme) string {
 	return strings.Join([]string{
-		labelStyle.Render("Help"),
+		stylesForTheme(theme).Label.Render("Help"),
 		"Progressive auto can select chat, read-only tool, basic, or agentic per run.",
 		"",
 		"Keys:",
@@ -1134,6 +1178,7 @@ func helpText() string {
 		"Commands:",
 		"/setup",
 		"/provider echo|openai|openrouter",
+		"/theme classic|matrix",
 		"/key <api-key>",
 		"/router deterministic|local <model-dir>",
 		"/router-timeout <ms>",

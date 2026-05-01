@@ -187,6 +187,7 @@ Useful first commands:
 ```text
 /setup
 /provider echo|openai|openrouter
+/theme classic|matrix
 /key <api-key>
 /models reload
 /model
@@ -206,7 +207,8 @@ Useful first commands:
 ```
 
 Agent detail views show streamed provider text separately from the final
-normalized output, decision, errors, and compacted event history.
+normalized output, decision, errors, and compacted event history. The TUI also
+supports `classic` and Matrix-inspired `matrix` themes through `/theme`.
 
 The TUI keeps saved settings in a local user config file with `0600`
 permissions. Override the location with `AGENT_MACHINE_TUI_CONFIG`.

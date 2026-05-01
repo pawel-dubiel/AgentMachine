@@ -222,6 +222,63 @@ func TestContextTokenizerAndReserveCommandsPersistConfig(t *testing.T) {
 	}
 }
 
+func TestThemeCommandPersistsSelectedTheme(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{configPath: configPath, theme: themeClassic}
+
+	updated, _ := m.handleCommand("/theme matrix")
+	result := updated.(model)
+
+	if result.theme != themeMatrix {
+		t.Fatalf("expected matrix theme in model, got %q", result.theme)
+	}
+	if result.savedConfig.Theme != string(themeMatrix) {
+		t.Fatalf("expected matrix theme in saved config, got %#v", result.savedConfig)
+	}
+	if len(result.messages) == 0 || !strings.Contains(result.messages[len(result.messages)-1].Text, "theme set to matrix") {
+		t.Fatalf("expected theme confirmation message, got %#v", result.messages)
+	}
+
+	saved, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config, got %v", err)
+	}
+	if saved.Theme != string(themeMatrix) {
+		t.Fatalf("expected persisted matrix theme, got %#v", saved)
+	}
+}
+
+func TestThemeCommandRejectsUnknownTheme(t *testing.T) {
+	m := model{configPath: filepath.Join(t.TempDir(), "config.json"), theme: themeClassic}
+
+	updated, _ := m.handleCommand("/theme neon")
+	result := updated.(model)
+
+	if result.theme != themeClassic {
+		t.Fatalf("expected theme to remain classic, got %q", result.theme)
+	}
+	if result.savedConfig.Theme != "" {
+		t.Fatalf("expected invalid theme not to persist, got %#v", result.savedConfig)
+	}
+	if len(result.messages) == 0 || !strings.Contains(result.messages[len(result.messages)-1].Text, "usage: /theme classic|matrix") {
+		t.Fatalf("expected usage message, got %#v", result.messages)
+	}
+}
+
+func TestInitialModelFailsOnInvalidSavedTheme(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := saveSavedConfig(configPath, savedConfig{Theme: "neon"}); err != nil {
+		t.Fatalf("expected save to succeed, got %v", err)
+	}
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	_, err := initialModel()
+
+	if err == nil || !strings.Contains(err.Error(), "invalid saved theme") {
+		t.Fatalf("expected invalid saved theme error, got %v", err)
+	}
+}
+
 func TestStatusLineRendersContextBudgetEvents(t *testing.T) {
 	available := 69000
 	used := 42.3
@@ -948,6 +1005,7 @@ func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
 	m := model{
 		running:       true,
 		streamFrame:   1,
+		theme:         themeClassic,
 		liveAssistant: "hidden streamed content",
 		messages:      []chatMessage{{Role: "user", Text: "hello"}},
 		eventLog: []eventSummary{
@@ -959,6 +1017,31 @@ func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
 
 	if !strings.Contains(view, "thinking /") {
 		t.Fatalf("expected thinking animation, got %q", view)
+	}
+	if strings.Contains(view, "hidden streamed content") {
+		t.Fatalf("expected streamed text to stay hidden, got %q", view)
+	}
+}
+
+func TestChatViewRendersMatrixWorkSignalWithoutStreamedText(t *testing.T) {
+	m := model{
+		running:       true,
+		streamFrame:   1,
+		theme:         themeMatrix,
+		liveAssistant: "hidden streamed content",
+		messages:      []chatMessage{{Role: "user", Text: "hello"}},
+		eventLog: []eventSummary{
+			{Type: "provider_request_started", Summary: "assistant sent provider request"},
+		},
+	}
+
+	view := stripANSI(m.chatView())
+
+	if strings.Contains(view, "thinking") {
+		t.Fatalf("expected matrix work signal instead of thinking text, got %q", view)
+	}
+	if !strings.Contains(view, "construct loading") {
+		t.Fatalf("expected matrix work signal, got %q", view)
 	}
 	if strings.Contains(view, "hidden streamed content") {
 		t.Fatalf("expected streamed text to stay hidden, got %q", view)
@@ -1559,6 +1642,9 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	help := helpText()
 	if strings.Contains(help, "/workflow") {
 		t.Fatalf("expected help to omit workflow command, got %q", help)
+	}
+	if !strings.Contains(help, "/theme classic|matrix") {
+		t.Fatalf("expected help to mention theme command, got %q", help)
 	}
 	if !strings.Contains(help, "read-only tool") {
 		t.Fatalf("expected help to mention read-only tool route, got %q", help)
@@ -3753,6 +3839,7 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 		Provider:         "openrouter",
 		OpenAIModel:      "gpt-4o-mini",
 		OpenRouterModel:  "openai/gpt-4o-mini",
+		Theme:            "matrix",
 		ToolHarness:      "local-files",
 		ToolRoot:         "/tmp/agent-machine-wiki",
 		ToolTimeout:      "1000",
@@ -3774,6 +3861,10 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 
 	if loaded.OpenRouterAPIKey != "openrouter-key" {
 		t.Fatalf("unexpected OpenRouter key: %q", loaded.OpenRouterAPIKey)
+	}
+
+	if loaded.Theme != "matrix" {
+		t.Fatalf("unexpected theme: %q", loaded.Theme)
 	}
 	if loaded.Workflow != "agentic" {
 		t.Fatalf("unexpected workflow: %q", loaded.Workflow)

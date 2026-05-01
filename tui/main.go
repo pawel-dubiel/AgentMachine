@@ -15,7 +15,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const pendingHarnessMCPBrowser = "mcp-browser"
@@ -254,6 +253,7 @@ type savedConfig struct {
 	Provider          string   `json:"provider,omitempty"`
 	OpenAIModel       string   `json:"openai_model,omitempty"`
 	OpenRouterModel   string   `json:"openrouter_model,omitempty"`
+	Theme             string   `json:"theme,omitempty"`
 	ToolHarness       string   `json:"tool_harness,omitempty"`
 	ToolRoot          string   `json:"tool_root,omitempty"`
 	ToolTimeout       string   `json:"tool_timeout_ms,omitempty"`
@@ -317,6 +317,7 @@ type model struct {
 	workflowSet         bool
 	provider            provider
 	providerSet         bool
+	theme               tuiTheme
 	savedConfig         savedConfig
 	configPath          string
 	modelOptions        []modelOption
@@ -360,13 +361,6 @@ type model struct {
 	width               int
 	height              int
 }
-
-var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
-	labelStyle = lipgloss.NewStyle().Bold(true)
-	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	hintStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-)
 
 func initialModel() (model, error) {
 	return initialModelWithArgs(nil)
@@ -1129,7 +1123,7 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	name := strings.TrimPrefix(parts[0], "/")
 	args := parts[1:]
 
-	if m.running && name != "queue" {
+	if m.running && name != "queue" && name != "theme" {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "command unavailable while a run is active; queue a message or use /queue"})
 		return m, nil
 	}
@@ -1151,6 +1145,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleRouterStatusCommand(args)
 	case "provider":
 		return m.handleProviderCommand(args)
+	case "theme":
+		return m.handleThemeCommand(args)
 	case "key":
 		return m.handleKeyCommand(args)
 	case "compact":
@@ -1196,6 +1192,32 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown command: /" + name})
 	}
 
+	return m, nil
+}
+
+func (m model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "theme: " + string(m.activeTheme()) + " (available: " + themeOptionsText() + ")"})
+		return m, nil
+	}
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /theme " + themeOptionsText()})
+		return m, nil
+	}
+
+	theme, err := parseTUITheme(args[0])
+	if err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /theme " + themeOptionsText() + "\n" + err.Error()})
+		return m, nil
+	}
+
+	m.theme = theme
+	m.savedConfig.Theme = string(theme)
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "theme set to " + string(theme)})
 	return m, nil
 }
 
@@ -3701,6 +3723,12 @@ func runSkillsStatus(config runConfig) string {
 }
 
 func (m *model) applySavedSettings() error {
+	theme, err := savedTUITheme(m.savedConfig)
+	if err != nil {
+		return fmt.Errorf("invalid saved theme in TUI config: %w", err)
+	}
+	m.theme = theme
+
 	if strings.TrimSpace(m.savedConfig.Provider) != "" {
 		provider, err := parseProvider(m.savedConfig.Provider)
 		if err != nil {

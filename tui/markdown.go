@@ -8,9 +8,18 @@ import (
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 )
 
-var markdownRenderers = map[int]*glamour.TermRenderer{}
+type markdownRendererKey struct {
+	Width int
+	Theme tuiTheme
+}
+
+var markdownRenderers = map[markdownRendererKey]*glamour.TermRenderer{}
 
 func renderMarkdownText(text string, width int) (string, error) {
+	return renderMarkdownTextWithTheme(text, width, themeClassic)
+}
+
+func renderMarkdownTextWithTheme(text string, width int, theme tuiTheme) (string, error) {
 	if width <= 0 {
 		return "", fmt.Errorf("markdown render width must be positive")
 	}
@@ -18,7 +27,7 @@ func renderMarkdownText(text string, width int) (string, error) {
 		return "", nil
 	}
 
-	renderer, err := markdownRenderer(width)
+	renderer, err := markdownRendererForTheme(width, theme)
 	if err != nil {
 		return "", err
 	}
@@ -32,31 +41,47 @@ func renderMarkdownText(text string, width int) (string, error) {
 }
 
 func renderMarkdownDisplay(text string, width int) string {
-	rendered, err := renderMarkdownText(text, width)
+	return renderMarkdownDisplayWithTheme(text, width, themeClassic)
+}
+
+func renderMarkdownDisplayWithTheme(text string, width int, theme tuiTheme) string {
+	rendered, err := renderMarkdownTextWithTheme(text, width, theme)
 	if err != nil {
-		return errorStyle.Render("markdown render error: " + err.Error())
+		return stylesForTheme(theme).Error.Render("markdown render error: " + err.Error())
 	}
 	return rendered
 }
 
 func markdownRenderer(width int) (*glamour.TermRenderer, error) {
-	if renderer, ok := markdownRenderers[width]; ok {
+	return markdownRendererForTheme(width, themeClassic)
+}
+
+func markdownRendererForTheme(width int, theme tuiTheme) (*glamour.TermRenderer, error) {
+	key := markdownRendererKey{Width: width, Theme: theme}
+	if renderer, ok := markdownRenderers[key]; ok {
 		return renderer, nil
 	}
 
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStyles(tuiMarkdownStyle()),
+		glamour.WithStyles(tuiMarkdownStyleForTheme(theme)),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create markdown renderer: %w", err)
 	}
 
-	markdownRenderers[width] = renderer
+	markdownRenderers[key] = renderer
 	return renderer, nil
 }
 
 func tuiMarkdownStyle() glamouransi.StyleConfig {
+	return tuiMarkdownStyleForTheme(themeClassic)
+}
+
+func tuiMarkdownStyleForTheme(theme tuiTheme) glamouransi.StyleConfig {
+	if theme == themeMatrix {
+		return tuiMatrixMarkdownStyle()
+	}
 	return glamouransi.StyleConfig{
 		Document: glamouransi.StyleBlock{
 			StylePrimitive: glamouransi.StylePrimitive{
@@ -150,6 +175,113 @@ func tuiMarkdownStyle() glamouransi.StyleConfig {
 				},
 				LiteralNumber: glamouransi.StylePrimitive{
 					Color: stringPtr("209"),
+				},
+			},
+		},
+		Table: glamouransi.StyleTable{
+			CenterSeparator: stringPtr("|"),
+			ColumnSeparator: stringPtr("|"),
+			RowSeparator:    stringPtr("-"),
+		},
+	}
+}
+
+func tuiMatrixMarkdownStyle() glamouransi.StyleConfig {
+	return glamouransi.StyleConfig{
+		Document: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				Color: stringPtr("120"),
+			},
+		},
+		BlockQuote: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				Color:  stringPtr("34"),
+				Italic: boolPtr(true),
+			},
+			Indent:      uintPtr(1),
+			IndentToken: stringPtr("> "),
+		},
+		List: glamouransi.StyleList{
+			LevelIndent: 2,
+		},
+		Heading: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				BlockSuffix: "\n",
+				Color:       stringPtr("46"),
+				Bold:        boolPtr(true),
+			},
+		},
+		H2: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				Color: stringPtr("82"),
+			},
+		},
+		H3: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				Color: stringPtr("120"),
+			},
+		},
+		Strong: glamouransi.StylePrimitive{
+			Bold:  boolPtr(true),
+			Color: stringPtr("46"),
+		},
+		Emph: glamouransi.StylePrimitive{
+			Italic: boolPtr(true),
+			Color:  stringPtr("34"),
+		},
+		HorizontalRule: glamouransi.StylePrimitive{
+			Color:  stringPtr("22"),
+			Format: "\n--------\n",
+		},
+		Item: glamouransi.StylePrimitive{
+			BlockPrefix: "- ",
+		},
+		Enumeration: glamouransi.StylePrimitive{
+			BlockPrefix: ". ",
+		},
+		Task: glamouransi.StyleTask{
+			Ticked:   "[x] ",
+			Unticked: "[ ] ",
+		},
+		Link: glamouransi.StylePrimitive{
+			Color:     stringPtr("46"),
+			Underline: boolPtr(true),
+		},
+		LinkText: glamouransi.StylePrimitive{
+			Color: stringPtr("46"),
+			Bold:  boolPtr(true),
+		},
+		Code: glamouransi.StyleBlock{
+			StylePrimitive: glamouransi.StylePrimitive{
+				Prefix:          " ",
+				Suffix:          " ",
+				Color:           stringPtr("46"),
+				BackgroundColor: stringPtr("22"),
+			},
+		},
+		CodeBlock: glamouransi.StyleCodeBlock{
+			StyleBlock: glamouransi.StyleBlock{
+				StylePrimitive: glamouransi.StylePrimitive{
+					Color: stringPtr("120"),
+				},
+			},
+			Chroma: &glamouransi.Chroma{
+				Text: glamouransi.StylePrimitive{
+					Color: stringPtr("120"),
+				},
+				Comment: glamouransi.StylePrimitive{
+					Color:  stringPtr("34"),
+					Italic: boolPtr(true),
+				},
+				Keyword: glamouransi.StylePrimitive{
+					Color: stringPtr("46"),
+					Bold:  boolPtr(true),
+				},
+				LiteralString: glamouransi.StylePrimitive{
+					Color: stringPtr("82"),
+				},
+				LiteralNumber: glamouransi.StylePrimitive{
+					Color: stringPtr("118"),
 				},
 			},
 		},
