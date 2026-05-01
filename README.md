@@ -111,9 +111,11 @@ variant back into the original project.
 
 **Everything important is logged**
 
-Runs can produce JSON or JSONL output. The TUI also writes session-level JSONL
-logs that include route decisions, provider calls, tool calls, agent lifecycle
-events, MCP activity, heartbeats, timeout events, and final summaries.
+Runs can produce JSON or JSONL output. The TUI runs one long-lived Elixir
+session daemon per conversation and writes session-level JSONL logs that include
+route decisions, provider calls, tool calls, agent lifecycle events, MCP
+activity, heartbeats, timeout events, sidechain agent notifications, and final
+summaries.
 
 ## Requirements
 
@@ -204,6 +206,8 @@ Useful first commands:
 /mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>
 /agents
 /agent <id>
+/send-agent <agent-id> <message>
+/read-agent <agent-id>
 ```
 
 Agent detail views show streamed provider text separately from the final
@@ -221,6 +225,18 @@ Linux: ~/.config/agent-machine/tui-config.json
 ```
 
 Session logs are written under the same config area in `logs/*.jsonl`.
+Sidechain agent transcripts are stored under `logs/sessions/<session-id>/`.
+
+The TUI talks to the runtime through:
+
+```sh
+mix agent_machine.session --jsonl-stdio --session-id <id> --session-dir <path>
+```
+
+That daemon accepts JSONL commands such as `user_message`,
+`send_agent_message`, `read_agent_output`, `cancel_agent`, `shutdown`, and
+`permission_decision`. Normal one-shot CLI usage remains
+`mix agent_machine.run`.
 
 ## Providers
 
@@ -381,6 +397,13 @@ Tool permissions have two layers:
 
 The runtime enforces both layers. The TUI only displays permission requests and
 sends approve/deny decisions back to the CLI.
+
+Session-control tools are a separate internal layer in TUI daemon runs. The
+coordinator may use `spawn_agent`, `send_agent_message`, `read_agent_output`,
+and `list_session_agents` to manage session sidechain agents. These tools do not
+grant filesystem, MCP, command, or network capability; worker agents still need
+the normal tool harness, root, MCP config, exact command allowlist, and
+permission approvals.
 
 Approval modes:
 

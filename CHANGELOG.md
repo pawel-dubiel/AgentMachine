@@ -4,6 +4,17 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added `mix agent_machine.session --jsonl-stdio` as a long-lived TUI runtime
+  daemon with session context JSONL, sidechain agent transcripts, and
+  `user_message`, `send_agent_message`, `read_agent_output`, `cancel_agent`,
+  `shutdown`, and permission-decision commands.
+- Added daemon-only session-control tools for the coordinator:
+  `spawn_agent`, `send_agent_message`, `read_agent_output`, and
+  `list_session_agents`, while keeping filesystem, MCP, command, and network
+  tools on worker runs behind the existing permission control plane.
+- Changed the TUI streaming path to reuse the session daemon across turns,
+  route permission decisions through the same JSONL stdin channel, show
+  sidechain agent notifications, and add `/send-agent` and `/read-agent`.
 - Required explicit MCP tool `inputSchema` values, exposed them to providers,
   validated MCP arguments before transport calls, and failed repeated identical
   malformed tool calls before `tool_max_rounds` exhaustion.

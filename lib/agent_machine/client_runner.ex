@@ -103,6 +103,8 @@ defmodule AgentMachine.ClientRunner do
     JSON.encode!(%{type: "summary", summary: summary})
   end
 
+  def summarize_run!(run) when is_map(run), do: summarize_run(run)
+
   if Mix.env() == :test do
     def summarize_for_test!(run), do: summarize_run(run)
   end
@@ -291,9 +293,16 @@ defmodule AgentMachine.ClientRunner do
 
   defp final_output(run) do
     case Map.fetch(run.results, "finalizer") do
-      {:ok, %{status: :ok, output: output}} -> output
-      :error -> direct_planner_output(run.results) || single_assistant_output(run)
-      _other -> direct_planner_output(run.results) || single_assistant_output(run)
+      {:ok, %{status: :ok, output: output}} ->
+        output
+
+      :error ->
+        direct_planner_output(run.results) || single_assistant_output(run) ||
+          single_coordinator_output(run)
+
+      _other ->
+        direct_planner_output(run.results) || single_assistant_output(run) ||
+          single_coordinator_output(run)
     end
   end
 
@@ -317,6 +326,16 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp single_assistant_output(_run), do: nil
+
+  defp single_coordinator_output(%{
+         opts: opts,
+         results: %{"coordinator" => %{status: :ok, output: output}}
+       })
+       when is_binary(output) do
+    if workflow_route_selected?(opts, ["session"]), do: output
+  end
+
+  defp single_coordinator_output(_run), do: nil
 
   defp workflow_route_selected?(opts, selected) when is_list(opts) do
     selected = List.wrap(selected)

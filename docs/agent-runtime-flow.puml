@@ -24,17 +24,33 @@ partition "TUI or Mix CLI boundary" {
       :Ask user to enable local-files or code-edit\nwith /allow-tools or /yolo-tools;
       stop
     else (no)
-      :Build mix agent_machine.run args;
-      if (ask-before-write tools configured?) then (yes)
-        :Add --permission-control jsonl-stdio;
-        :Open child stdin for approval decisions;
-      endif
+      :Start or reuse mix agent_machine.session\n--jsonl-stdio;
+      :Send user_message JSONL to daemon stdin;
+      :Send permission_decision JSONL to the\nsame daemon stdin when needed;
     endif
   else (CLI)
     :Use explicit CLI flags;
+    :Build mix agent_machine.run args;
   endif
 
   :Pass provider, model, workflow request,\npricing, timeouts, skills, tool harnesses,\nMCP config, root, approval mode, test commands;
+}
+
+partition "Mix.Tasks.AgentMachine.Session (TUI daemon)" {
+  if (JSONL stdio session daemon?) then (yes)
+    :Parse user_message, send_agent_message,\nread_agent_output, cancel_agent,\npermission_decision, shutdown;
+    :Own one PermissionControl registry;\nstdin has a single reader;
+    :Persist session context JSONL ledger;
+    :Run daemon-only coordinator workflow;
+    :Expose only session-control tools:\nspawn_agent, send_agent_message,\nread_agent_output, list_session_agents;
+    if (coordinator spawns sidechain agent?) then (yes)
+      :Create sidechain transcript under\nsessions/<session-id>/agents/<agent-id>.jsonl;
+      :Run AgentTask with existing ClientRunner\nworker/tool/permission path;
+      :Emit session_agent_* notification events;
+      :Persist completed background results\ninto session context ledger;
+    endif
+    :Emit normal event/summary envelopes\nplus session command results;
+  endif
 }
 
 partition "Mix.Tasks.AgentMachine.Run" {

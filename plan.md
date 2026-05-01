@@ -4,6 +4,9 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
+- [2026-05-01] Add durable session daemon restart recovery for agents that were
+  running when the TUI or OS process exited; v1 only persists completed
+  sidechain transcripts and supports explicit continuation.
 - [2026-05-01] Add persistent permission grants and reusable allow rules after
   the run-local permission control plane has more production usage.
 - [2026-04-29] Add run retention/cleanup for completed supervised run subtrees after durable run state and TUI inspection needs are clearer.

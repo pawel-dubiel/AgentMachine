@@ -9,6 +9,7 @@ defmodule AgentMachine.Application do
       {Registry, keys: :unique, name: AgentMachine.RunRegistry},
       AgentMachine.RunSupervisor,
       {Task.Supervisor, name: AgentMachine.AgentSupervisor},
+      AgentMachine.SessionSupervisor,
       AgentMachine.UsageLedger,
       AgentMachine.EventLog,
       AgentMachine.Orchestrator

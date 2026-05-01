@@ -10,18 +10,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type streamSession struct {
-	cmd     *exec.Cmd
-	scanner *bufio.Scanner
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex
-	stderr  *bytes.Buffer
+	cmd        *exec.Cmd
+	scanner    *bufio.Scanner
+	stdin      io.WriteCloser
+	stdinMu    sync.Mutex
+	stderr     *bytes.Buffer
+	persistent bool
 }
 
 var compactRunner = runAgentMachineCompact
@@ -35,11 +38,20 @@ func runCommand(config runConfig) tea.Cmd {
 
 func startStreamingCommand(config runConfig) tea.Cmd {
 	return func() tea.Msg {
-		session, err := startAgentMachineStream(config)
+		session, err := startAgentMachineSession(config)
 		if err != nil {
 			return streamDoneMsg{Err: err}
 		}
 		return streamStartedMsg{Session: session}
+	}
+}
+
+func sendSessionUserMessageCommand(session *streamSession, config runConfig) tea.Cmd {
+	return func() tea.Msg {
+		if err := sendSessionUserMessage(session, config); err != nil {
+			return sessionUserMessageSentMsg{Session: session, Err: err}
+		}
+		return sessionUserMessageSentMsg{Session: session}
 	}
 }
 
@@ -213,6 +225,277 @@ func startAgentMachineStream(config runConfig) (*streamSession, error) {
 
 	scanner := newLineScanner(stdout)
 	return &streamSession{cmd: cmd, scanner: scanner, stdin: stdin, stderr: stderr}, nil
+}
+
+func startAgentMachineSession(config runConfig) (*streamSession, error) {
+	if strings.TrimSpace(config.EventSessionID) == "" {
+		return nil, errors.New("session id is required for AgentMachine session daemon")
+	}
+	if strings.TrimSpace(config.EventLogFile) == "" {
+		return nil, errors.New("session log file is required for AgentMachine session daemon")
+	}
+	if err := prepareRunLog(runConfig{LogFile: config.EventLogFile}); err != nil {
+		return nil, err
+	}
+
+	args := []string{
+		"agent_machine.session",
+		"--jsonl-stdio",
+		"--session-id", config.EventSessionID,
+		"--session-dir", sessionDataDir(config),
+		"--log-file", config.EventLogFile,
+	}
+	cmd := exec.Command("mix", args...)
+	cmd.Dir = projectRoot()
+	cmd.Env = commandEnv(os.Environ(), config)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open AgentMachine session stdout: %w", err)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open AgentMachine session stdin: %w", err)
+	}
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start AgentMachine session: %w", err)
+	}
+
+	session := &streamSession{
+		cmd:        cmd,
+		scanner:    newLineScanner(stdout),
+		stdin:      stdin,
+		stderr:     stderr,
+		persistent: true,
+	}
+	if err := sendSessionUserMessage(session, config); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+	return session, nil
+}
+
+func sendSessionUserMessage(session *streamSession, config runConfig) error {
+	if session == nil || session.stdin == nil {
+		return errors.New("AgentMachine session stdin is not available")
+	}
+	payload, err := sessionUserMessagePayload(config)
+	if err != nil {
+		return err
+	}
+	line, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	session.stdinMu.Lock()
+	defer session.stdinMu.Unlock()
+	_, err = session.stdin.Write(append(line, '\n'))
+	return err
+}
+
+func sessionUserMessagePayload(config runConfig) (map[string]any, error) {
+	run, err := sessionRunPayload(config)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type":       "user_message",
+		"message_id": "msg-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10),
+		"run":        run,
+	}, nil
+}
+
+func sessionRunPayload(config runConfig) (map[string]any, error) {
+	timeoutMS, err := positiveIntValue(runTimeoutMS(config), "run timeout ms")
+	if err != nil {
+		return nil, err
+	}
+	maxStepsValue, err := positiveIntValue(maxSteps(config.Workflow), "max steps")
+	if err != nil {
+		return nil, err
+	}
+	sessionToolTimeout, err := positiveIntValue(sessionToolTimeoutMS(config), "session tool timeout ms")
+	if err != nil {
+		return nil, err
+	}
+	sessionToolMaxRounds, err := positiveIntValue(defaultSessionToolMaxRounds, "session tool max rounds")
+	if err != nil {
+		return nil, err
+	}
+
+	run := map[string]any{
+		"task":                    config.Task,
+		"workflow":                string(config.Workflow),
+		"provider":                string(config.Provider),
+		"timeout_ms":              timeoutMS,
+		"max_steps":               maxStepsValue,
+		"max_attempts":            1,
+		"stream_response":         true,
+		"session_tool_timeout_ms": sessionToolTimeout,
+		"session_tool_max_rounds": sessionToolMaxRounds,
+	}
+
+	if config.Provider != providerEcho {
+		httpTimeout, err := positiveIntValue(config.HTTPTimeout, "http timeout ms")
+		if err != nil {
+			return nil, err
+		}
+		inputPrice, err := nonNegativeFloatValue(config.InputPrice, "input price")
+		if err != nil {
+			return nil, err
+		}
+		outputPrice, err := nonNegativeFloatValue(config.OutputPrice, "output price")
+		if err != nil {
+			return nil, err
+		}
+		run["model"] = config.Model
+		run["http_timeout_ms"] = httpTimeout
+		run["pricing"] = map[string]any{
+			"input_per_million":  inputPrice,
+			"output_per_million": outputPrice,
+		}
+	}
+
+	if err := putSessionToolPayload(run, config); err != nil {
+		return nil, err
+	}
+	putSessionSkillsPayload(run, config)
+	if err := putSessionRouterPayload(run, config); err != nil {
+		return nil, err
+	}
+	if err := putSessionContextPayload(run, config); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+func putSessionToolPayload(run map[string]any, config runConfig) error {
+	harnesses := []string{}
+	if strings.TrimSpace(config.ToolHarness) != "" {
+		harnesses = append(harnesses, config.ToolHarness)
+	}
+	if strings.TrimSpace(config.MCPConfig) != "" {
+		harnesses = append(harnesses, "mcp")
+		run["mcp_config_path"] = config.MCPConfig
+	}
+	if len(harnesses) == 0 {
+		return nil
+	}
+
+	toolTimeout, err := positiveIntValue(config.ToolTimeout, "tool timeout ms")
+	if err != nil {
+		return err
+	}
+	toolMaxRounds, err := positiveIntValue(config.ToolMaxRounds, "tool max rounds")
+	if err != nil {
+		return err
+	}
+	run["tool_harnesses"] = harnesses
+	run["tool_timeout_ms"] = toolTimeout
+	run["tool_max_rounds"] = toolMaxRounds
+	run["tool_approval_mode"] = config.ToolApproval
+	if strings.TrimSpace(config.ToolRoot) != "" {
+		run["tool_root"] = config.ToolRoot
+	}
+	if len(config.TestCommands) > 0 {
+		run["test_commands"] = config.TestCommands
+	}
+	return nil
+}
+
+func putSessionSkillsPayload(run map[string]any, config runConfig) {
+	if config.SkillsMode != "" {
+		run["skills_mode"] = config.SkillsMode
+	}
+	if config.SkillsDir != "" {
+		run["skills_dir"] = config.SkillsDir
+	}
+	if len(config.SkillNames) > 0 {
+		run["skill_names"] = config.SkillNames
+	}
+	if config.AllowSkillScripts {
+		run["allow_skill_scripts"] = true
+	}
+}
+
+func putSessionRouterPayload(run map[string]any, config runConfig) error {
+	if strings.TrimSpace(config.RouterMode) == "" {
+		return nil
+	}
+	run["router_mode"] = config.RouterMode
+	if config.RouterMode != "local" {
+		return nil
+	}
+	timeout, err := positiveIntValue(config.RouterTimeout, "router timeout ms")
+	if err != nil {
+		return err
+	}
+	confidence, err := nonNegativeFloatValue(config.RouterConfidence, "router confidence")
+	if err != nil {
+		return err
+	}
+	run["router_model_dir"] = config.RouterModelDir
+	run["router_timeout_ms"] = timeout
+	run["router_confidence_threshold"] = confidence
+	return nil
+}
+
+func putSessionContextPayload(run map[string]any, config runConfig) error {
+	intFields := map[string]string{
+		"context_window_tokens":       config.ContextWindow,
+		"context_warning_percent":     config.ContextWarning,
+		"reserved_output_tokens":      config.ReservedOutput,
+		"run_context_compact_percent": config.ContextCompactPct,
+		"max_context_compactions":     config.MaxContextCompact,
+	}
+	for key, value := range intFields {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		parsed, err := positiveIntValue(value, key)
+		if err != nil {
+			return err
+		}
+		run[key] = parsed
+	}
+	if config.ContextTokenizer != "" {
+		run["context_tokenizer_path"] = config.ContextTokenizer
+	}
+	if config.RunContextCompact != "" {
+		run["run_context_compaction"] = config.RunContextCompact
+	}
+	return nil
+}
+
+func sessionDataDir(config runConfig) string {
+	return filepath.Join(filepath.Dir(config.EventLogFile), "sessions")
+}
+
+func sessionToolTimeoutMS(config runConfig) string {
+	if strings.TrimSpace(config.RunTimeout) != "" {
+		return config.RunTimeout
+	}
+	return runTimeoutMS(config)
+}
+
+func positiveIntValue(value string, label string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", label, value)
+	}
+	return parsed, nil
+}
+
+func nonNegativeFloatValue(value string, label string) (float64, error) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative number, got %q", label, value)
+	}
+	return parsed, nil
 }
 
 func newLineScanner(reader io.Reader) *bufio.Scanner {
@@ -392,6 +675,64 @@ func sendPermissionDecisionCommand(session *streamSession, requestID string, dec
 	}
 }
 
+func sendSessionAgentMessageCommand(session *streamSession, agentID string, content string, resume bool) tea.Cmd {
+	return writeSessionCommand(session, map[string]any{
+		"type":       "send_agent_message",
+		"message_id": "msg-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10),
+		"agent_id":   agentID,
+		"content":    content,
+		"resume":     resume,
+	})
+}
+
+func readSessionAgentOutputCommand(session *streamSession, agentID string) tea.Cmd {
+	return writeSessionCommand(session, map[string]any{
+		"type":       "read_agent_output",
+		"request_id": "read-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10),
+		"agent_id":   agentID,
+		"limit":      20,
+	})
+}
+
+func writeSessionCommand(session *streamSession, payload map[string]any) tea.Cmd {
+	return func() tea.Msg {
+		if session == nil || session.stdin == nil || !session.persistent {
+			return sessionUserMessageSentMsg{Session: session, Err: errors.New("AgentMachine session daemon is not running")}
+		}
+		line, err := json.Marshal(payload)
+		if err != nil {
+			return sessionUserMessageSentMsg{Session: session, Err: err}
+		}
+		session.stdinMu.Lock()
+		defer session.stdinMu.Unlock()
+		if _, err := session.stdin.Write(append(line, '\n')); err != nil {
+			return sessionUserMessageSentMsg{Session: session, Err: err}
+		}
+		return sessionUserMessageSentMsg{Session: session}
+	}
+}
+
+func closeStreamSession(session *streamSession) {
+	if session == nil {
+		return
+	}
+	if session.stdin != nil {
+		session.stdinMu.Lock()
+		_, _ = session.stdin.Write([]byte("{\"type\":\"shutdown\",\"reason\":\"session replaced\"}\n"))
+		_ = session.stdin.Close()
+		session.stdinMu.Unlock()
+	}
+	if session.cmd != nil && session.cmd.Process != nil {
+		_ = session.cmd.Process.Kill()
+	}
+}
+
+func sessionReusable(previous runConfig, next runConfig) bool {
+	return previous.Provider == next.Provider &&
+		previous.APIKey == next.APIKey &&
+		previous.EventSessionID == next.EventSessionID
+}
+
 func maxSteps(workflow runWorkflow) string {
 	switch workflow {
 	case workflowChat:
@@ -464,6 +805,7 @@ func parseJSONLLine(line string) (jsonlEnvelope, bool, error) {
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return jsonlEnvelope{}, false, fmt.Errorf("failed to parse AgentMachine JSONL line: %w", err)
 	}
+	envelope.Raw = json.RawMessage(trimmed)
 	if envelope.Type == "" {
 		return jsonlEnvelope{}, false, nil
 	}

@@ -91,6 +91,15 @@ defmodule AgentMachine.ToolHarness do
     raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
   end
 
+  def session_control_tools do
+    [
+      AgentMachine.Tools.SpawnSessionAgent,
+      AgentMachine.Tools.SendSessionAgentMessage,
+      AgentMachine.Tools.ReadSessionAgentOutput,
+      AgentMachine.Tools.ListSessionAgents
+    ]
+  end
+
   def read_only_many!(harnesses, opts, intent) when is_list(harnesses) do
     tools =
       harnesses

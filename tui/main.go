@@ -141,6 +141,11 @@ type streamStartedMsg struct {
 	Session *streamSession
 }
 
+type sessionUserMessageSentMsg struct {
+	Session *streamSession
+	Err     error
+}
+
 type streamLineMsg struct {
 	Session *streamSession
 	Line    string
@@ -213,16 +218,17 @@ const (
 )
 
 const (
-	defaultRunTimeoutMS        = "120000"
-	defaultAgenticRunTimeoutMS = "240000"
-	defaultChatSteps           = "1"
-	defaultBasicSteps          = "2"
-	defaultAgenticSteps        = "6"
-	defaultHTTPTimeoutMS       = "120000"
-	defaultRouterTimeoutMS     = "5000"
-	defaultRouterConfidence    = "0.75"
-	defaultRouterModelDirName  = "mdeberta-v3-base-xnli-multilingual-nli-2mil7"
-	liveEventWindowSize        = 8
+	defaultRunTimeoutMS         = "120000"
+	defaultAgenticRunTimeoutMS  = "240000"
+	defaultChatSteps            = "1"
+	defaultBasicSteps           = "2"
+	defaultAgenticSteps         = "6"
+	defaultHTTPTimeoutMS        = "120000"
+	defaultRouterTimeoutMS      = "5000"
+	defaultRouterConfidence     = "0.75"
+	defaultRouterModelDirName   = "mdeberta-v3-base-xnli-multilingual-nli-2mil7"
+	defaultSessionToolMaxRounds = "16"
+	liveEventWindowSize         = 8
 )
 
 type runConfig struct {
@@ -687,6 +693,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stream = msg.Session
 		return m, tea.Batch(readStreamCommand(msg.Session), streamTickCommand())
 
+	case sessionUserMessageSentMsg:
+		if msg.Session != m.stream {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.running = false
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
+			return m.startNextQueuedRun()
+		}
+		return m, nil
+
 	case streamTickMsg:
 		if !m.running {
 			return m, nil
@@ -714,7 +731,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPermissions = nil
 		m.pendingPermissionID = nil
 		m.view = viewChat
-		if msg.Err != nil {
+		if msg.Session != nil && msg.Session.persistent && msg.Err == nil {
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine session ended"})
+		} else if msg.Err != nil {
 			if updated, handled := m.withRunPermissionError(msg.Err); handled {
 				return updated, nil
 			}
@@ -888,16 +907,20 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 		chatMessage{Role: "user", Text: task},
 		chatMessage{Role: "system", Text: runningStatus(config)},
 	)
+	previousConfig := m.activeConfig
+	reuseSession := m.stream != nil && m.stream.persistent && sessionReusable(previousConfig, config)
 	m.running = true
 	m.view = viewChat
 	m.activeConfig = config
 	m.lastSummary = summary{}
 	m.raw = ""
-	m.agents = map[string]agentState{}
-	m.agentOrder = nil
-	m.workItems = map[string]workItem{}
-	m.workOrder = nil
-	m.eventLog = nil
+	if !reuseSession {
+		m.agents = map[string]agentState{}
+		m.agentOrder = nil
+		m.workItems = map[string]workItem{}
+		m.workOrder = nil
+		m.eventLog = nil
+	}
 	m.latestContextBudget = nil
 	m.eventScroll = 0
 	m.eventAutoScroll = true
@@ -905,6 +928,13 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	m.liveAssistant = ""
 	m.selectedAgent = ""
 	m.selectedAgentIndex = 0
+	if reuseSession {
+		return m, tea.Batch(sendSessionUserMessageCommand(m.stream, config), streamTickCommand())
+	}
+	if m.stream != nil && m.stream.persistent {
+		closeStreamSession(m.stream)
+		m.stream = nil
+	}
 	return m, startStreamingCommand(config)
 }
 
@@ -1219,6 +1249,10 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.view = viewAgents
 	case "agent":
 		return m.handleAgentCommand(args)
+	case "send-agent":
+		return m.handleSendAgentCommand(args)
+	case "read-agent":
+		return m.handleReadAgentCommand(args)
 	case "queue":
 		return m.handleQueueCommand(args)
 	case "back":
@@ -1227,6 +1261,9 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.messages = nil
 		m.view = viewChat
 	case "quit", "q":
+		if m.stream != nil && m.stream.persistent {
+			closeStreamSession(m.stream)
+		}
 		return m, tea.Quit
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown command: /" + name})
@@ -2532,6 +2569,37 @@ func (m model) handleAgentCommand(args []string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleSendAgentCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) < 2 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /send-agent <agent-id> <message>"})
+		return m, nil
+	}
+	if m.stream == nil || !m.stream.persistent {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no active session daemon"})
+		return m, nil
+	}
+	agentID := args[0]
+	message := strings.TrimSpace(strings.Join(args[1:], " "))
+	if message == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /send-agent <agent-id> <message>"})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "sent message to " + agentID})
+	return m, sendSessionAgentMessageCommand(m.stream, agentID, message, true)
+}
+
+func (m model) handleReadAgentCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /read-agent <agent-id>"})
+		return m, nil
+	}
+	if m.stream == nil || !m.stream.persistent {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no active session daemon"})
+		return m, nil
+	}
+	return m, readSessionAgentOutputCommand(m.stream, args[0])
+}
+
 func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 	envelope, ok, err := parseJSONLLine(line)
 	if err != nil {
@@ -2550,6 +2618,27 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 		m.raw = line
 		m.applySummaryResults(envelope.Summary)
 		m.applySummaryChecklist(envelope.Summary)
+		if m.stream != nil && m.stream.persistent && m.running {
+			m.running = false
+			m.pendingPermissions = nil
+			m.pendingPermissionID = nil
+			if envelope.Summary.Status == "failed" {
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + summaryError(envelope.Summary)})
+			} else {
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(envelope.Summary)})
+			}
+			nextModel, cmd := m.startNextQueuedRun()
+			if typed, ok := nextModel.(model); ok {
+				return typed, cmd
+			}
+			return m, cmd
+		}
+	case "session_command_result":
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "session result: " + string(envelope.Raw)})
+	case "session_error":
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "session error: " + string(envelope.Raw)})
+	case "session_shutdown":
+		return m, nil
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown JSONL message type: " + envelope.Type})
 	}
@@ -2618,6 +2707,20 @@ func (m *model) applyNonDeltaEvent(event eventSummary) {
 		agent.Status = emptyAs(event.Status, "done")
 		agent.FinishedAt = event.At
 		agent.DurationMS = event.DurationMS
+	case "session_agent_started":
+		agent.Status = "running"
+		agent.StartedAt = event.At
+	case "session_agent_completed":
+		agent.Status = "completed"
+		agent.FinishedAt = event.At
+	case "session_agent_failed":
+		agent.Status = "failed"
+		agent.FinishedAt = event.At
+		agent.Error = event.Reason
+	case "session_agent_cancelled":
+		agent.Status = "stopped"
+		agent.FinishedAt = event.At
+		agent.Error = event.Reason
 	case "agent_retry_scheduled":
 		agent.Status = "retrying"
 		agent.Error = event.Reason
@@ -2708,6 +2811,33 @@ func (m *model) applyWorkEvent(event eventSummary) {
 			FinishedAt:    event.At,
 			DurationMS:    event.DurationMS,
 			LatestSummary: event.Summary,
+		})
+	case "session_agent_started":
+		m.upsertWorkItem(workItem{
+			ID:            workAgentID(event.AgentID),
+			Kind:          "agent",
+			Label:         event.AgentID,
+			Status:        "running",
+			StartedAt:     event.At,
+			LatestSummary: eventDisplayLine(event),
+		})
+	case "session_agent_completed":
+		m.upsertWorkItem(workItem{
+			ID:            workAgentID(event.AgentID),
+			Kind:          "agent",
+			Label:         event.AgentID,
+			Status:        "done",
+			FinishedAt:    event.At,
+			LatestSummary: eventDisplayLine(event),
+		})
+	case "session_agent_failed", "session_agent_cancelled":
+		m.upsertWorkItem(workItem{
+			ID:            workAgentID(event.AgentID),
+			Kind:          "agent",
+			Label:         event.AgentID,
+			Status:        "error",
+			FinishedAt:    event.At,
+			LatestSummary: eventDisplayLine(event),
 		})
 	case "tool_call_started":
 		m.upsertWorkItem(workItem{

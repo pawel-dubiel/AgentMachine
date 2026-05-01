@@ -25,6 +25,11 @@ defmodule AgentMachine.PermissionControl do
     GenServer.call(pid, {:cancel_all, reason})
   end
 
+  def decide(pid, line) when is_pid(pid) and is_binary(line) do
+    send(pid, {:permission_control_line, line})
+    :ok
+  end
+
   def parse_decision!(line) when is_binary(line) do
     line
     |> JSON.decode!()

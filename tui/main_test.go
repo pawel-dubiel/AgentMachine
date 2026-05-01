@@ -127,6 +127,61 @@ func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 	}
 }
 
+func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
+	payload, err := sessionRunPayload(runConfig{
+		Task:              "review this project",
+		Workflow:          workflowAuto,
+		Provider:          providerOpenRouter,
+		Model:             "moonshotai/kimi-k2.6",
+		InputPrice:        "1.00",
+		OutputPrice:       "3.00",
+		HTTPTimeout:       "120000",
+		RunTimeout:        "240000",
+		ToolHarness:       "code-edit",
+		ToolRoot:          "/tmp/project",
+		ToolTimeout:       "120000",
+		ToolMaxRounds:     "6",
+		ToolApproval:      "ask-before-write",
+		TestCommands:      []string{"mix test"},
+		MCPConfig:         "/tmp/mcp.json",
+		RunContextCompact: "off",
+	})
+	if err != nil {
+		t.Fatalf("sessionRunPayload returned error: %v", err)
+	}
+
+	if payload["task"] != "review this project" || payload["workflow"] != "auto" || payload["provider"] != "openrouter" {
+		t.Fatalf("unexpected basic payload: %#v", payload)
+	}
+	if payload["timeout_ms"] != 240000 || payload["session_tool_timeout_ms"] != 240000 {
+		t.Fatalf("expected typed timeout values, got %#v", payload)
+	}
+	if payload["session_tool_max_rounds"] != 16 {
+		t.Fatalf("expected explicit session tool max rounds, got %#v", payload["session_tool_max_rounds"])
+	}
+	harnesses, ok := payload["tool_harnesses"].([]string)
+	if !ok || strings.Join(harnesses, ",") != "code-edit,mcp" {
+		t.Fatalf("unexpected tool harnesses: %#v", payload["tool_harnesses"])
+	}
+	pricing, ok := payload["pricing"].(map[string]any)
+	if !ok || pricing["input_per_million"] != 1.0 || pricing["output_per_million"] != 3.0 {
+		t.Fatalf("unexpected pricing payload: %#v", payload["pricing"])
+	}
+}
+
+func TestSessionUserMessagePayloadRejectsInvalidNumbers(t *testing.T) {
+	_, err := sessionUserMessagePayload(runConfig{
+		Task:         "review this project",
+		Workflow:     workflowBasic,
+		Provider:     providerEcho,
+		RunTimeout:   "nope",
+		EventLogFile: filepath.Join(t.TempDir(), "session.jsonl"),
+	})
+	if err == nil {
+		t.Fatal("expected invalid run timeout error")
+	}
+}
+
 func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:             "review this project",
