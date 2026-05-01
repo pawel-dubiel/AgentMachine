@@ -1,7 +1,7 @@
 defmodule AgentMachine.MCP.Client do
   @moduledoc false
 
-  alias AgentMachine.{JSON, MCP.Config}
+  alias AgentMachine.{JSON, MCP.Config, MCP.Stdio}
 
   def call_tool(%Config.Server{} = server, tool_name, arguments, timeout_ms) do
     request_session(server, timeout_ms, fn request ->
@@ -17,7 +17,14 @@ defmodule AgentMachine.MCP.Client do
   defp request_session(%Config.Server{transport: :stdio} = server, timeout_ms, callback) do
     executable = executable!(server.command)
     env = resolve_env!(server.env)
-    port = Port.open({:spawn_executable, executable}, [:binary, args: server.args, env: env])
+
+    port =
+      Port.open({:spawn_executable, executable}, [
+        :binary,
+        :exit_status,
+        args: server.args,
+        env: env
+      ])
 
     try do
       {result, _state} =
@@ -53,18 +60,9 @@ defmodule AgentMachine.MCP.Client do
     id = System.unique_integer([:positive])
     Port.command(port, JSON.encode!(jsonrpc(id, method, params)) <> "\n")
 
-    receive do
-      {^port, {:data, data}} ->
-        data
-        |> first_json_line!()
-        |> decode_response!(id)
-
-      {^port, {:exit_status, status}} ->
-        raise ArgumentError, "MCP stdio server exited before response with status #{status}"
-    after
-      timeout_ms ->
-        raise ArgumentError, "MCP stdio request #{method} timed out after #{timeout_ms}ms"
-    end
+    port
+    |> Stdio.read_json_line!(method, timeout_ms)
+    |> decode_response!(id)
   end
 
   defp http_request!(server, method, params, timeout_ms, state) do
@@ -123,16 +121,6 @@ defmodule AgentMachine.MCP.Client do
 
       true ->
         raise ArgumentError, "MCP JSON-RPC response missing result: #{inspect(response)}"
-    end
-  end
-
-  defp first_json_line!(data) do
-    data
-    |> String.split("\n", trim: true)
-    |> List.first()
-    |> case do
-      nil -> raise ArgumentError, "MCP stdio server returned empty response"
-      line -> line
     end
   end
 

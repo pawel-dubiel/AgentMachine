@@ -9,7 +9,8 @@ defmodule AgentMachine.MCPIntegrationTest do
     MCP.ToolFactory,
     Orchestrator,
     RunSpec,
-    ToolHarness
+    ToolHarness,
+    ToolPolicy
   }
 
   alias Mix.Tasks.AgentMachine.Run
@@ -112,6 +113,24 @@ defmodule AgentMachine.MCPIntegrationTest do
 
     response = Client.call_tool(server, "search", %{"query" => "beam"}, 1_000)
     assert get_in(response, ["result", "content", Access.at(0), "text"]) == "result for beam"
+  end
+
+  test "stdio MCP client reads JSON-RPC responses larger than one port chunk" do
+    script = large_stdio_server!(90_000)
+
+    server = %Config.Server{
+      id: "docs",
+      transport: :stdio,
+      command: script,
+      args: [],
+      env: %{},
+      tools: []
+    }
+
+    response = Client.call_tool(server, "snapshot", %{}, 1_000)
+    text = get_in(response, ["result", "content", Access.at(0), "text"])
+
+    assert byte_size(text) == 90_000
   end
 
   test "streamable HTTP MCP client sends session header on continuation requests" do
@@ -234,6 +253,39 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert {:ok, second} = tool.run(%{"arguments" => %{}}, opts)
     assert get_in(second, [:result, "content", Access.at(0), "text"]) == "call 2"
 
+    GenServer.stop(session)
+  end
+
+  test "MCP stdio session reads large JSON-RPC tool responses across port chunks" do
+    script = large_stdio_server!(90_000)
+
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "browser",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "snapshot",
+                "permission" => "mcp_browser_snapshot",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
+            ]
+          }
+        ]
+      })
+
+    {:ok, session} = Session.start_link(config)
+
+    assert %{"result" => %{"content" => [%{"text" => text}]}} =
+             Session.call_tool(session, "browser", "snapshot", %{}, 1_000)
+
+    assert byte_size(text) == 90_000
     GenServer.stop(session)
   end
 
@@ -487,6 +539,38 @@ defmodule AgentMachine.MCPIntegrationTest do
         *'"method":"tools/call"'*)
           count=$((count + 1))
           printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"call %s"}]}}\\n' "$id" "$count"
+          ;;
+      esac
+    done
+    """
+
+    File.write!(path, script)
+    File.chmod!(path, 0o700)
+    path
+  end
+
+  defp large_stdio_server!(bytes) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-large-mcp-#{System.unique_integer([:positive])}.sh"
+      )
+
+    script = """
+    #!/bin/sh
+    while IFS= read -r line; do
+      id=$(printf '%s\\n' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+      case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18"}}\\n' "$id"
+          ;;
+        *'"method":"tools/list"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"snapshot","inputSchema":{"type":"object"}}]}}\\n' "$id"
+          ;;
+        *'"method":"tools/call"'*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"' "$id"
+          awk 'BEGIN { for (i = 0; i < #{bytes}; i++) printf "a" }'
+          printf '"}]}}\\n'
           ;;
       esac
     done
