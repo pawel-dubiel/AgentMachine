@@ -1,7 +1,13 @@
 defmodule AgentMachine.SessionServerTest do
   use ExUnit.Case, async: false
 
-  alias AgentMachine.{CapabilityRequired, JSON, PermissionControl, SessionServer, SessionWriter}
+  alias AgentMachine.{
+    JSON,
+    LLMRouter,
+    PermissionControl,
+    SessionServer,
+    SessionWriter
+  }
 
   test "runs a coordinator turn and writes a summary over JSONL" do
     %{server: server, output: output} = start_session!()
@@ -33,6 +39,7 @@ defmodule AgentMachine.SessionServerTest do
                  "create a react app file src/main.js with hello world",
                  workflow: :auto,
                  max_steps: 6,
+                 router_mode: :deterministic,
                  tool_harnesses: [:code_edit],
                  tool_root: root,
                  tool_timeout_ms: 1_000,
@@ -64,13 +71,28 @@ defmodule AgentMachine.SessionServerTest do
     %{server: server, output: output} = start_session!()
     root = tmp_dir!("agent-machine-session-local-files")
 
-    assert {:error, %CapabilityRequired{} = reason} =
+    :ok =
+      LLMRouter.put_test_classifier(fn _input ->
+        %{
+          intent: :code_mutation,
+          confidence: 0.91,
+          reason: "test llm code mutation"
+        }
+      end)
+
+    on_exit(fn -> LLMRouter.clear_test_classifier() end)
+
+    assert {:ok, %{status: "started"}} =
              SessionServer.user_message(
                server,
                user_message(
                  "msg-1",
                  "create a react app file src/main.js with hello world",
                  workflow: :auto,
+                 provider: :openrouter,
+                 model: "openai/gpt-4o-mini",
+                 http_timeout_ms: 1_000,
+                 pricing: %{input_per_million: 0.15, output_per_million: 0.60},
                  tool_harnesses: [:local_files],
                  tool_root: root,
                  tool_timeout_ms: 1_000,
@@ -79,11 +101,70 @@ defmodule AgentMachine.SessionServerTest do
                )
              )
 
-    assert reason.reason == :missing_code_edit_harness
-    assert CapabilityRequired.to_map(reason).requested_root == root
+    summary = last_summary(output)
+    assert summary["status"] == "failed"
+    assert summary["capability_required"]["reason"] == "missing_code_edit_harness"
+    assert summary["capability_required"]["requested_root"] == root
     assert :sys.get_state(server).coordinator_tasks == %{}
     assert :sys.get_state(server).agents == %{}
     refute output_event?(output, "session_agent_started")
+  end
+
+  test "auto LLM routing acknowledges user messages before classification finishes" do
+    parent = self()
+    %{server: server, output: output} = start_session!()
+
+    :ok =
+      LLMRouter.put_test_classifier(fn _input ->
+        send(parent, {:classifier_started, self()})
+
+        receive do
+          :continue ->
+            %{
+              intent: :file_mutation,
+              confidence: 0.8,
+              reason: "slow file mutation classification"
+            }
+        end
+      end)
+
+    on_exit(fn -> LLMRouter.clear_test_classifier() end)
+
+    task =
+      Task.async(fn ->
+        SessionServer.user_message(
+          server,
+          user_message(
+            "msg-1",
+            "say hello",
+            workflow: :auto,
+            router_mode: :llm,
+            model: "test-router-model"
+          )
+        )
+      end)
+
+    case Task.yield(task, 200) do
+      {:ok, {:ok, %{status: "started"}}} ->
+        :ok
+
+      nil ->
+        receive do
+          {:classifier_started, classifier_pid} -> send(classifier_pid, :continue)
+        after
+          0 -> :ok
+        end
+
+        flunk("user_message blocked on LLM routing")
+    end
+
+    assert_receive {:classifier_started, classifier_pid}, 500
+    send(classifier_pid, :continue)
+
+    summary = last_summary(output)
+    assert summary["status"] == "failed"
+    assert summary["capability_required"]["reason"] == "missing_write_harness"
+    assert :sys.get_state(server).user_message_tasks == %{}
   end
 
   test "starts background sidechain agents and records completion" do

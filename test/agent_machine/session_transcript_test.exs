@@ -48,7 +48,7 @@ defmodule AgentMachine.SessionTranscriptTest do
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),
-      "agent-machine-session-test-#{System.unique_integer([:positive])}"
+      "agent-machine-session-test-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}"
     )
   end
 end

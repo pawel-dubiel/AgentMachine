@@ -75,6 +75,7 @@ defmodule AgentMachine.SessionServer do
        writer: writer,
        permission_control: permission_control,
        command_ids: MapSet.new(),
+       user_message_tasks: %{},
        coordinator_tasks: %{},
        agents: %{},
        names: %{},
@@ -87,11 +88,11 @@ defmodule AgentMachine.SessionServer do
   @impl true
   def handle_call({:user_message, command}, _from, state) do
     with :ok <- unique_command_id(state, command.message_id),
-         {:ok, started, state} <- start_user_message(command, state) do
+         {:ok, task} <- start_user_message_routing(command, state) do
       state =
         state
         |> put_command_id(command.message_id)
-        |> put_started_user_message(started, command.message_id)
+        |> put_in([:user_message_tasks, task.ref], command)
         |> Map.put(:current_attrs, command.run)
         |> Map.put(:current_session_tool_opts, command.session_tool_opts)
 
@@ -164,6 +165,9 @@ defmodule AgentMachine.SessionServer do
     Process.demonitor(ref, [:flush])
 
     cond do
+      Map.has_key?(state.user_message_tasks, ref) ->
+        {:noreply, finish_user_message_routing(ref, result, state)}
+
       Map.has_key?(state.coordinator_tasks, ref) ->
         {:noreply, finish_coordinator(ref, result, state)}
 
@@ -177,6 +181,16 @@ defmodule AgentMachine.SessionServer do
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) when is_reference(ref) do
     cond do
+      Map.has_key?(state.user_message_tasks, ref) ->
+        {command, state} = pop_user_message_task(state, ref)
+
+        {:noreply,
+         write_user_message_failure(
+           command.message_id,
+           "user message routing task exited: #{inspect(reason)}",
+           state
+         )}
+
       Map.has_key?(state.coordinator_tasks, ref) ->
         state = Map.update!(state, :coordinator_tasks, &Map.delete(&1, ref))
         {:noreply, state}
@@ -189,30 +203,70 @@ defmodule AgentMachine.SessionServer do
     end
   end
 
-  defp start_user_message(command, state) do
+  defp start_user_message_routing(command, state) do
     SessionTranscript.append_session!(state.session_dir, state.session_id, %{
       type: "user_message",
       message_id: command.message_id,
       task: command.run.task
     })
 
-    spec = RunSpec.new!(command.run)
-    route = WorkflowRouter.route!(spec)
+    task =
+      Task.Supervisor.async_nolink(AgentMachine.SessionTaskSupervisor, fn ->
+        route_user_message(command)
+      end)
 
-    if coordinator_route?(route) do
-      case start_coordinator(command, state) do
-        {:ok, task, state} -> {:ok, {:coordinator, task}, state}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      case start_primary_agent(command, state) do
-        {:ok, agent, state} -> {:ok, {:agent, agent}, state}
-        {:error, reason} -> {:error, reason}
-      end
-    end
+    {:ok, task}
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  end
+
+  defp route_user_message(command) do
+    spec = RunSpec.new!(command.run)
+    {:ok, WorkflowRouter.route!(spec)}
   rescue
     exception in CapabilityRequired -> {:error, exception}
     exception -> {:error, Exception.message(exception)}
+  end
+
+  defp finish_user_message_routing(ref, result, state) do
+    {command, state} = pop_user_message_task(state, ref)
+
+    case result do
+      {:ok, route} ->
+        start_routed_user_message(command, route, state)
+
+      {:error, reason} ->
+        write_user_message_failure(command.message_id, reason, state)
+    end
+  end
+
+  defp start_routed_user_message(command, route, state) do
+    if coordinator_route?(route) do
+      case start_coordinator(command, state) do
+        {:ok, task, state} ->
+          put_started_user_message(state, {:coordinator, task}, command.message_id)
+
+        {:error, reason} ->
+          write_user_message_failure(command.message_id, reason, state)
+      end
+    else
+      case start_primary_agent(command, state) do
+        {:ok, agent, state} ->
+          put_started_user_message(state, {:agent, agent}, command.message_id)
+
+        {:error, reason} ->
+          write_user_message_failure(command.message_id, reason, state)
+      end
+    end
+  end
+
+  defp pop_user_message_task(state, ref) do
+    {command, tasks} = Map.pop(state.user_message_tasks, ref)
+    {command, %{state | user_message_tasks: tasks}}
+  end
+
+  defp write_user_message_failure(message_id, reason, state) do
+    maybe_write_primary_summary(message_id, failed_primary_summary(reason), state)
   end
 
   defp coordinator_route?(%{selected: "chat", tool_intent: "none"}), do: true
