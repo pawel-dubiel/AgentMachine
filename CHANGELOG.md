@@ -4,6 +4,16 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed `agent_machine.session` user messages to route through the normal
+  workflow router before the coordinator, so toolful requests start primary
+  sidechain runs with normal planner, tool authorization, and fail-fast
+  capability checks.
+- Changed session sidechain router capability failures to reopen the TUI
+  filesystem tool permission selector, so missing `code-edit`, `local-files`,
+  test-command, or MCP browser approval can be granted and retried.
+- Changed TUI live events to render permission requests, approvals, denials, and
+  cancellations as explicit permission activity lines with requested root, risk,
+  approval mode, and reason details.
 - Added `mix agent_machine.session --jsonl-stdio` as a long-lived TUI runtime
   daemon with session context JSONL, sidechain agent transcripts, and
   `user_message`, `send_agent_message`, `read_agent_output`, `cancel_agent`,

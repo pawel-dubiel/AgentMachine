@@ -953,7 +953,15 @@ func (m model) withRunPermissionError(err error) (model, bool) {
 		return m, false
 	}
 
-	prompt, root, harness, ok := m.permissionPromptFromRunError(err.Error())
+	return m.withRunPermissionText(err.Error())
+}
+
+func (m model) withRunPermissionText(text string) (model, bool) {
+	if strings.TrimSpace(text) == "" {
+		return m, false
+	}
+
+	prompt, root, harness, ok := m.permissionPromptFromRunError(text)
 	if !ok {
 		return m, false
 	}
@@ -2623,7 +2631,11 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 			m.pendingPermissions = nil
 			m.pendingPermissionID = nil
 			if envelope.Summary.Status == "failed" {
-				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + summaryError(envelope.Summary)})
+				errorText := summaryError(envelope.Summary)
+				if updated, handled := m.withRunPermissionText(errorText); handled {
+					return updated, nil
+				}
+				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + errorText})
 			} else {
 				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(envelope.Summary)})
 			}
@@ -2673,9 +2685,26 @@ func (m *model) applyEvent(event eventSummary) {
 		budget := event
 		m.latestContextBudget = &budget
 	}
+	if event.Type == "session_agent_failed" {
+		m.applySessionAgentPermissionPrompt(event)
+	}
 
 	m.applyWorkEvent(event)
 	m.applyNonDeltaEvent(event)
+}
+
+func (m *model) applySessionAgentPermissionPrompt(event eventSummary) {
+	if m.pendingToolTask != "" {
+		return
+	}
+	text := event.Reason
+	if strings.TrimSpace(text) == "" {
+		text = event.Summary
+	}
+	updated, handled := m.withRunPermissionText(text)
+	if handled {
+		*m = updated
+	}
 }
 
 func (m *model) applyNonDeltaEvent(event eventSummary) {

@@ -763,6 +763,9 @@ func eventDisplayLineWithTheme(event eventSummary, theme tuiTheme) string {
 	if text := toolEventDisplayLine(event); text != "" {
 		return text
 	}
+	if text := permissionEventDisplayLine(event, theme); text != "" {
+		return text
+	}
 
 	text := event.Summary
 	if strings.TrimSpace(text) == "" {
@@ -792,6 +795,106 @@ func toolEventDisplayLine(event eventSummary) string {
 		return event.Summary
 	}
 	return ""
+}
+
+func permissionEventDisplayLine(event eventSummary, theme tuiTheme) string {
+	switch event.Type {
+	case "permission_requested":
+		return permissionLineWithDetails(
+			fmt.Sprintf("permission requested: %s wants %s", permissionActor(event), permissionTarget(event)),
+			event,
+			theme,
+		)
+	case "permission_decided":
+		action := permissionDecisionAction(event.Decision)
+		return permissionLineWithDetails(
+			fmt.Sprintf("permission %s: %s %s %s", permissionDecisionLabel(event.Decision), permissionActor(event), action, permissionTarget(event)),
+			event,
+			theme,
+		)
+	case "permission_cancelled":
+		return permissionLineWithDetails(
+			fmt.Sprintf("permission cancelled: %s cannot use %s", permissionActor(event), permissionTarget(event)),
+			event,
+			theme,
+		)
+	default:
+		return ""
+	}
+}
+
+func permissionLineWithDetails(text string, event eventSummary, theme tuiTheme) string {
+	if details := permissionDetailText(event); details != "" {
+		text += "  " + hintTextForTheme(theme, details)
+	}
+	return text
+}
+
+func permissionActor(event eventSummary) string {
+	if strings.TrimSpace(event.AgentID) != "" {
+		return event.AgentID
+	}
+	return "runtime"
+}
+
+func permissionTarget(event eventSummary) string {
+	switch {
+	case strings.TrimSpace(event.Tool) != "":
+		return event.Tool
+	case strings.TrimSpace(event.Capability) != "":
+		return event.Capability
+	case strings.TrimSpace(event.RequestedTool) != "":
+		return event.RequestedTool
+	case strings.TrimSpace(event.RequestedCommand) != "":
+		return event.RequestedCommand
+	default:
+		return "requested capability"
+	}
+}
+
+func permissionDecisionLabel(decision string) string {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "approved", "approve":
+		return "approved"
+	case "denied", "deny":
+		return "denied"
+	default:
+		return emptyAs(strings.TrimSpace(decision), "decided")
+	}
+}
+
+func permissionDecisionAction(decision string) string {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "approved", "approve":
+		return "may run"
+	case "denied", "deny":
+		return "cannot run"
+	default:
+		return "decided on"
+	}
+}
+
+func permissionDetailText(event eventSummary) string {
+	parts := make([]string, 0, 6)
+	if event.RequestedRoot != "" {
+		parts = append(parts, "root="+event.RequestedRoot)
+	}
+	if event.RequestedTool != "" {
+		parts = append(parts, "requested_tool="+event.RequestedTool)
+	}
+	if event.RequestedCommand != "" {
+		parts = append(parts, "command="+compactDetailValue(event.RequestedCommand))
+	}
+	if event.ApprovalRisk != "" {
+		parts = append(parts, "risk="+event.ApprovalRisk)
+	}
+	if event.ApprovalMode != "" {
+		parts = append(parts, "mode="+event.ApprovalMode)
+	}
+	if event.Reason != "" {
+		parts = append(parts, "reason="+event.Reason)
+	}
+	return strings.Join(parts, " ")
 }
 
 func eventDetailText(event eventSummary) string {

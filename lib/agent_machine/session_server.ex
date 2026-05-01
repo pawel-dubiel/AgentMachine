@@ -15,7 +15,8 @@ defmodule AgentMachine.SessionServer do
     SessionWriter,
     ToolHarness,
     ToolPolicy,
-    WorkflowOptions
+    WorkflowOptions,
+    WorkflowRouter
   }
 
   @agent_output_tail_limit 20
@@ -85,11 +86,11 @@ defmodule AgentMachine.SessionServer do
   @impl true
   def handle_call({:user_message, command}, _from, state) do
     with :ok <- unique_command_id(state, command.message_id),
-         {:ok, task, state} <- start_coordinator(command, state) do
+         {:ok, started, state} <- start_user_message(command, state) do
       state =
         state
         |> put_command_id(command.message_id)
-        |> put_in([:coordinator_tasks, task.ref], command.message_id)
+        |> put_started_user_message(started, command.message_id)
         |> Map.put(:current_attrs, command.run)
         |> Map.put(:current_session_tool_opts, command.session_tool_opts)
 
@@ -187,6 +188,40 @@ defmodule AgentMachine.SessionServer do
     end
   end
 
+  defp start_user_message(command, state) do
+    SessionTranscript.append_session!(state.session_dir, state.session_id, %{
+      type: "user_message",
+      message_id: command.message_id,
+      task: command.run.task
+    })
+
+    spec = RunSpec.new!(command.run)
+    route = WorkflowRouter.route!(spec)
+
+    if coordinator_route?(route) do
+      case start_coordinator(command, state) do
+        {:ok, task, state} -> {:ok, {:coordinator, task}, state}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      case start_primary_agent(command, state) do
+        {:ok, agent, state} -> {:ok, {:agent, agent}, state}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  end
+
+  defp coordinator_route?(%{selected: "chat", tool_intent: "none"}), do: true
+  defp coordinator_route?(%{"selected" => "chat", "tool_intent" => "none"}), do: true
+  defp coordinator_route?(_route), do: false
+
+  defp put_started_user_message(state, {:coordinator, task}, message_id),
+    do: put_in(state, [:coordinator_tasks, task.ref], message_id)
+
+  defp put_started_user_message(state, {:agent, _agent}, _message_id), do: state
+
   defp start_coordinator(command, state) do
     attrs = command.run
     session_tool_opts = command.session_tool_opts
@@ -206,16 +241,31 @@ defmodule AgentMachine.SessionServer do
         })
       end)
 
-    SessionTranscript.append_session!(state.session_dir, state.session_id, %{
-      type: "user_message",
-      message_id: command.message_id,
-      task: command.run.task
-    })
-
     {:ok, task, state}
   rescue
     exception -> {:error, Exception.message(exception)}
   end
+
+  defp start_primary_agent(command, state) do
+    name = primary_agent_name(state)
+    {agent, state} = new_agent(state, name, command.run.task, nil, false, false)
+    agent = %{agent | primary_message_id: command.message_id}
+    state = put_agent(state, agent)
+    state = start_agent_attempt(agent, command.run, command.run.task, state)
+    agent = Map.fetch!(state.agents, agent.id)
+
+    write_agent_event(state, :session_agent_started, agent, %{
+      background: false,
+      primary: true,
+      message_id: command.message_id
+    })
+
+    {:ok, agent, state}
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  end
+
+  defp primary_agent_name(state), do: "request-" <> Integer.to_string(state.agent_seq + 1)
 
   defp run_coordinator(context) do
     spec = RunSpec.new!(context.attrs)
@@ -302,6 +352,8 @@ defmodule AgentMachine.SessionServer do
     You are the coordinator for a long-lived AgentMachine session.
     You may answer directly or use session-control tools to start, message, inspect, or list sidechain agents.
     Session-control tools do not grant filesystem, MCP, command, or network capability to you.
+    AgentMachine routes new user messages before they reach you; answer directly only for conversational or session-management requests.
+    If a request asks for filesystem changes, MCP/browser access, command execution, tests, or other toolful side effects, do not provide paste-in instructions or claim the work is done.
     When delegating, give each worker a precise briefing with all context it needs.
     Use background agents for independent work and read_agent_output only when you need their details.
     Report completed background-agent notifications when they matter to the user.
@@ -419,6 +471,7 @@ defmodule AgentMachine.SessionServer do
       summary: nil,
       output: nil,
       error: nil,
+      primary_message_id: nil,
       created_at: now,
       updated_at: now
     }
@@ -470,6 +523,7 @@ defmodule AgentMachine.SessionServer do
 
   defp finish_agent(agent, {:ok, summary}, state) do
     waiters = agent.waiters
+    primary_message_id = Map.get(agent, :primary_message_id)
 
     agent = %{
       agent
@@ -480,6 +534,7 @@ defmodule AgentMachine.SessionServer do
         output: Map.get(summary, :final_output) || Map.get(summary, "final_output"),
         error: Map.get(summary, :error) || Map.get(summary, "error"),
         waiters: [],
+        primary_message_id: nil,
         updated_at: DateTime.utc_now()
     }
 
@@ -491,6 +546,7 @@ defmodule AgentMachine.SessionServer do
 
     reply_waiters(waiters, {:ok, output_payload(agent, %{}, state)})
 
+    state = maybe_write_primary_summary(primary_message_id, summary, state)
     maybe_continue_agent(agent, state)
   end
 
@@ -498,6 +554,7 @@ defmodule AgentMachine.SessionServer do
 
   defp fail_agent(agent, reason, state) do
     waiters = agent.waiters
+    primary_message_id = Map.get(agent, :primary_message_id)
 
     agent = %{
       agent
@@ -506,13 +563,32 @@ defmodule AgentMachine.SessionServer do
         task_pid: nil,
         error: reason,
         waiters: [],
+        primary_message_id: nil,
         updated_at: DateTime.utc_now()
     }
 
     state = put_agent(state, agent)
     write_agent_event(state, :session_agent_failed, agent, %{reason: reason, error: reason})
     reply_waiters(waiters, {:error, reason})
+
+    maybe_write_primary_summary(primary_message_id, failed_primary_summary(reason), state)
+  end
+
+  defp maybe_write_primary_summary(nil, _summary, state), do: state
+
+  defp maybe_write_primary_summary(_message_id, summary, state) do
+    SessionWriter.write_line(state.writer, SessionProtocol.summary_line!(summary))
+
+    SessionTranscript.append_session!(state.session_dir, state.session_id, %{
+      type: "summary",
+      summary: summary
+    })
+
     state
+  end
+
+  defp failed_primary_summary(reason) do
+    %{status: "failed", error: reason, final_output: nil, results: %{}, events: []}
   end
 
   defp maybe_continue_agent(%{mailbox: [message | rest]} = agent, state) do

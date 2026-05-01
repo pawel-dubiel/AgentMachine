@@ -1083,6 +1083,33 @@ func TestEventDisplayLineDoesNotRenderAssistantDeltaContent(t *testing.T) {
 	}
 }
 
+func TestEventDisplayLineShowsApprovedPermission(t *testing.T) {
+	line := eventDisplayLine(eventSummary{
+		Type:          "permission_decided",
+		AgentID:       "worker",
+		RequestID:     "req-1",
+		Kind:          "tool_execution",
+		Decision:      "approved",
+		Tool:          "write_file",
+		ApprovalRisk:  "write",
+		ApprovalMode:  "ask_before_write",
+		RequestedRoot: "/tmp/project",
+		Reason:        "TUI approve",
+	})
+
+	for _, expected := range []string{
+		"permission approved: worker may run write_file",
+		"root=/tmp/project",
+		"risk=write",
+		"mode=ask_before_write",
+		"reason=TUI approve",
+	} {
+		if !strings.Contains(line, expected) {
+			t.Fatalf("expected %q in permission event line, got %q", expected, line)
+		}
+	}
+}
+
 func TestChatViewRendersThinkingAnimationWithoutStreamedText(t *testing.T) {
 	m := model{
 		running:       true,
@@ -2759,6 +2786,84 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 		!strings.Contains(last, "required harness: code-edit") ||
 		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
 		t.Fatalf("expected permission prompt, got %q", last)
+	}
+}
+
+func TestSessionAgentRouterCapabilityErrorShowsPermissionSelector(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		running:     true,
+		provider:    providerOpenRouter,
+		providerSet: true,
+		agents:      map[string]agentState{},
+		workItems:   map[string]workItem{},
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "can you create me website in home folder under gggg100"},
+		},
+	}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"session_agent_failed","session_id":"session-1","agent_id":"agent-1","status":"failed","reason":"** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured","summary":"agent-1: session_agent_failed","at":"2026-05-01T20:00:00Z"}}`)
+
+	if updated.pendingToolTask == "" {
+		t.Fatal("expected pending tool task")
+	}
+	if updated.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "filesystem permission required") ||
+		!strings.Contains(last, "required harness: code-edit") ||
+		!strings.Contains(last, "active tool harness cannot perform this filesystem action") {
+		t.Fatalf("expected code-edit permission prompt, got %q", last)
+	}
+}
+
+func TestPersistentSessionFailedSummaryShowsPermissionSelector(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		running:     true,
+		stream:      &streamSession{persistent: true},
+		provider:    providerOpenRouter,
+		providerSet: true,
+		agents:      map[string]agentState{},
+		workItems:   map[string]workItem{},
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "can you create me react website in home folder under gggg100"},
+		},
+	}
+
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"** (ArgumentError) auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[]}}`)
+
+	if updated.running {
+		t.Fatal("expected persistent run to stop after failed summary")
+	}
+	if updated.pendingToolTask == "" {
+		t.Fatal("expected pending tool task")
+	}
+	if updated.pendingToolHarness != "code-edit" {
+		t.Fatalf("expected code-edit harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.Role != "system" ||
+		!strings.Contains(last.Text, "filesystem permission required") ||
+		!strings.Contains(last.Text, "required harness: code-edit") {
+		t.Fatalf("expected code-edit permission prompt, got %#v", last)
 	}
 }
 

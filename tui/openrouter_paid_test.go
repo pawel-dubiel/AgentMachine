@@ -300,6 +300,70 @@ func TestPaidOpenRouterAgenticCodeEditThroughTUIAdapter(t *testing.T) {
 	}
 }
 
+func TestPaidOpenRouterSessionAutoCodeEditWebsiteThroughTUIAdapter(t *testing.T) {
+	apiKey := paidOpenRouterAPIKey(t)
+	paidModel := paidOpenRouterModel(t)
+	root := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "agent-machine-paid-openrouter-session.jsonl")
+	siteDir := "gggg100"
+	siteFile := filepath.Join(root, siteDir, "index.html")
+	expectedContent := "<!doctype html>\n<html>\n<body>SESSION_SITE_OK</body>\n</html>\n"
+	patch := "diff --git a/" + siteDir + "/index.html b/" + siteDir + "/index.html\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ b/" + siteDir + "/index.html\n" +
+		"@@ -0,0 +1,4 @@\n" +
+		"+<!doctype html>\n" +
+		"+<html>\n" +
+		"+<body>SESSION_SITE_OK</body>\n" +
+		"+</html>\n"
+	t.Logf("starting paid OpenRouter session auto code-edit run with model=%s root=%s", paidModel, root)
+
+	summary, raw, err := runPaidAgentMachineSession(t, runConfig{
+		Task: "Create a React-style website under tool_root at " + siteDir + "/index.html. " +
+			"Use the available code-edit tools. Call apply_patch exactly once with the exact patch text below as the patch argument. " +
+			"Patch:\n" + patch +
+			"Do not only describe the change. Report the confirmed file path and sentinel SESSION_SITE_OK.",
+		Workflow:       workflowAuto,
+		Provider:       providerOpenRouter,
+		APIKey:         apiKey,
+		Model:          paidModel,
+		InputPrice:     "0",
+		OutputPrice:    "0",
+		HTTPTimeout:    "120000",
+		RunTimeout:     paidOpenRouterAgenticRunTimeoutMS,
+		ToolHarness:    "code-edit",
+		ToolRoot:       root,
+		ToolTimeout:    "120000",
+		ToolMaxRounds:  "8",
+		ToolApproval:   "auto-approved-safe",
+		EventLogFile:   logFile,
+		EventSessionID: "paid-openrouter-session-code-edit",
+	})
+	if err != nil {
+		t.Fatalf("expected paid OpenRouter session code-edit TUI adapter run to succeed: %v\nraw output:\n%s", err, raw)
+	}
+	t.Logf("completed session code-edit run: run_id=%s tokens=%d results=%d", summary.RunID, summary.Usage.TotalTokens, len(summary.Results))
+
+	if summary.Status != "completed" {
+		t.Fatalf("expected completed summary, got %#v", summary)
+	}
+	if summary.WorkflowRoute.Selected != "agentic" {
+		t.Fatalf("expected session request to route to agentic workflow, got %#v", summary.WorkflowRoute)
+	}
+	assertPlannerDecision(t, summary.Results, "delegate")
+	if !hasEvent(summary.Events, "tool_call_finished") {
+		t.Fatalf("expected tool_call_finished event, got %#v", summary.Events)
+	}
+	if !strings.Contains(raw, `"type":"session_agent_started"`) {
+		t.Fatalf("expected session sidechain event in raw stream, got:\n%s", raw)
+	}
+	if summary.Usage.TotalTokens <= 0 {
+		t.Fatalf("expected positive token usage, got %#v", summary.Usage)
+	}
+	assertFileContent(t, siteFile, expectedContent)
+}
+
 func paidOpenRouterAPIKey(t *testing.T) string {
 	t.Helper()
 
@@ -312,6 +376,63 @@ func paidOpenRouterAPIKey(t *testing.T) string {
 		t.Fatal("OPENROUTER_API_KEY is required for paid OpenRouter TUI adapter tests")
 	}
 	return apiKey
+}
+
+func runPaidAgentMachineSession(t *testing.T, config runConfig) (summary, string, error) {
+	t.Helper()
+
+	session, err := startAgentMachineSession(config)
+	if err != nil {
+		return summary{}, "", err
+	}
+	defer func() {
+		closeStreamSession(session)
+		if session.cmd != nil {
+			_ = session.cmd.Wait()
+		}
+	}()
+
+	var lines []string
+	var final summary
+	sawSummary := false
+
+	for session.scanner.Scan() {
+		line := session.scanner.Text()
+		lines = append(lines, line)
+		envelope, ok, parseErr := parseJSONLLine(line)
+		if parseErr != nil {
+			return summary{}, strings.Join(lines, "\n"), parseErr
+		}
+		if !ok {
+			continue
+		}
+
+		switch envelope.Type {
+		case "event":
+			t.Logf("session event: %s", paidEventLog(envelope.Event))
+		case "summary":
+			final = envelope.Summary
+			sawSummary = true
+			t.Logf("session summary: status=%s run_id=%s tokens=%d results=%d", final.Status, final.RunID, final.Usage.TotalTokens, len(final.Results))
+			break
+		}
+
+		if sawSummary {
+			break
+		}
+	}
+
+	if err := session.scanner.Err(); err != nil && !sawSummary {
+		return summary{}, strings.Join(lines, "\n"), err
+	}
+	if !sawSummary {
+		return summary{}, strings.Join(lines, "\n"), fmt.Errorf("AgentMachine session stream ended without a summary")
+	}
+	if final.Status == "failed" {
+		return final, strings.Join(lines, "\n"), fmt.Errorf("AgentMachine session run failed: %s", summaryError(final))
+	}
+
+	return final, strings.Join(lines, "\n"), nil
 }
 
 func runPaidAgentMachine(t *testing.T, config runConfig) (summary, string, error) {
