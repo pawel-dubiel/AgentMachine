@@ -24,6 +24,25 @@ defmodule AgentMachine.Tools.WriteFileTest do
     assert File.read!(Path.join(root, path)) == "hello"
   end
 
+  test "reports identical rewrites as unchanged" do
+    root =
+      Path.expand(Path.join(System.tmp_dir!(), "agent-machine-tools-#{System.unique_integer()}"))
+
+    on_exit(fn -> File.rm_rf(root) end)
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "hello.md"), "hello")
+
+    assert {:ok, %{summary: summary, changed_files: [changed]}} =
+             WriteFile.run(%{"path" => "hello.md", "content" => "hello"}, tool_root: root)
+
+    assert summary.status == "unchanged"
+    assert summary.changed_count == 0
+    assert summary.updated_count == 0
+    assert changed.action == "unchanged"
+    assert changed.before_sha256 == changed.after_sha256
+    assert changed.diff_summary == %{added_lines: 0, removed_lines: 0}
+  end
+
   test "rejects paths outside the configured tool root" do
     root =
       Path.expand(Path.join(System.tmp_dir!(), "agent-machine-tools-#{System.unique_integer()}"))

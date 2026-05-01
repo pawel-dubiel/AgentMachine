@@ -95,7 +95,7 @@ defmodule AgentMachine.Tools.ToolResultSummary do
   defp file_change(path, before_state, after_state) do
     %{
       path: path,
-      action: action_from_states(before_state["state"], after_state["state"]),
+      action: action_from_states(before_state, after_state),
       before_state: before_state["state"],
       before_sha256: before_state["sha256"],
       before_bytes: before_state["bytes"],
@@ -120,15 +120,33 @@ defmodule AgentMachine.Tools.ToolResultSummary do
     }
   end
 
-  defp action_from_states("missing", "file"), do: "created"
-  defp action_from_states("file", "missing"), do: "deleted"
+  defp action_from_states(%{"state" => "missing"}, %{"state" => "file"}), do: "created"
+  defp action_from_states(%{"state" => "file"}, %{"state" => "missing"}), do: "deleted"
 
-  defp action_from_states("file", "file") do
-    "updated"
+  defp action_from_states(%{"state" => "file"} = before_state, %{"state" => "file"} = after_state) do
+    if file_sha256!(before_state, "before") == file_sha256!(after_state, "after") do
+      "unchanged"
+    else
+      "updated"
+    end
   end
 
-  defp action_from_states("missing", "missing"), do: "unchanged"
-  defp action_from_states(before_state, after_state), do: before_state <> "_to_" <> after_state
+  defp action_from_states(%{"state" => "missing"}, %{"state" => "missing"}), do: "unchanged"
+
+  defp action_from_states(%{"state" => before_state}, %{"state" => after_state})
+       when is_binary(before_state) and is_binary(after_state) do
+    before_state <> "_to_" <> after_state
+  end
+
+  defp file_sha256!(state, label) do
+    case Map.fetch(state, "sha256") do
+      {:ok, sha256} ->
+        CodeEditSupport.require_sha256!(sha256)
+
+      :error ->
+        raise ArgumentError, "#{label} file state is missing sha256"
+    end
+  end
 
   defp diff_summary(%{"state" => "missing"}, %{"state" => "missing"}) do
     %{added_lines: 0, removed_lines: 0}
