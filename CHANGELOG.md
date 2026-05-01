@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed provider SSE streaming to close locally on terminal stream events such
+  as OpenRouter `[DONE]` and OpenAI `response.completed`.
 - Changed `ClientRunner` to fail fast when `ask-before-write` exposes write,
   delete, command, or network-risk tools without an approval callback.
 - Changed TUI work checklist markers so pending/running rows render as `[-]`,

@@ -145,4 +145,40 @@ defmodule AgentMachine.ProviderToolContinuationTest do
 
     assert budget.breakdown.tool_continuation == budget.request["input"]
   end
+
+  test "OpenRouter stream handler halts on done marker" do
+    {:ok, state} =
+      Elixir.Agent.start_link(fn -> %{content: "", usage: nil, tool_calls: %{}, error: nil} end)
+
+    assert :halt = OpenRouterChat.handle_stream_data_for_test(state, [], "[DONE]")
+
+    Elixir.Agent.stop(state)
+  end
+
+  test "OpenAI stream handler halts on completed response" do
+    parent = self()
+
+    {:ok, state} = Elixir.Agent.start_link(fn -> %{response: nil, error: nil} end)
+
+    data =
+      AgentMachine.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp-1", "output_text" => "done"}
+      })
+
+    assert :halt =
+             OpenAIResponses.handle_stream_data_for_test(state, stream_opts(parent), data)
+
+    assert %{response: %{"id" => "resp-1"}} = Elixir.Agent.get(state, & &1)
+    assert_receive %{type: :assistant_done, run_id: "run-provider-budget", agent_id: "assistant"}
+
+    Elixir.Agent.stop(state)
+  end
+
+  defp stream_opts(parent) do
+    [
+      stream_context: %{run_id: "run-provider-budget", agent_id: "assistant", attempt: 1},
+      stream_event_sink: fn event -> send(parent, event) end
+    ]
+  end
 end

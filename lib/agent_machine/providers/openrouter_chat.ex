@@ -131,6 +131,8 @@ defmodule AgentMachine.Providers.OpenRouterChat do
 
     def context_budget_request_for_test!(%Agent{} = agent, opts),
       do: context_budget_request(agent, opts)
+
+    def handle_stream_data_for_test(state, opts, data), do: handle_stream_data(state, opts, data)
   end
 
   defp request_body(%Agent{} = agent, opts) do
@@ -238,7 +240,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     end
   end
 
-  defp handle_stream_data(_state, _opts, "[DONE]"), do: :ok
+  defp handle_stream_data(_state, _opts, "[DONE]"), do: :halt
 
   defp handle_stream_data(state, opts, data) do
     decoded = JSON.decode!(data)
@@ -246,6 +248,7 @@ defmodule AgentMachine.Providers.OpenRouterChat do
     cond do
       is_map(decoded["error"]) ->
         Elixir.Agent.update(state, &Map.put(&1, :error, decoded["error"]))
+        :halt
 
       is_map(decoded["usage"]) ->
         Elixir.Agent.update(state, &Map.put(&1, :usage, decoded["usage"]))

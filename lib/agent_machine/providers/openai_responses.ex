@@ -124,6 +124,8 @@ defmodule AgentMachine.Providers.OpenAIResponses do
 
     def context_budget_request_for_test!(%Agent{} = agent, opts),
       do: context_budget_request(agent, opts)
+
+    def handle_stream_data_for_test(state, opts, data), do: handle_stream_data(state, opts, data)
   end
 
   defp request_body(%Agent{} = agent, opts) do
@@ -231,7 +233,7 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     end
   end
 
-  defp handle_stream_data(_state, _opts, "[DONE]"), do: :ok
+  defp handle_stream_data(_state, _opts, "[DONE]"), do: :halt
 
   defp handle_stream_data(state, opts, data) do
     decoded = JSON.decode!(data)
@@ -243,12 +245,15 @@ defmodule AgentMachine.Providers.OpenAIResponses do
       %{"type" => "response.completed", "response" => response} when is_map(response) ->
         emit_done(opts)
         Elixir.Agent.update(state, &Map.put(&1, :response, response))
+        :halt
 
       %{"type" => "response.failed", "response" => %{"error" => error}} ->
         Elixir.Agent.update(state, &Map.put(&1, :error, error))
+        :halt
 
       %{"type" => "error", "message" => message} ->
         Elixir.Agent.update(state, &Map.put(&1, :error, message))
+        :halt
 
       _other ->
         :ok

@@ -25,6 +25,38 @@ defmodule AgentMachine.HTTPSSETest do
     assert_receive {:sse_event, "{\"two\":2}"}
   end
 
+  test "halts a stream when the callback returns halt" do
+    parent = self()
+
+    {:ok, server} =
+      start_hanging_sse_server(
+        [
+          "data: {\"one\":1}\n\n",
+          "data: [DONE]\n\n"
+        ],
+        500,
+        parent
+      )
+
+    assert :ok =
+             HTTPSSE.post(
+               String.to_charlist("http://127.0.0.1:#{server.port}/stream"),
+               [{~c"content-type", ~c"application/json"}],
+               "{}",
+               1_000,
+               fn event ->
+                 send(parent, {:sse_event, event})
+                 if event == "[DONE]", do: :halt, else: :ok
+               end
+             )
+
+    assert_receive {:sse_event, "{\"one\":1}"}
+    assert_receive {:sse_event, "[DONE]"}
+    server_pid = server.pid
+    assert_receive {:sse_server_holding, ^server_pid}
+    refute_receive {:sse_server_closed, ^server_pid}, 50
+  end
+
   test "returns response body for non-success status" do
     {:ok, server} = start_error_server(503, "temporarily unavailable")
 
@@ -105,6 +137,32 @@ defmodule AgentMachine.HTTPSSETest do
 
           send_chunks(socket, chunks)
 
+          :gen_tcp.close(socket)
+          :gen_tcp.close(listen)
+        end)
+
+      {:ok, %{port: port, pid: pid}}
+    end
+  end
+
+  defp start_hanging_sse_server(chunks, hold_ms, parent) do
+    with {:ok, listen} <- :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true]),
+         {:ok, port} <- :inet.port(listen) do
+      pid =
+        spawn_link(fn ->
+          {:ok, socket} = :gen_tcp.accept(listen)
+          {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              socket,
+              "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: keep-alive\r\n\r\n"
+            )
+
+          send_chunks(socket, chunks)
+          send(parent, {:sse_server_holding, self()})
+          Process.sleep(hold_ms)
+          send(parent, {:sse_server_closed, self()})
           :gen_tcp.close(socket)
           :gen_tcp.close(listen)
         end)

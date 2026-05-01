@@ -31,8 +31,9 @@ defmodule AgentMachine.HTTPSSE do
       spawn_monitor(fn ->
         result =
           do_post(url, headers, body, timeout_ms, fn data ->
-            on_data.(data)
+            result = on_data.(data)
             send(owner, {:httpsse_progress, ref})
+            result
           end)
 
         send(owner, {:httpsse_result, ref, result})
@@ -197,11 +198,16 @@ defmodule AgentMachine.HTTPSSE do
 
       {:gun_data, ^conn, ^stream_ref, fin, chunk} ->
         {sse, events} = SSE.parse_chunk(sse, chunk)
-        Enum.each(events, on_data)
 
-        case fin do
-          :fin -> flush_sse(sse, on_data)
-          :nofin -> collect(conn, stream_ref, sse, timeout_ms, on_data)
+        case emit_events(events, on_data) do
+          :halt ->
+            :ok
+
+          :cont ->
+            case fin do
+              :fin -> flush_sse(sse, on_data)
+              :nofin -> collect(conn, stream_ref, sse, timeout_ms, on_data)
+            end
         end
 
       {:gun_inform, ^conn, ^stream_ref, _status, _headers} ->
@@ -226,8 +232,20 @@ defmodule AgentMachine.HTTPSSE do
 
   defp flush_sse(sse, on_data) do
     {_sse, events} = SSE.flush(sse)
-    Enum.each(events, on_data)
-    :ok
+
+    case emit_events(events, on_data) do
+      :halt -> :ok
+      :cont -> :ok
+    end
+  end
+
+  defp emit_events(events, on_data) do
+    Enum.reduce_while(events, :cont, fn event, :cont ->
+      case on_data.(event) do
+        :halt -> {:halt, :halt}
+        _other -> {:cont, :cont}
+      end
+    end)
   end
 
   defp collect_response_body(_conn, _stream_ref, :fin, body, _timeout_ms), do: body
