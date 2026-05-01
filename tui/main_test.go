@@ -3776,6 +3776,114 @@ func TestStreamLineTracksRuntimePermissionRequests(t *testing.T) {
 	}
 }
 
+func TestRuntimePermissionSelectorCanChooseDenyWithKeyboard(t *testing.T) {
+	stdin := &closeBuffer{}
+	m := model{
+		running: true,
+		view:    viewChat,
+		input:   textinput.New(),
+		stream:  &streamSession{stdin: stdin, persistent: true},
+		pendingPermissions: map[string]eventSummary{
+			"req-1": {
+				RequestID:    "req-1",
+				Kind:         "tool_execution",
+				AgentID:      "worker",
+				Tool:         "create_dir",
+				ApprovalRisk: "write",
+			},
+		},
+		pendingPermissionID: []string{"req-1"},
+	}
+
+	view := stripANSI(m.pendingRuntimePermissionView())
+	if !strings.Contains(view, "> Approve once") || !strings.Contains(view, "  Deny") {
+		t.Fatalf("expected selectable runtime permission options, got %q", view)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	result := updated.(model)
+	if result.pendingPermissionChoice != 1 {
+		t.Fatalf("expected deny option to be selected, got %d", result.pendingPermissionChoice)
+	}
+
+	updated, cmd = result.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result = updated.(model)
+	if cmd == nil {
+		t.Fatal("expected permission decision command")
+	}
+	if len(result.pendingPermissionID) != 0 || len(result.pendingPermissions) != 0 {
+		t.Fatalf("expected pending permission to clear, got ids=%#v map=%#v", result.pendingPermissionID, result.pendingPermissions)
+	}
+
+	msg := cmd()
+	decision, ok := msg.(permissionDecisionMsg)
+	if !ok {
+		t.Fatalf("expected permission decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "req-1" || decision.Decision != "deny" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "permission_decision" || payload["request_id"] != "req-1" || payload["decision"] != "deny" {
+		t.Fatalf("unexpected permission decision payload: %#v", payload)
+	}
+}
+
+func TestRuntimePermissionSlashApproveDoesNotQueueMessage(t *testing.T) {
+	stdin := &closeBuffer{}
+	input := textinput.New()
+	input.SetValue("/a")
+	m := model{
+		running: true,
+		view:    viewChat,
+		input:   input,
+		stream:  &streamSession{stdin: stdin, persistent: true},
+		pendingPermissions: map[string]eventSummary{
+			"req-1": {
+				RequestID:    "req-1",
+				Kind:         "tool_execution",
+				AgentID:      "worker",
+				Tool:         "create_dir",
+				ApprovalRisk: "write",
+			},
+		},
+		pendingPermissionID: []string{"req-1"},
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+	if cmd == nil {
+		t.Fatal("expected permission decision command")
+	}
+	if len(result.queuedMessages) != 0 {
+		t.Fatalf("expected /a to approve permission instead of queueing, got %#v", result.queuedMessages)
+	}
+	if result.input.Value() != "" {
+		t.Fatalf("expected input to clear, got %q", result.input.Value())
+	}
+
+	msg := cmd()
+	decision, ok := msg.(permissionDecisionMsg)
+	if !ok {
+		t.Fatalf("expected permission decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "req-1" || decision.Decision != "approve" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "permission_decision" || payload["request_id"] != "req-1" || payload["decision"] != "approve" {
+		t.Fatalf("unexpected permission decision payload: %#v", payload)
+	}
+}
+
 func TestSendPermissionDecisionCommandWritesJSONL(t *testing.T) {
 	stdin := &closeBuffer{}
 	session := &streamSession{stdin: stdin}
