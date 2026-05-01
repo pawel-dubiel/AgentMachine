@@ -6,6 +6,8 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
 
   @checkpoint_parent [".agent_machine", "checkpoints"]
   @checkpoint_id_pattern ~r/\A\d{8}T\d{6}Z-\d+\z/
+  @snapshot_max_files 1_000
+  @snapshot_skip_dirs MapSet.new([".agent_machine", ".git", "_build", "deps", "node_modules"])
 
   def apply_plan!(root, tool_name, plan) when is_binary(root) and is_binary(tool_name) do
     require_plan!(plan)
@@ -68,6 +70,85 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
       rolled_back_checkpoint_id: checkpoint_id,
       restored: rollback.changed
     })
+  end
+
+  def prepare_snapshot!(root, tool_name) when is_binary(root) and is_binary(tool_name) do
+    checkpoint_id = new_checkpoint_id()
+    checkpoint_dir = checkpoint_dir(root, checkpoint_id)
+    contents_dir = Path.join(checkpoint_dir, "contents")
+    ensure_checkpoint_dir!(root, checkpoint_dir, contents_dir)
+
+    paths = snapshot_paths!(root)
+
+    entries =
+      Enum.map(paths, fn path ->
+        %{
+          "path" => relative_path!(root, path),
+          "before" => path |> read_disk_state!() |> store_state_content!(checkpoint_dir)
+        }
+      end)
+
+    manifest = %{
+      "id" => checkpoint_id,
+      "created_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "tool" => tool_name,
+      "checkpoint_path" => checkpoint_dir,
+      "status" => "prepared",
+      "snapshot" => true,
+      "entries" => entries
+    }
+
+    write_manifest!(checkpoint_dir, manifest)
+
+    %{
+      checkpoint_id: checkpoint_id,
+      checkpoint_path: checkpoint_dir,
+      checkpoint: %{id: checkpoint_id, path: checkpoint_dir},
+      count: length(entries)
+    }
+  end
+
+  def finalize_snapshot!(root, checkpoint_id) when is_binary(root) and is_binary(checkpoint_id) do
+    manifest = read_manifest!(root, checkpoint_id)
+
+    unless manifest["snapshot"] == true do
+      raise ArgumentError, "checkpoint is not a shell snapshot: #{inspect(checkpoint_id)}"
+    end
+
+    checkpoint_dir = checkpoint_dir(root, checkpoint_id)
+    before_entries = Map.get(manifest, "entries", [])
+    before_by_path = Map.new(before_entries, &{Map.fetch!(&1, "path"), Map.fetch!(&1, "before")})
+    after_paths = snapshot_paths!(root) |> Enum.map(&relative_path!(root, &1))
+
+    entries =
+      before_by_path
+      |> Map.keys()
+      |> Kernel.++(after_paths)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(fn relative ->
+        path = Path.expand(relative, root)
+        before = Map.get(before_by_path, relative, missing_state())
+        after_state = path |> read_disk_state!() |> store_state_content!(checkpoint_dir)
+
+        %{
+          "path" => relative,
+          "before" => before,
+          "after" => after_state
+        }
+      end)
+      |> Enum.reject(fn entry ->
+        comparable_state(entry["before"]) == comparable_state(entry["after"])
+      end)
+
+    applied_manifest =
+      manifest
+      |> Map.put("status", "applied")
+      |> Map.put("affected_paths", Enum.map(entries, & &1["path"]))
+      |> Map.put("entries", entries)
+
+    write_manifest!(checkpoint_dir, applied_manifest)
+    result_from_manifest(applied_manifest)
   end
 
   def checkpoint_dir(root, checkpoint_id) do
@@ -232,6 +313,66 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
       {:error, reason} ->
         raise File.Error, reason: reason, action: "inspect checkpointed path", path: path
     end
+  end
+
+  defp snapshot_paths!(root) do
+    root
+    |> do_snapshot_paths!([])
+    |> Enum.sort()
+    |> tap(fn paths ->
+      if length(paths) > @snapshot_max_files do
+        raise ArgumentError,
+              "shell checkpoint can include at most #{@snapshot_max_files} text files, got: #{length(paths)}"
+      end
+    end)
+  end
+
+  defp do_snapshot_paths!(dir, acc) do
+    dir
+    |> File.ls!()
+    |> Enum.reduce(acc, &snapshot_path_entry!(dir, &1, &2))
+  end
+
+  defp snapshot_path_entry!(dir, name, acc) do
+    path = Path.join(dir, name)
+
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        maybe_snapshot_dir!(path, name, acc)
+
+      {:ok, %{type: :regular, size: size}} ->
+        maybe_snapshot_file(path, size, acc)
+
+      {:ok, _stat} ->
+        acc
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect snapshot path", path: path
+    end
+  end
+
+  defp maybe_snapshot_dir!(path, name, acc) do
+    if MapSet.member?(@snapshot_skip_dirs, name) do
+      acc
+    else
+      do_snapshot_paths!(path, acc)
+    end
+  end
+
+  defp maybe_snapshot_file(path, size, acc) do
+    if size <= CodeEditSupport.max_file_bytes() and snapshot_text_file?(path) do
+      [path | acc]
+    else
+      acc
+    end
+  end
+
+  defp snapshot_text_file?(path) do
+    path
+    |> File.read!()
+    |> String.valid?()
+  rescue
+    File.Error -> false
   end
 
   defp store_state_content!(%{"state" => "missing"} = state, _checkpoint_dir), do: state
