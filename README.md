@@ -74,9 +74,10 @@ practical path for each request:
 - agentic planner/worker execution for delegated, write, code-edit, test, or
   browser work.
 
-When the local zero-shot classifier model is installed in the standard TUI
-model directory, the TUI uses it for intent detection. If it is not installed,
-the runtime still stays conservative and explicit.
+By default, auto mode asks the selected provider/model to classify the request
+through a strict JSON router prompt before any workflow starts. Deterministic
+rules still guard obvious tool intents, and `/router deterministic` or
+`/router local <model-dir>` can select the older explicit router modes.
 
 **Tools are capabilities, not defaults**
 
@@ -193,6 +194,9 @@ Useful first commands:
 /key <api-key>
 /models reload
 /model
+/router llm
+/router deterministic
+/router local <model-dir>
 /compact
 /context status
 /context window <tokens> [warning-percent]
@@ -273,6 +277,7 @@ Use the CLI when you want scriptable runs or exact control over flags:
 mix agent_machine.run \
   --workflow auto \
   --provider echo \
+  --router-mode deterministic \
   --timeout-ms 30000 \
   --max-steps 6 \
   --max-attempts 1 \
@@ -286,6 +291,7 @@ Use JSONL for live progress and machine-readable event streams:
 mix agent_machine.run \
   --workflow auto \
   --provider echo \
+  --router-mode deterministic \
   --timeout-ms 30000 \
   --max-steps 6 \
   --max-attempts 1 \
@@ -300,6 +306,7 @@ Write a run log:
 mix agent_machine.run \
   --workflow auto \
   --provider echo \
+  --router-mode deterministic \
   --timeout-ms 30000 \
   --max-steps 6 \
   --max-attempts 1 \

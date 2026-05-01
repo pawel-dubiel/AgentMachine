@@ -4,6 +4,17 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed persistent session user-message routing to run in a supervised task,
+  so provider-backed LLM routing no longer blocks the JSONL `user_message`
+  acknowledgement or trips the 5s `GenServer.call` timeout.
+- Fixed LLM router provider calls to include the normal empty run context, so
+  OpenRouter/OpenAI request builders do not fail with missing `:run_context`.
+- Added a supervised LLM workflow router mode, made it the default for auto
+  routing, and kept deterministic/local router modes explicit through the CLI,
+  session protocol, and TUI `/router` commands.
+- Added a TUI startup migration that clears the old standard auto-installed
+  local router config so existing setups move to the LLM router default while
+  preserving custom local router choices.
 - Moved auto-router missing capability decisions into structured Elixir
   `capability_required` summaries/events and removed duplicated TUI intent
   heuristics for filesystem, code-edit, test, and MCP browser permission prompts.
