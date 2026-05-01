@@ -96,6 +96,7 @@ defmodule AgentMachine.ClientRunner do
       tool_intent: route.tool_intent,
       tools_exposed: route.tools_exposed,
       classifier: Map.get(route, :classifier),
+      classifier_model: Map.get(route, :classifier_model),
       classified_intent: Map.get(route, :classified_intent),
       confidence: Map.get(route, :confidence),
       active_harnesses: Enum.map(spec.tool_harnesses || [], &Atom.to_string/1),

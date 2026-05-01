@@ -15,6 +15,7 @@ defmodule AgentMachine.SessionProtocolTest do
           timeout_ms: 1_000,
           max_steps: 1,
           max_attempts: 1,
+          router_mode: "llm",
           stream_response: true,
           session_tool_timeout_ms: 1_000,
           session_tool_max_rounds: 4
@@ -31,6 +32,7 @@ defmodule AgentMachine.SessionProtocolTest do
                timeout_ms: 1_000,
                max_steps: 1,
                max_attempts: 1,
+               router_mode: :llm,
                stream_response: true
              },
              session_tool_opts: %{timeout_ms: 1_000, max_rounds: 4}

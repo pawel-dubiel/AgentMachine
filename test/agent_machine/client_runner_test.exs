@@ -666,7 +666,8 @@ defmodule AgentMachine.ClientRunnerTest do
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
-        max_attempts: 1
+        max_attempts: 1,
+        router_mode: :deterministic
       })
 
     {[planner], opts} = Agentic.build!(spec, %{selected: "agentic", strategy: "swarm"})
@@ -777,7 +778,8 @@ defmodule AgentMachine.ClientRunnerTest do
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
-        max_attempts: 1
+        max_attempts: 1,
+        router_mode: :deterministic
       })
 
     assert summary.status == "completed"
@@ -808,7 +810,8 @@ defmodule AgentMachine.ClientRunnerTest do
                provider: :echo,
                timeout_ms: 1_000,
                max_steps: 6,
-               max_attempts: 1
+               max_attempts: 1,
+               router_mode: :deterministic
              })
 
     assert_receive {:telemetry, [:agent_machine, :workflow, :route], %{system_time: _},
@@ -827,6 +830,7 @@ defmodule AgentMachine.ClientRunnerTest do
         timeout_ms: 1_000,
         max_steps: 6,
         max_attempts: 1,
+        router_mode: :deterministic,
         tool_harness: :code_edit,
         tool_root: root,
         tool_timeout_ms: 100,
@@ -854,6 +858,7 @@ defmodule AgentMachine.ClientRunnerTest do
         timeout_ms: 1_000,
         max_steps: 6,
         max_attempts: 1,
+        router_mode: :deterministic,
         tool_harness: :local_files,
         tool_root: root,
         tool_timeout_ms: 100,
@@ -880,7 +885,8 @@ defmodule AgentMachine.ClientRunnerTest do
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
-        max_attempts: 1
+        max_attempts: 1,
+        router_mode: :deterministic
       })
 
     EventLog.close()
@@ -1086,6 +1092,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "basic",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1118,6 +1126,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "auto",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1145,6 +1155,7 @@ defmodule AgentMachine.ClientRunnerTest do
         timeout_ms: 1_000,
         max_steps: 6,
         max_attempts: 1,
+        router_mode: :deterministic,
         tool_harness: :local_files,
         tool_root: "/tmp/project",
         tool_timeout_ms: 100,
@@ -1180,6 +1191,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "auto",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1249,6 +1262,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "basic",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1346,6 +1361,37 @@ defmodule AgentMachine.ClientRunnerTest do
         "hello"
       ])
     end
+  end
+
+  test "mix agent_machine.run accepts explicit llm router mode" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--workflow",
+      "basic",
+      "--provider",
+      "echo",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "2",
+      "--max-attempts",
+      "1",
+      "--router-mode",
+      "llm",
+      "--json",
+      "hello"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+    assert JSON.decode!(json)["status"] == "completed"
   end
 
   test "mix agent_machine.run rejects explicit chat with tool harness options" do
@@ -1506,6 +1552,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "auto",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1550,6 +1598,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "basic",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",
@@ -1632,6 +1682,8 @@ defmodule AgentMachine.ClientRunnerTest do
       "auto",
       "--provider",
       "echo",
+      "--router-mode",
+      "deterministic",
       "--timeout-ms",
       "1000",
       "--max-steps",

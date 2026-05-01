@@ -148,6 +148,7 @@ defmodule AgentMachine.EventSummary do
       :tool_intent,
       :tools_exposed,
       :classifier,
+      :classifier_model,
       :classified_intent,
       :confidence,
       :active_harnesses,

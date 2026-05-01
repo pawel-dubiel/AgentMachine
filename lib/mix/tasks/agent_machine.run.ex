@@ -351,14 +351,17 @@ defmodule Mix.Tasks.AgentMachine.Run do
       {:ok, "deterministic"} ->
         :deterministic
 
+      {:ok, "llm"} ->
+        :llm
+
       {:ok, "local"} ->
         :local
 
       {:ok, mode} ->
-        Mix.raise("--router-mode must be deterministic or local, got: #{inspect(mode)}")
+        Mix.raise("--router-mode must be deterministic, llm, or local, got: #{inspect(mode)}")
 
       :error ->
-        :deterministic
+        :llm
     end
   end
 
@@ -462,6 +465,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.shell().info("  tool intent: #{Map.get(route, :tool_intent) || "(none)"}")
     Mix.shell().info("  tools exposed: #{Map.get(route, :tools_exposed)}")
     Mix.shell().info("  classifier: #{Map.get(route, :classifier) || "(none)"}")
+    Mix.shell().info("  classifier model: #{Map.get(route, :classifier_model) || "(none)"}")
     Mix.shell().info("  classified intent: #{Map.get(route, :classified_intent) || "(none)"}")
     Mix.shell().info("  confidence: #{Map.get(route, :confidence) || "(none)"}")
   end

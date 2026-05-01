@@ -70,7 +70,7 @@ defmodule AgentMachine.SessionProtocol do
 
   @skills_mode_values %{"off" => :off, "auto" => :auto}
   @compaction_values %{"off" => :off, "on" => :on}
-  @router_values %{"deterministic" => :deterministic, "local" => :local}
+  @router_values %{"deterministic" => :deterministic, "llm" => :llm, "local" => :local}
 
   def parse_command!(line) when is_binary(line) do
     payload = JSON.decode!(line)
