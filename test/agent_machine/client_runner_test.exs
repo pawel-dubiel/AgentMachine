@@ -373,15 +373,24 @@ defmodule AgentMachine.ClientRunnerTest do
 
     {_agents, opts} = Basic.build!(spec)
 
-    assert Keyword.fetch!(opts, :allowed_tools) == [
-             AgentMachine.Tools.ApplyEdits,
-             AgentMachine.Tools.ApplyPatch,
-             AgentMachine.Tools.FileInfo,
-             AgentMachine.Tools.ListFiles,
-             AgentMachine.Tools.RollbackCheckpoint,
-             AgentMachine.Tools.ReadFile,
-             AgentMachine.Tools.SearchFiles
-           ]
+    allowed_tools = Keyword.fetch!(opts, :allowed_tools)
+
+    for tool <- [
+          AgentMachine.Tools.ApplyEdits,
+          AgentMachine.Tools.ApplyPatch,
+          AgentMachine.Tools.FileInfo,
+          AgentMachine.Tools.ListFiles,
+          AgentMachine.Tools.RollbackCheckpoint,
+          AgentMachine.Tools.ReadFile,
+          AgentMachine.Tools.SearchFiles,
+          AgentMachine.Tools.RunShellCommand,
+          AgentMachine.Tools.StartShellCommand,
+          AgentMachine.Tools.ReadShellCommandOutput,
+          AgentMachine.Tools.StopShellCommand,
+          AgentMachine.Tools.ListShellCommands
+        ] do
+      assert tool in allowed_tools
+    end
 
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/agent-machine"
     assert Keyword.fetch!(opts, :tool_approval_mode) == :full_access
@@ -392,6 +401,9 @@ defmodule AgentMachine.ClientRunnerTest do
     assert MapSet.member?(permissions, :code_edit_apply_edits)
     assert MapSet.member?(permissions, :code_edit_apply_patch)
     assert MapSet.member?(permissions, :code_edit_rollback_checkpoint)
+    assert MapSet.member?(permissions, :code_edit_shell_run)
+    assert MapSet.member?(permissions, :code_edit_shell_background)
+    assert MapSet.member?(permissions, :code_edit_shell_stop)
   end
 
   test "builds code edit tool options with explicit test commands" do

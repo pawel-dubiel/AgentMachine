@@ -81,6 +81,7 @@ defmodule AgentMachine.OrchestratorTest do
              Registry.lookup(AgentMachine.RunRegistry, {:event_collector, run_id})
 
     assert Process.alive?(event_collector)
+    assert {:ok, %{status: :completed}} = Orchestrator.await_run(run_id, 1_000)
   end
 
   test "agent tasks run under the per-run task supervisor" do

@@ -861,7 +861,7 @@ defmodule AgentMachine.WorkflowRouterTest do
       assert CapabilityRequired.to_map(exception).required_harness == "code-edit"
     end
 
-    test "test_command requires code-edit, full-access, and an allowlisted command" do
+    test "test_command requires code-edit and command-capable approval" do
       route =
         local_route!(:test_command,
           tool_harnesses: [:code_edit],
@@ -900,16 +900,15 @@ defmodule AgentMachine.WorkflowRouterTest do
                "ask-before-write"
              ]
 
-      exception =
-        assert_raise CapabilityRequired, fn ->
-          local_route!(:test_command,
-            tool_harnesses: [:code_edit],
-            approval_mode: :full_access,
-            test_commands: []
-          )
-        end
+      route =
+        local_route!(:test_command,
+          tool_harnesses: [:code_edit],
+          approval_mode: :full_access,
+          test_commands: []
+        )
 
-      assert exception.reason == :missing_test_commands
+      assert route.selected == "agentic"
+      assert route.reason == "test_intent_with_code_edit_shell"
     end
 
     test "time intent uses a read-only tool when any tool harness is configured" do
@@ -1107,21 +1106,20 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert CapabilityRequired.to_map(exception).requested_root == "/tmp/home"
   end
 
-  test "fails fast for test intent without allowlisted commands" do
-    exception =
-      assert_raise CapabilityRequired, fn ->
-        route!(%{
-          task: "run mix test",
-          workflow: :auto,
-          tool_harness: :code_edit,
-          tool_root: "/tmp/project",
-          tool_timeout_ms: 100,
-          tool_max_rounds: 2,
-          tool_approval_mode: :full_access
-        })
-      end
+  test "routes test intent through code-edit shell when no allowlisted test command exists" do
+    route =
+      route!(%{
+        task: "run mix test",
+        workflow: :auto,
+        tool_harness: :code_edit,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :full_access
+      })
 
-    assert exception.reason == :missing_test_commands
+    assert route.selected == "agentic"
+    assert route.reason == "test_intent_with_code_edit_shell"
   end
 
   test "fails fast when explicit chat receives tool options" do
