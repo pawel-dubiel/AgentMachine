@@ -1590,7 +1590,12 @@ defmodule AgentMachine.ClientRunnerTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "snapshot", "permission" => "mcp_browser_snapshot", "risk" => "read"}
+              %{
+                "name" => "snapshot",
+                "permission" => "mcp_browser_snapshot",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]

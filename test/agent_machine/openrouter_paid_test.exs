@@ -970,7 +970,12 @@ defmodule AgentMachine.OpenRouterPaidTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "lookup", "permission" => "mcp_paid_lookup", "risk" => "read"}
+              %{
+                "name" => "lookup",
+                "permission" => "mcp_paid_lookup",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -1001,12 +1006,19 @@ defmodule AgentMachine.OpenRouterPaidTest do
               %{
                 "name" => "browser_navigate",
                 "permission" => "mcp_playwright_browser_navigate",
-                "risk" => "network"
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["url"],
+                  "properties" => %{"url" => %{"type" => "string"}},
+                  "additionalProperties" => false
+                }
               },
               %{
                 "name" => "browser_snapshot",
                 "permission" => "mcp_playwright_browser_snapshot",
-                "risk" => "read"
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
               }
             ]
           }
@@ -1044,12 +1056,19 @@ defmodule AgentMachine.OpenRouterPaidTest do
               %{
                 "name" => "browser_navigate",
                 "permission" => "mcp_playwright_browser_navigate",
-                "risk" => "network"
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["url"],
+                  "properties" => %{"url" => %{"type" => "string"}},
+                  "additionalProperties" => false
+                }
               },
               %{
                 "name" => "browser_snapshot",
                 "permission" => "mcp_playwright_browser_snapshot",
-                "risk" => "read"
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
               }
             ]
           }

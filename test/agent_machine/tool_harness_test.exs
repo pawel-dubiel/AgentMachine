@@ -158,8 +158,18 @@ defmodule AgentMachine.ToolHarnessTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"},
-              %{"name" => "write", "permission" => "mcp_docs_write", "risk" => "write"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              },
+              %{
+                "name" => "write",
+                "permission" => "mcp_docs_write",
+                "risk" => "write",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]

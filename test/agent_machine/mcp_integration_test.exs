@@ -25,14 +25,50 @@ defmodule AgentMachine.MCPIntegrationTest do
             "url" => "http://127.0.0.1:9999/mcp",
             "headers" => %{"Authorization" => "env:DOCS_MCP_AUTH"},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "network"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "network",
+                "inputSchema" => %{
+                  "type" => "object",
+                  "required" => ["query"],
+                  "properties" => %{"query" => %{"type" => "string"}}
+                }
+              }
             ]
           }
         ]
       })
 
-    assert [%{provider_name: "mcp_docs_search", permission: :mcp_docs_search, risk: :network}] =
-             config.tools
+    assert [
+             %{
+               provider_name: "mcp_docs_search",
+               permission: :mcp_docs_search,
+               risk: :network,
+               input_schema: %{
+                 "type" => "object",
+                 "required" => ["query"],
+                 "properties" => %{"query" => %{"type" => "string"}}
+               }
+             }
+           ] = config.tools
+
+    assert_raise ArgumentError, ~r/MCP tool must include explicit inputSchema object/, fn ->
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "docs",
+            "transport" => "stdio",
+            "command" => "mcp-docs",
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+            ]
+          }
+        ]
+      })
+    end
 
     assert_raise ArgumentError, ~r/env:NAME/, fn ->
       Config.from_map!(%{
@@ -43,7 +79,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "url" => "http://127.0.0.1:9999/mcp",
             "headers" => %{"Authorization" => "Bearer secret"},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "network"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "network",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -62,7 +103,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -90,8 +136,18 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"},
-              %{"name" => "search", "permission" => "mcp_docs_search2", "risk" => "read"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              },
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search2",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -203,7 +259,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -236,7 +297,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "snapshot", "permission" => "mcp_browser_snapshot", "risk" => "read"}
+              %{
+                "name" => "snapshot",
+                "permission" => "mcp_browser_snapshot",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -318,7 +384,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -385,7 +456,12 @@ defmodule AgentMachine.MCPIntegrationTest do
               "AGENT_MACHINE_CHILD_TOKEN" => "env:AGENT_MACHINE_MCP_ENV_TEST_TOKEN"
             },
             "tools" => [
-              %{"name" => "read_env", "permission" => "mcp_env_read_env", "risk" => "read"}
+              %{
+                "name" => "read_env",
+                "permission" => "mcp_env_read_env",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
@@ -480,7 +556,12 @@ defmodule AgentMachine.MCPIntegrationTest do
             "args" => [],
             "env" => %{},
             "tools" => [
-              %{"name" => "search", "permission" => "mcp_docs_search", "risk" => "read"}
+              %{
+                "name" => "search",
+                "permission" => "mcp_docs_search",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
             ]
           }
         ]
