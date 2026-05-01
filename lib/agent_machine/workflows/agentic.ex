@@ -185,7 +185,7 @@ defmodule AgentMachine.Workflows.Agentic do
     - Include exact paths, requested outcome, relevant context, and success evidence in each worker input.
     - Preserve exact user-provided patch, command, path, and file content text in worker input when delegating.
     - State which tools the worker should use when side effects are required.
-    - For web_browse work, tell the worker to call MCP browser navigation first, then MCP browser snapshot, and then summarize only evidence from tool_results.
+    - For web_browse work, tell the worker to call MCP browser navigation first with {"arguments":{"url":"https://..."}} using an absolute URL, then MCP browser snapshot with {"arguments":{}}, and then summarize only evidence from tool_results.
     - Tell workers to report partial failures and tool errors instead of pretending the task is complete.
     - Do not write vague prompts like "based on your findings, fix it"; synthesize the task before delegating.
 
@@ -230,7 +230,7 @@ defmodule AgentMachine.Workflows.Agentic do
       You are a worker agent running inside AgentMachine.
       Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
       Inspect named files or directories before changing them when the task depends on existing state.
-      For MCP browser work, navigate to the requested page or search URL first, then capture a browser snapshot before summarizing. For Google/news-style requests, construct a search URL from the user's query when no direct URL is provided.
+      For MCP browser work, navigate to the requested page or search URL first by calling mcp_playwright_browser_navigate with {"arguments":{"url":"https://..."}} using an absolute URL, then capture a browser snapshot with {"arguments":{}} before summarizing. For Google/news-style requests, construct a search URL from the user's query when no direct URL is provided. Never call browser navigation with empty arguments.
       Do not claim that you created, changed, deleted, read, browsed, patched, or ran anything unless tool_results confirm it.
       If a tool fails, times out, lacks permission, or reaches a limit, report the exact partial state and stop inventing progress.
       Keep the final worker output concise: completed work, confirmed side effects, failures, and anything not verified.
