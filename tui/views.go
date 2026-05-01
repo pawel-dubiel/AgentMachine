@@ -161,8 +161,8 @@ func (m model) renderChatMessage(message chatMessage) string {
 		width = 20
 	}
 
-	wrapped := wrapText(message.Text, width)
-	lines := strings.Split(wrapped, "\n")
+	rendered := m.renderChatMessageText(message, width)
+	lines := strings.Split(rendered, "\n")
 	indent := strings.Repeat(" ", len([]rune(prefix)))
 	renderText := func(text string) string {
 		if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
@@ -183,6 +183,23 @@ func (m model) renderChatMessage(message chatMessage) string {
 		b.WriteString(renderText(line))
 	}
 	return b.String()
+}
+
+func (m model) renderChatMessageText(message chatMessage, width int) string {
+	if chatMessageUsesMarkdown(message) {
+		return renderMarkdownDisplay(message.Text, width)
+	}
+	return wrapText(message.Text, width)
+}
+
+func chatMessageUsesMarkdown(message chatMessage) bool {
+	if message.Role != "assistant" && message.Role != "summary" {
+		return false
+	}
+	if message.Role == "assistant" && strings.HasPrefix(message.Text, "Run failed:") {
+		return false
+	}
+	return true
 }
 
 func (m model) viewWidth() int {
@@ -979,7 +996,7 @@ func (m model) agentDetailView() string {
 		agentStreamText(agent),
 		"",
 		labelStyle.Render("Output"),
-		agentOutputText(agent),
+		m.renderAgentOutputText(agent),
 		"",
 		labelStyle.Render("Error"),
 		agentErrorText(agent),
@@ -1019,6 +1036,13 @@ func agentOutputText(agent agentState) string {
 		return "(pending until agent finishes)"
 	}
 	return "(none)"
+}
+
+func (m model) renderAgentOutputText(agent agentState) string {
+	if strings.TrimSpace(agent.Output) != "" {
+		return renderMarkdownDisplay(agent.Output, m.viewWidth())
+	}
+	return agentOutputText(agent)
 }
 
 func agentErrorText(agent agentState) string {

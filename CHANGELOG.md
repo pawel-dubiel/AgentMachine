@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added basic Markdown rendering for TUI assistant and agent final output, with
+  bold text, bold colored headings, inline code, links, lists, and blockquotes.
 - Changed TUI `/mcp-config` to require an explicit timeout, max rounds, and
   approval mode instead of inheriting a previously saved tool budget.
 - Tightened the agentic planner prompt with explicit strict JSON rules to reduce

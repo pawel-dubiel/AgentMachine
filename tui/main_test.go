@@ -4,12 +4,19 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(text string) string {
+	return ansiEscapePattern.ReplaceAllString(text, "")
+}
 
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
@@ -897,6 +904,30 @@ func TestAgentDetailShowsStreamAndFinalOutput(t *testing.T) {
 	}
 }
 
+func TestAgentDetailRendersFinalOutputMarkdown(t *testing.T) {
+	m := model{
+		width:         80,
+		selectedAgent: "finalizer",
+		agents: map[string]agentState{
+			"finalizer": {
+				ID:      "finalizer",
+				Status:  "ok",
+				Attempt: 1,
+				Output:  "### Summary\n\n**done**",
+			},
+		},
+	}
+
+	view := m.agentDetailView()
+
+	if strings.Contains(view, "### Summary") || strings.Contains(view, "**done**") {
+		t.Fatalf("expected final output markdown to be rendered, got %q", view)
+	}
+	if !strings.Contains(stripANSI(view), "Summary") || !strings.Contains(stripANSI(view), "done") {
+		t.Fatalf("expected final output markdown content to remain visible, got %q", view)
+	}
+}
+
 func TestEventDisplayLineDoesNotRenderAssistantDeltaContent(t *testing.T) {
 	line := eventDisplayLine(eventSummary{
 		Type:    "assistant_delta",
@@ -952,6 +983,73 @@ func TestChatViewWrapsLongSystemMessages(t *testing.T) {
 	}
 	if strings.Contains(view, "mdeberta-v3-base-xnli-multilingual-nli-2mil7\n\n") {
 		t.Fatalf("expected long model path to wrap before the message ended, got %q", view)
+	}
+}
+
+func TestChatViewRendersAssistantMarkdown(t *testing.T) {
+	m := model{
+		width: 80,
+		messages: []chatMessage{
+			{Role: "assistant", Text: "**hello**"},
+		},
+	}
+
+	view := m.chatView()
+
+	if strings.Contains(view, "**hello**") {
+		t.Fatalf("expected assistant markdown markers to be rendered, got %q", view)
+	}
+	if !strings.Contains(stripANSI(view), "assistant: hello") {
+		t.Fatalf("expected assistant markdown text to remain visible, got %q", view)
+	}
+}
+
+func TestMarkdownRendererStylesBoldText(t *testing.T) {
+	rendered, err := renderMarkdownText("**hello**", 80)
+	if err != nil {
+		t.Fatalf("expected markdown renderer to succeed: %v", err)
+	}
+
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected markdown renderer to include ANSI styling, got %q", rendered)
+	}
+	if strings.TrimSpace(stripANSI(rendered)) != "hello" {
+		t.Fatalf("expected rendered markdown text, got %q", rendered)
+	}
+}
+
+func TestMarkdownRendererStylesHeaders(t *testing.T) {
+	rendered, err := renderMarkdownText("## Result", 80)
+	if err != nil {
+		t.Fatalf("expected markdown renderer to succeed: %v", err)
+	}
+
+	if strings.Contains(rendered, "## Result") {
+		t.Fatalf("expected markdown header marker to be rendered, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected markdown header to include ANSI styling, got %q", rendered)
+	}
+	if strings.TrimSpace(stripANSI(rendered)) != "Result" {
+		t.Fatalf("expected rendered header text, got %q", rendered)
+	}
+}
+
+func TestChatViewRendersAssistantMarkdownHeaders(t *testing.T) {
+	m := model{
+		width: 80,
+		messages: []chatMessage{
+			{Role: "assistant", Text: "## Result\n\nAll done."},
+		},
+	}
+
+	view := m.chatView()
+
+	if strings.Contains(view, "## Result") {
+		t.Fatalf("expected assistant markdown header marker to be rendered, got %q", view)
+	}
+	if !strings.Contains(stripANSI(view), "Result") || !strings.Contains(stripANSI(view), "All done.") {
+		t.Fatalf("expected assistant markdown content to remain visible, got %q", view)
 	}
 }
 

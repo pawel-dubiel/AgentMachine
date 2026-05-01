@@ -90,7 +90,9 @@ When a task needs delegation, the runtime can create a planner and worker
 agents. The TUI shows each agent's status, parent, elapsed time, recent events,
 tool activity, streamed provider text, and final output when available. Planner
 delegation responses are strict JSON and fail fast when the provider returns
-malformed JSON.
+malformed JSON. Assistant responses and agent final output render basic
+Markdown formatting such as bold text, headings, inline code, links, lists, and
+blockquotes.
 
 **Swarm strategy**
 
