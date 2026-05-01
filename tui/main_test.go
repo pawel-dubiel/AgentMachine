@@ -220,6 +220,21 @@ func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesExplicitLLMRouterMode(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:       "review this project",
+		Workflow:   workflowAuto,
+		Provider:   providerOpenRouter,
+		Model:      "openai/gpt-4o-mini",
+		RouterMode: "llm",
+	})
+
+	assertContainsSequence(t, args, []string{"--router-mode", "llm"})
+	if containsArg(args, "--router-model-dir") {
+		t.Fatalf("expected llm router not to include local router options: %#v", args)
+	}
+}
+
 func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:           "review this project",
@@ -567,8 +582,8 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	if !strings.Contains(withoutTools, "mode progressive-auto") {
 		t.Fatalf("expected progressive auto mode in running status, got %q", withoutTools)
 	}
-	if !strings.Contains(withoutTools, "router deterministic") {
-		t.Fatalf("expected deterministic router in running status, got %q", withoutTools)
+	if !strings.Contains(withoutTools, "router llm current model") {
+		t.Fatalf("expected llm router in running status, got %q", withoutTools)
 	}
 	if !strings.Contains(withoutTools, "idle_timeout_ms="+defaultAgenticRunTimeoutMS+" hard_cap_ms=720000") {
 		t.Fatalf("expected auto idle lease and hard cap in running status, got %q", withoutTools)
@@ -752,6 +767,24 @@ func TestValidateConfigAcceptsLocalRouterConfig(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAcceptsLLMRouterConfig(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:        "review this project",
+		Workflow:    workflowAuto,
+		Provider:    providerOpenRouter,
+		APIKey:      "test-key",
+		Model:       "openai/gpt-4o-mini",
+		InputPrice:  "0.15",
+		OutputPrice: "0.60",
+		HTTPTimeout: defaultHTTPTimeoutMS,
+		RouterMode:  "llm",
+	})
+
+	if err != nil {
+		t.Fatalf("expected valid llm router config, got %v", err)
+	}
+}
+
 func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:             "review this project",
@@ -792,6 +825,20 @@ func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "router confidence") {
 		t.Fatalf("expected router confidence error, got %v", err)
+	}
+}
+
+func TestValidateConfigRejectsLocalSettingsForLLMRouter(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:           "review this project",
+		Workflow:       workflowAuto,
+		Provider:       providerEcho,
+		RouterMode:     "llm",
+		RouterModelDir: "/tmp/agent-machine-router-model",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "llm router does not accept local router settings") {
+		t.Fatalf("expected llm router local settings error, got %v", err)
 	}
 }
 
@@ -1874,6 +1921,39 @@ func TestRouterCommandPersistsLocalRouter(t *testing.T) {
 	}
 	if loaded.RouterMode != "local" || loaded.RouterModelDir != "/tmp/agent-machine-router-model" {
 		t.Fatalf("unexpected saved router config: %#v", loaded)
+	}
+}
+
+func TestRouterCommandPersistsLLMAndDeterministicRouters(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/router llm")
+	result := updated.(model)
+	if result.savedConfig.RouterMode != "llm" || result.savedConfig.RouterModelDir != "" {
+		t.Fatalf("expected llm router config, got %#v", result.savedConfig)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "router: llm current model") {
+		t.Fatalf("expected llm router status, got %#v", result.messages[len(result.messages)-1])
+	}
+
+	updated, _ = result.handleCommand("/router deterministic")
+	result = updated.(model)
+	if result.savedConfig.RouterMode != "deterministic" || result.savedConfig.RouterModelDir != "" {
+		t.Fatalf("expected deterministic router config, got %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.RouterMode != "deterministic" {
+		t.Fatalf("expected deterministic router to persist, got %#v", loaded)
 	}
 }
 
@@ -3464,7 +3544,7 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 	}
 }
 
-func TestInitialModelUsesInstalledZeroShotRouterByDefault(t *testing.T) {
+func TestInitialModelKeepsLLMRouterDefaultWhenZeroShotModelIsInstalled(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "agent-machine", "tui-config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
 	modelDir := defaultRouterModelDir(configPath)
@@ -3475,15 +3555,11 @@ func TestInitialModelUsesInstalledZeroShotRouterByDefault(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	if m.savedConfig.RouterMode != "local" {
-		t.Fatalf("expected local router default, got %#v", m.savedConfig)
+	if m.savedConfig.RouterMode != "" || m.savedConfig.RouterModelDir != "" {
+		t.Fatalf("expected empty saved router config for llm default, got %#v", m.savedConfig)
 	}
-	if m.savedConfig.RouterModelDir != modelDir {
-		t.Fatalf("unexpected router model dir: %q", m.savedConfig.RouterModelDir)
-	}
-	if m.savedConfig.RouterTimeout != defaultRouterTimeoutMS ||
-		m.savedConfig.RouterConfidence != defaultRouterConfidence {
-		t.Fatalf("unexpected router defaults: %#v", m.savedConfig)
+	if status := m.routerStatus(); status != "router: llm current model" {
+		t.Fatalf("expected llm router status, got %q", status)
 	}
 
 	loaded, err := loadSavedConfig(configPath)
@@ -3492,6 +3568,75 @@ func TestInitialModelUsesInstalledZeroShotRouterByDefault(t *testing.T) {
 	}
 	if loaded.RouterMode != "" {
 		t.Fatalf("expected auto-detected router not to persist until user changes settings, got %#v", loaded)
+	}
+}
+
+func TestInitialModelMigratesSavedStandardLocalRouterDefaultToLLM(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent-machine", "tui-config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		RouterMode:       "local",
+		RouterModelDir:   defaultRouterModelDir(configPath),
+		RouterTimeout:    defaultRouterTimeoutMS,
+		RouterConfidence: defaultRouterConfidence,
+	}); err != nil {
+		t.Fatalf("expected saved config write to succeed, got %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if m.savedConfig.RouterMode != "" || m.savedConfig.RouterModelDir != "" || m.savedConfig.RouterTimeout != "" || m.savedConfig.RouterConfidence != "" {
+		t.Fatalf("expected legacy local router default to migrate to empty llm config, got %#v", m.savedConfig)
+	}
+	if status := m.routerStatus(); status != "router: llm current model" {
+		t.Fatalf("expected llm router status, got %q", status)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected config load, got %v", err)
+	}
+	if loaded.RouterMode != "" || loaded.RouterModelDir != "" || loaded.RouterTimeout != "" || loaded.RouterConfidence != "" {
+		t.Fatalf("expected legacy local router default migration to persist, got %#v", loaded)
+	}
+}
+
+func TestInitialModelKeepsCustomLocalRouterConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent-machine", "tui-config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	customRouterDir := filepath.Join(t.TempDir(), "custom-router")
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		RouterMode:       "local",
+		RouterModelDir:   customRouterDir,
+		RouterTimeout:    defaultRouterTimeoutMS,
+		RouterConfidence: defaultRouterConfidence,
+	}); err != nil {
+		t.Fatalf("expected saved config write to succeed, got %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if m.savedConfig.RouterMode != "local" || m.savedConfig.RouterModelDir != customRouterDir {
+		t.Fatalf("expected custom local router config to remain, got %#v", m.savedConfig)
+	}
+	if status := m.routerStatus(); !strings.Contains(status, "router: local dir="+customRouterDir) {
+		t.Fatalf("expected local router status, got %q", status)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected config load, got %v", err)
+	}
+	if loaded.RouterMode != "local" || loaded.RouterModelDir != customRouterDir {
+		t.Fatalf("expected custom local router config to remain persisted, got %#v", loaded)
 	}
 }
 
@@ -4422,6 +4567,16 @@ func containsEnv(env []string, expected string) bool {
 func containsArgPair(args []string, key string, value string) bool {
 	for index := 0; index < len(args)-1; index++ {
 		if args[index] == key && args[index+1] == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+func containsArg(args []string, key string) bool {
+	for _, arg := range args {
+		if arg == key {
 			return true
 		}
 	}

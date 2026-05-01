@@ -57,40 +57,28 @@ func loadSavedConfig(path string) (savedConfig, error) {
 	return config, nil
 }
 
-func applyInstalledRouterModelDefault(config *savedConfig, configPath string) {
-	if strings.TrimSpace(config.RouterMode) != "" ||
-		strings.TrimSpace(config.RouterModelDir) != "" ||
-		strings.TrimSpace(config.RouterTimeout) != "" ||
-		strings.TrimSpace(config.RouterConfidence) != "" {
-		return
-	}
-
-	modelDir := defaultRouterModelDir(configPath)
-	if !routerModelInstalled(modelDir) {
-		return
-	}
-
-	config.RouterMode = "local"
-	config.RouterModelDir = modelDir
-	config.RouterTimeout = defaultRouterTimeoutMS
-	config.RouterConfidence = defaultRouterConfidence
-}
-
 func defaultRouterModelDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "router-models", defaultRouterModelDirName)
 }
 
-func routerModelInstalled(modelDir string) bool {
-	for _, path := range []string{
-		filepath.Join(modelDir, "tokenizer.json"),
-		filepath.Join(modelDir, "config.json"),
-		filepath.Join(modelDir, "onnx", "model_quantized.onnx"),
-	} {
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			return false
-		}
+func migrateLegacyLocalRouterDefault(config *savedConfig, configPath string) bool {
+	if strings.TrimSpace(config.RouterMode) != "local" {
+		return false
 	}
+	if filepath.Clean(strings.TrimSpace(config.RouterModelDir)) != filepath.Clean(defaultRouterModelDir(configPath)) {
+		return false
+	}
+	if strings.TrimSpace(config.RouterTimeout) != defaultRouterTimeoutMS {
+		return false
+	}
+	if strings.TrimSpace(config.RouterConfidence) != defaultRouterConfidence {
+		return false
+	}
+
+	config.RouterMode = ""
+	config.RouterModelDir = ""
+	config.RouterTimeout = ""
+	config.RouterConfidence = ""
 	return true
 }
 

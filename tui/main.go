@@ -432,14 +432,14 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err != nil {
 		return model{}, err
 	}
-	applyInstalledRouterModelDefault(&savedConfig, configPath)
+	migratedRouterDefault := migrateLegacyLocalRouterDefault(&savedConfig, configPath)
 	if err := applyStartupOptions(&savedConfig, startup); err != nil {
 		return model{}, err
 	}
 	if err := migrateManagedMCPConfig(configPath, &savedConfig); err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() {
+	if startup.hasOverrides() || migratedRouterDefault {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}
@@ -1945,7 +1945,16 @@ func (m model) handleRouterCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router deterministic"})
 			return m, nil
 		}
-		m.savedConfig.RouterMode = ""
+		m.savedConfig.RouterMode = "deterministic"
+		m.savedConfig.RouterModelDir = ""
+		m.savedConfig.RouterTimeout = ""
+		m.savedConfig.RouterConfidence = ""
+	case "llm":
+		if len(args) != 1 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router llm"})
+			return m, nil
+		}
+		m.savedConfig.RouterMode = "llm"
 		m.savedConfig.RouterModelDir = ""
 		m.savedConfig.RouterTimeout = ""
 		m.savedConfig.RouterConfidence = ""
@@ -1967,7 +1976,7 @@ func (m model) handleRouterCommand(args []string) (tea.Model, tea.Cmd) {
 			m.savedConfig.RouterConfidence = defaultRouterConfidence
 		}
 	default:
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router deterministic|local <model-dir>"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /router deterministic|llm|local <model-dir>"})
 		return m, nil
 	}
 
@@ -3516,13 +3525,18 @@ func validateContextSyntax(config runConfig) error {
 func validateRouterConfig(config runConfig) error {
 	mode := strings.TrimSpace(config.RouterMode)
 	if mode == "" {
-		mode = "deterministic"
+		mode = "llm"
 	}
 
 	switch mode {
 	case "deterministic":
 		if strings.TrimSpace(config.RouterModelDir) != "" || strings.TrimSpace(config.RouterTimeout) != "" || strings.TrimSpace(config.RouterConfidence) != "" {
 			return errors.New("deterministic router does not accept local router settings")
+		}
+		return nil
+	case "llm":
+		if strings.TrimSpace(config.RouterModelDir) != "" || strings.TrimSpace(config.RouterTimeout) != "" || strings.TrimSpace(config.RouterConfidence) != "" {
+			return errors.New("llm router does not accept local router settings")
 		}
 		return nil
 	case "local":
@@ -3979,7 +3993,10 @@ func runContextStatus(config runConfig) string {
 
 func (m model) routerStatus() string {
 	mode := strings.TrimSpace(m.savedConfig.RouterMode)
-	if mode == "" || mode == "deterministic" {
+	if mode == "" || mode == "llm" {
+		return "router: llm current model"
+	}
+	if mode == "deterministic" {
 		return "router: deterministic"
 	}
 	if mode == "local" {
@@ -3990,7 +4007,10 @@ func (m model) routerStatus() string {
 
 func runRouterStatus(config runConfig) string {
 	mode := strings.TrimSpace(config.RouterMode)
-	if mode == "" || mode == "deterministic" {
+	if mode == "" || mode == "llm" {
+		return "router llm current model"
+	}
+	if mode == "deterministic" {
 		return "router deterministic"
 	}
 	if mode == "local" {
