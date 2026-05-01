@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed Matrix-themed TUI Markdown code blocks so Chroma receives valid hex
+  colors instead of ANSI palette numbers.
 - Added selectable TUI themes with `/theme classic|matrix`, including a
   Matrix-inspired green palette and themed running activity signals.
 - Added basic Markdown rendering for TUI assistant and agent final output, with

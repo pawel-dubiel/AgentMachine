@@ -160,21 +160,21 @@ func tuiMarkdownStyleForTheme(theme tuiTheme) glamouransi.StyleConfig {
 			},
 			Chroma: &glamouransi.Chroma{
 				Text: glamouransi.StylePrimitive{
-					Color: stringPtr("248"),
+					Color: stringPtr("#bcbcbc"),
 				},
 				Comment: glamouransi.StylePrimitive{
-					Color:  stringPtr("244"),
+					Color:  stringPtr("#808080"),
 					Italic: boolPtr(true),
 				},
 				Keyword: glamouransi.StylePrimitive{
-					Color: stringPtr("75"),
+					Color: stringPtr("#5fafff"),
 					Bold:  boolPtr(true),
 				},
 				LiteralString: glamouransi.StylePrimitive{
-					Color: stringPtr("114"),
+					Color: stringPtr("#87d787"),
 				},
 				LiteralNumber: glamouransi.StylePrimitive{
-					Color: stringPtr("209"),
+					Color: stringPtr("#ff875f"),
 				},
 			},
 		},
@@ -267,21 +267,21 @@ func tuiMatrixMarkdownStyle() glamouransi.StyleConfig {
 			},
 			Chroma: &glamouransi.Chroma{
 				Text: glamouransi.StylePrimitive{
-					Color: stringPtr("120"),
+					Color: stringPtr("#87ff87"),
 				},
 				Comment: glamouransi.StylePrimitive{
-					Color:  stringPtr("34"),
+					Color:  stringPtr("#00af00"),
 					Italic: boolPtr(true),
 				},
 				Keyword: glamouransi.StylePrimitive{
-					Color: stringPtr("46"),
+					Color: stringPtr("#00ff00"),
 					Bold:  boolPtr(true),
 				},
 				LiteralString: glamouransi.StylePrimitive{
-					Color: stringPtr("82"),
+					Color: stringPtr("#5fff00"),
 				},
 				LiteralNumber: glamouransi.StylePrimitive{
-					Color: stringPtr("118"),
+					Color: stringPtr("#87ff00"),
 				},
 			},
 		},

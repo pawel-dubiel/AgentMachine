@@ -1118,6 +1118,20 @@ func TestMarkdownRendererStylesHeaders(t *testing.T) {
 	}
 }
 
+func TestMatrixMarkdownRendererStylesCodeBlocks(t *testing.T) {
+	rendered, err := renderMarkdownTextWithTheme("```go\n// hi\nfmt.Println(42)\n```", 80, themeMatrix)
+	if err != nil {
+		t.Fatalf("expected matrix markdown renderer to succeed: %v", err)
+	}
+
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected matrix code block to include ANSI styling, got %q", rendered)
+	}
+	if !strings.Contains(stripANSI(rendered), "fmt.Println") {
+		t.Fatalf("expected rendered code text, got %q", rendered)
+	}
+}
+
 func TestChatViewRendersAssistantMarkdownHeaders(t *testing.T) {
 	m := model{
 		width: 80,
