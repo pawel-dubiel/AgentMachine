@@ -498,6 +498,48 @@ func TestLoadResolvedSavedConfigAppliesProjectOverrideWithoutSecrets(t *testing.
 	}
 }
 
+func TestInitialModelMigratesHomeToolRootToLaunchDirectory(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	workspace := filepath.Join(home, "repo")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(workspace)
+
+	configPath := filepath.Join(home, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(configPath, savedConfig{
+		Provider:      "echo",
+		ToolHarness:   "local-files",
+		ToolRoot:      home,
+		ToolTimeout:   "120000",
+		ToolMaxRounds: "16",
+		ToolApproval:  "ask-before-write",
+	}); err != nil {
+		t.Fatalf("failed to write user config: %v", err)
+	}
+
+	model, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if model.savedConfig.ToolRoot != workspace {
+		t.Fatalf("expected launch workspace root, got %#v", model.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolRoot != workspace {
+		t.Fatalf("expected migrated saved root %q, got %q", workspace, loaded.ToolRoot)
+	}
+}
+
 func TestInitialModelMigratesLegacyConfigToHomeAgentMachine(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -2324,6 +2366,37 @@ func TestToolsCommandPersistsLocalFileHarness(t *testing.T) {
 	}
 	if loaded.ToolRoot != "/tmp/agent-machine-wiki" || loaded.ToolTimeout != "1000" || loaded.ToolMaxRounds != "2" || loaded.ToolApproval != "auto-approved-safe" {
 		t.Fatalf("unexpected saved tool config: %#v", loaded)
+	}
+}
+
+func TestToolsCommandResolvesRelativeRootFromLaunchDirectory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	t.Chdir(workspace)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	updated, _ := m.handleCommand("/tools local-files . 1000 2 auto-approved-safe")
+	result := updated.(model)
+
+	if result.savedConfig.ToolRoot != workspace {
+		t.Fatalf("expected relative root to resolve to launch directory, got %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolRoot != workspace {
+		t.Fatalf("expected saved root %q, got %q", workspace, loaded.ToolRoot)
 	}
 }
 

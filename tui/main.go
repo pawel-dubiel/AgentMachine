@@ -384,6 +384,7 @@ type model struct {
 	theme                   tuiTheme
 	savedConfig             savedConfig
 	configPath              string
+	workingDir              string
 	modelOptions            []modelOption
 	modelIndex              int
 	selectedModel           string
@@ -450,13 +451,17 @@ func initialModelWithArgs(args []string) (model, error) {
 		return model{}, err
 	}
 	migratedRouterDefault := migrateLegacyLocalRouterDefault(&savedConfig, configPath)
+	migratedToolRoot, err := migrateHomeToolRootToWorkingDir(&savedConfig, configResolution.WorkingDir)
+	if err != nil {
+		return model{}, err
+	}
 	if err := applyStartupOptions(&savedConfig, startup); err != nil {
 		return model{}, err
 	}
 	if err := migrateManagedMCPConfig(configPath, &savedConfig); err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() || migratedRouterDefault || loadedLegacyConfig {
+	if startup.hasOverrides() || migratedRouterDefault || migratedToolRoot || loadedLegacyConfig {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}
@@ -474,6 +479,7 @@ func initialModelWithArgs(args []string) (model, error) {
 		input:          input,
 		savedConfig:    savedConfig,
 		configPath:     configPath,
+		workingDir:     configResolution.WorkingDir,
 		eventSessionID: sessionID,
 		eventLogFile:   sessionEventLogPath(configPath, sessionID),
 		messages: []chatMessage{
@@ -2262,6 +2268,11 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "tool root must not be empty"})
 			return m, nil
 		}
+		root, err := resolveToolRootPath(args[1], m.toolRootBaseDir())
+		if err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
 		if err := validatePositiveInt(args[2], "tool timeout ms"); err != nil {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 			return m, nil
@@ -2279,7 +2290,7 @@ func (m model) handleToolsCommand(args []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.savedConfig.ToolHarness = args[0]
-		m.savedConfig.ToolRoot = args[1]
+		m.savedConfig.ToolRoot = root
 		m.savedConfig.ToolTimeout = args[2]
 		m.savedConfig.ToolMaxRounds = args[3]
 		m.savedConfig.ToolApproval = args[4]
@@ -4035,6 +4046,17 @@ func (m model) toolsStatus() string {
 	default:
 		return "tools: unsupported " + m.savedConfig.ToolHarness
 	}
+}
+
+func (m model) toolRootBaseDir() string {
+	if strings.TrimSpace(m.workingDir) != "" {
+		return m.workingDir
+	}
+	workingDir, err := currentWorkingDir()
+	if err != nil {
+		return ""
+	}
+	return workingDir
 }
 
 func (m model) contextStatus() string {

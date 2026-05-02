@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed TUI filesystem tool roots so relative roots resolve from the TUI
+  launch directory and legacy home-directory roots migrate to that launch
+  directory.
 - Required structured `completion_evidence` for agentic reviewer completion
   decisions and validate reviewer evidence references before finalization.
 - Added opt-in bounded agentic persistence for `--workflow agentic`, with

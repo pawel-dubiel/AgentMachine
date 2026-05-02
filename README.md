@@ -414,6 +414,13 @@ The same setting is available in the TUI with
 the next runs to send `workflow=agentic` plus those exact budgets;
 `/agentic-persistence off` clears all persistence fields.
 
+TUI filesystem tool roots are resolved from the directory where the TUI was
+started. For example, `/tools local-files . 120000 16 ask-before-write` stores
+the launch directory as the explicit root before calling the Elixir runtime.
+Older user configs that point filesystem tools at the home directory are
+migrated to the launch directory on startup so project runs stay scoped to the
+current working tree.
+
 Common Make targets:
 
 ```sh

@@ -22,6 +22,7 @@ type tuiConfigResolution struct {
 	LegacyPath   string
 	ProjectPath  string
 	ProjectRoot  string
+	WorkingDir   string
 	ExplicitPath bool
 }
 
@@ -54,8 +55,13 @@ func tuiConfigPath() (string, error) {
 }
 
 func resolveTUIConfig() (tuiConfigResolution, error) {
+	workingDir, err := currentWorkingDir()
+	if err != nil {
+		return tuiConfigResolution{}, err
+	}
+
 	if path := strings.TrimSpace(os.Getenv("AGENT_MACHINE_TUI_CONFIG")); path != "" {
-		return tuiConfigResolution{Path: path, ExplicitPath: true}, nil
+		return tuiConfigResolution{Path: path, WorkingDir: workingDir, ExplicitPath: true}, nil
 	}
 
 	userPath, err := userTUIConfigPath()
@@ -78,7 +84,16 @@ func resolveTUIConfig() (tuiConfigResolution, error) {
 		LegacyPath:  legacyPath,
 		ProjectPath: projectPath,
 		ProjectRoot: projectRoot,
+		WorkingDir:  workingDir,
 	}, nil
+}
+
+func currentWorkingDir() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to locate current directory: %w", err)
+	}
+	return filepath.Clean(wd), nil
 }
 
 func userTUIConfigPath() (string, error) {
@@ -181,6 +196,58 @@ func loadResolvedSavedConfig(resolution tuiConfigResolution) (savedConfig, bool,
 	}
 
 	return mergedConfig, loadedLegacy, nil
+}
+
+func migrateHomeToolRootToWorkingDir(config *savedConfig, workingDir string) (bool, error) {
+	if config.ToolHarness != "local-files" && config.ToolHarness != "code-edit" {
+		return false, nil
+	}
+
+	root := strings.TrimSpace(config.ToolRoot)
+	if root == "" {
+		return false, nil
+	}
+
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		return false, nil
+	}
+
+	resolvedRoot, err := resolveToolRootPath(root, workingDir)
+	if err != nil {
+		return false, err
+	}
+
+	home = filepath.Clean(home)
+	workingDir = filepath.Clean(strings.TrimSpace(workingDir))
+	if resolvedRoot != home || workingDir == "" || workingDir == home {
+		if resolvedRoot != root {
+			config.ToolRoot = resolvedRoot
+			return true, nil
+		}
+		return false, nil
+	}
+
+	config.ToolRoot = workingDir
+	return true, nil
+}
+
+func resolveToolRootPath(root string, workingDir string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", errors.New("tool root must not be empty")
+	}
+
+	resolved := root
+	if !filepath.IsAbs(resolved) {
+		base := strings.TrimSpace(workingDir)
+		if base == "" {
+			return "", errors.New("working directory is required to resolve relative tool root")
+		}
+		resolved = filepath.Join(base, resolved)
+	}
+
+	return filepath.Clean(resolved), nil
 }
 
 func loadUserSavedConfig(userPath string, legacyPath string) (savedConfig, bool, error) {
