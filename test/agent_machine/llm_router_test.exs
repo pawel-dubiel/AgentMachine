@@ -13,6 +13,8 @@ defmodule AgentMachine.LLMRouterTest do
          output:
            JSON.encode!(%{
              intent: "file_mutation",
+             work_shape: "mutation",
+             route_hint: "agentic",
              confidence: 0.87,
              reason: "local file creation"
            }),
@@ -30,6 +32,8 @@ defmodule AgentMachine.LLMRouterTest do
          output:
            JSON.encode!(%{
              intent: "file_mutation",
+             work_shape: "mutation",
+             route_hint: "agentic",
              confidence: 0.82,
              reason: "provider contract satisfied"
            }),
@@ -51,6 +55,8 @@ defmodule AgentMachine.LLMRouterTest do
          output:
            JSON.encode!(%{
              intent: "not_real",
+             work_shape: "mutation",
+             route_hint: "agentic",
              confidence: 0.9,
              reason: "bad intent"
            }),
@@ -66,6 +72,8 @@ defmodule AgentMachine.LLMRouterTest do
          output:
            JSON.encode!(%{
              intent: "file_mutation",
+             work_shape: "mutation",
+             route_hint: "agentic",
              confidence: 1.5,
              reason: "bad confidence"
            }),
@@ -78,7 +86,81 @@ defmodule AgentMachine.LLMRouterTest do
     def complete(_agent, _opts) do
       {:ok,
        %{
-         output: JSON.encode!(%{intent: "file_mutation", confidence: 0.9}),
+         output:
+           JSON.encode!(%{
+             intent: "file_mutation",
+             work_shape: "mutation",
+             route_hint: "agentic",
+             confidence: 0.9
+           }),
+         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+       }}
+    end
+  end
+
+  defmodule MissingWorkShapeProvider do
+    def complete(_agent, _opts) do
+      {:ok,
+       %{
+         output:
+           JSON.encode!(%{
+             intent: "file_mutation",
+             route_hint: "agentic",
+             confidence: 0.9,
+             reason: "missing work shape"
+           }),
+         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+       }}
+    end
+  end
+
+  defmodule InvalidWorkShapeProvider do
+    def complete(_agent, _opts) do
+      {:ok,
+       %{
+         output:
+           JSON.encode!(%{
+             intent: "file_read",
+             work_shape: "large-ish",
+             route_hint: "agentic",
+             confidence: 0.9,
+             reason: "bad work shape"
+           }),
+         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+       }}
+    end
+  end
+
+  defmodule InvalidRouteHintProvider do
+    def complete(_agent, _opts) do
+      {:ok,
+       %{
+         output:
+           JSON.encode!(%{
+             intent: "file_read",
+             work_shape: "broad_project_analysis",
+             route_hint: "worker",
+             confidence: 0.9,
+             reason: "bad route hint"
+           }),
+         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+       }}
+    end
+  end
+
+  defmodule UnknownKeyProvider do
+    def complete(_agent, _opts) do
+      {:ok,
+       %{
+         output:
+           JSON.encode!(%{
+             intent: "file_read",
+             work_shape: "narrow_read",
+             route_hint: "tool",
+             confidence: 0.9,
+             reason: "extra key",
+             selected: "tool"
+           }),
          usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
        }}
     end
@@ -94,6 +176,8 @@ defmodule AgentMachine.LLMRouterTest do
     assert result == %{
              intent: :file_mutation,
              classified_intent: :file_mutation,
+             work_shape: :mutation,
+             route_hint: :agentic,
              classifier: "llm",
              classifier_model: "test-router-model",
              confidence: 0.87,
@@ -129,6 +213,30 @@ defmodule AgentMachine.LLMRouterTest do
   test "fails fast on missing reason" do
     assert_raise ArgumentError, ~r/missing \"reason\"/, fn ->
       LLMRouter.classify!(input(MissingReasonProvider))
+    end
+  end
+
+  test "fails fast on missing work shape" do
+    assert_raise ArgumentError, ~r/missing \"work_shape\"/, fn ->
+      LLMRouter.classify!(input(MissingWorkShapeProvider))
+    end
+  end
+
+  test "fails fast on invalid work shape" do
+    assert_raise ArgumentError, ~r/invalid work_shape/, fn ->
+      LLMRouter.classify!(input(InvalidWorkShapeProvider))
+    end
+  end
+
+  test "fails fast on invalid route hint" do
+    assert_raise ArgumentError, ~r/invalid route_hint/, fn ->
+      LLMRouter.classify!(input(InvalidRouteHintProvider))
+    end
+  end
+
+  test "fails fast on unknown response keys" do
+    assert_raise ArgumentError, ~r/unknown keys/, fn ->
+      LLMRouter.classify!(input(UnknownKeyProvider))
     end
   end
 

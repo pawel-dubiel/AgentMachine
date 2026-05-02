@@ -166,6 +166,59 @@ defmodule AgentMachine.WorkflowRouterTest do
     assert route.tools_exposed
   end
 
+  test "routes auto broad project analysis to agentic with a filesystem harness" do
+    route =
+      route!(%{
+        task:
+          "analyze this project /Users/pawel/priv/elixir code and tell me what to improve in your opinion",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 16,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "file_read"
+    assert route.reason == "project_analysis_intent_with_read_tools"
+    assert route.tools_exposed
+  end
+
+  test "keeps narrow auto file read on tool route" do
+    route =
+      route!(%{
+        task: "read README.md",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "tool"
+    assert route.tool_intent == "file_read"
+    assert route.reason == "read_intent_with_read_only_tool"
+  end
+
+  test "keeps generic project recommendations in chat when tools are configured" do
+    route =
+      route!(%{
+        task: "recommend project ideas for learning Elixir",
+        workflow: :auto,
+        tool_harness: :local_files,
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 100,
+        tool_max_rounds: 2,
+        tool_approval_mode: :read_only
+      })
+
+    assert route.selected == "chat"
+    assert route.tool_intent == "none"
+    refute route.tools_exposed
+  end
+
   test "routes auto time intent to tool with demo harness" do
     route =
       route!(%{
@@ -779,13 +832,68 @@ defmodule AgentMachine.WorkflowRouterTest do
       llm_route!(:web_browse,
         task: "create lib/router_example.ex with a simple module",
         tool_harnesses: [:code_edit],
-        approval_mode: :auto_approved_safe
+        approval_mode: :auto_approved_safe,
+        work_shape: :web_research,
+        route_hint: :agentic
       )
 
     assert route.selected == "agentic"
     assert route.tool_intent == "code_mutation"
     assert route.classifier == "llm"
     assert route.classified_intent == "web_browse"
+    assert route.work_shape == "web_research"
+    assert route.route_hint == "agentic"
+  end
+
+  test "llm router broad project file_read advisory routes to agentic" do
+    route =
+      llm_route!(:file_read,
+        task: "review this codebase and recommend architectural improvements",
+        tool_harnesses: [:local_files],
+        approval_mode: :read_only,
+        work_shape: :broad_project_analysis,
+        route_hint: :agentic
+      )
+
+    assert route.selected == "agentic"
+    assert route.tool_intent == "file_read"
+    assert route.reason == "project_analysis_intent_with_read_tools"
+    assert route.classifier == "llm"
+    assert route.classified_intent == "file_read"
+    assert route.work_shape == "broad_project_analysis"
+    assert route.route_hint == "agentic"
+  end
+
+  test "llm router narrow file_read advisory stays on tool route" do
+    route =
+      llm_route!(:file_read,
+        task: "read README.md",
+        tool_harnesses: [:local_files],
+        approval_mode: :read_only,
+        work_shape: :narrow_read,
+        route_hint: :tool
+      )
+
+    assert route.selected == "tool"
+    assert route.tool_intent == "file_read"
+    assert route.reason == "read_intent_with_read_only_tool"
+    assert route.work_shape == "narrow_read"
+    assert route.route_hint == "tool"
+  end
+
+  test "llm router broad project read fails fast without read tools" do
+    exception =
+      assert_raise CapabilityRequired, fn ->
+        llm_route!(:file_read,
+          task: "review this codebase and recommend architectural improvements",
+          tool_harnesses: [],
+          approval_mode: nil,
+          work_shape: :broad_project_analysis,
+          route_hint: :agentic
+        )
+      end
+
+    assert exception.reason == :missing_read_harness
   end
 
   describe "local classifier permission and routing matrix" do
@@ -1199,7 +1307,7 @@ defmodule AgentMachine.WorkflowRouterTest do
   defp classifier_result(intent, attrs, classifier \\ "local") do
     classified_intent = Keyword.get(attrs, :classified_intent, intent)
 
-    %{
+    result = %{
       intent: intent,
       classified_intent: classified_intent,
       classifier: classifier,
@@ -1207,10 +1315,38 @@ defmodule AgentMachine.WorkflowRouterTest do
       confidence: Keyword.get(attrs, :confidence, 0.91),
       reason: "test_classifier_#{intent}"
     }
+
+    if classifier == "llm" do
+      result
+      |> Map.put(:work_shape, Keyword.get(attrs, :work_shape, default_work_shape(intent)))
+      |> Map.put(:route_hint, Keyword.get(attrs, :route_hint, default_route_hint(intent)))
+    else
+      result
+    end
   end
 
   defp classifier_model("local"), do: AgentMachine.LocalIntentClassifier.model_id()
   defp classifier_model("llm"), do: "openai/gpt-4o-mini"
+
+  defp default_work_shape(:none), do: :conversation
+  defp default_work_shape(:file_read), do: :narrow_read
+  defp default_work_shape(:file_mutation), do: :mutation
+  defp default_work_shape(:code_mutation), do: :mutation
+  defp default_work_shape(:test_command), do: :test_execution
+  defp default_work_shape(:time), do: :generic_tool_use
+  defp default_work_shape(:web_browse), do: :web_research
+  defp default_work_shape(:tool_use), do: :generic_tool_use
+  defp default_work_shape(:delegation), do: :explicit_delegation
+
+  defp default_route_hint(:none), do: :chat
+  defp default_route_hint(:file_read), do: :tool
+  defp default_route_hint(:file_mutation), do: :agentic
+  defp default_route_hint(:code_mutation), do: :agentic
+  defp default_route_hint(:test_command), do: :agentic
+  defp default_route_hint(:time), do: :tool
+  defp default_route_hint(:web_browse), do: :agentic
+  defp default_route_hint(:tool_use), do: :tool
+  defp default_route_hint(:delegation), do: :agentic
 
   defp mcp_config(risk) do
     Config.from_map!(%{

@@ -75,6 +75,8 @@ defmodule AgentMachine.SessionServerTest do
       LLMRouter.put_test_classifier(fn _input ->
         %{
           intent: :code_mutation,
+          work_shape: :mutation,
+          route_hint: :agentic,
           confidence: 0.91,
           reason: "test llm code mutation"
         }
@@ -122,6 +124,8 @@ defmodule AgentMachine.SessionServerTest do
           :continue ->
             %{
               intent: :file_mutation,
+              work_shape: :mutation,
+              route_hint: :agentic,
               confidence: 0.8,
               reason: "slow file mutation classification"
             }

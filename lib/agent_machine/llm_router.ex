@@ -3,11 +3,17 @@ defmodule AgentMachine.LLMRouter do
 
   use GenServer
 
-  alias AgentMachine.{Agent, Intent}
+  alias AgentMachine.{Agent, Intent, RouterAdvice}
 
   @valid_intents Intent.intents()
   @intent_lookup Map.new(@valid_intents, &{Atom.to_string(&1), &1})
-  @allowed_response_keys MapSet.new(["intent", "confidence", "reason"])
+  @allowed_response_keys MapSet.new([
+                           "intent",
+                           "work_shape",
+                           "route_hint",
+                           "confidence",
+                           "reason"
+                         ])
 
   def start_link(opts) when is_list(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -179,12 +185,16 @@ defmodule AgentMachine.LLMRouter do
 
   defp normalize_classifier_result!(%{} = response, model) do
     intent = response |> value!(:intent) |> normalize_intent!(:intent)
+    work_shape = response |> value!(:work_shape) |> normalize_work_shape!()
+    route_hint = response |> value!(:route_hint) |> normalize_route_hint!()
     confidence = response |> value!(:confidence) |> normalize_confidence!()
     reason = response |> value!(:reason) |> normalize_reason!()
 
     %{
       intent: intent,
       classified_intent: intent,
+      work_shape: work_shape,
+      route_hint: route_hint,
       classifier: "llm",
       classifier_model: model,
       confidence: confidence,
@@ -228,6 +238,14 @@ defmodule AgentMachine.LLMRouter do
     raise ArgumentError, "llm router returned invalid #{field}: #{inspect(intent)}"
   end
 
+  defp normalize_work_shape!(work_shape) do
+    RouterAdvice.normalize_work_shape!(work_shape, "llm router returned invalid work_shape")
+  end
+
+  defp normalize_route_hint!(route_hint) do
+    RouterAdvice.normalize_route_hint!(route_hint, "llm router returned invalid route_hint")
+  end
+
   defp normalize_confidence!(confidence) when is_number(confidence) do
     confidence = confidence * 1.0
 
@@ -261,23 +279,42 @@ defmodule AgentMachine.LLMRouter do
       @valid_intents
       |> Enum.map_join("\n", fn intent -> "- #{intent}: #{intent_description(intent)}" end)
 
+    work_shapes =
+      RouterAdvice.work_shapes()
+      |> Enum.map_join("\n", fn work_shape ->
+        "- #{work_shape}: #{work_shape_description(work_shape)}"
+      end)
+
+    route_hints =
+      RouterAdvice.route_hints()
+      |> Enum.map_join(", ", &Atom.to_string/1)
+
     """
     You are AgentMachine's workflow router.
-    Classify the current user request into exactly one routing intent.
+    Classify the current user request into exactly one routing intent and one advisory execution shape.
 
     Valid intents:
     #{intents}
 
+    Valid work_shape values:
+    #{work_shapes}
+
+    Valid route_hint values:
+    #{route_hints}
+
     Rules:
     - Return only one JSON object.
     - Do not include Markdown, prose, or code fences.
+    - route_hint is advisory only; the Elixir runtime validates capabilities, permissions, and the final route.
     - Use file_mutation for requests to create, write, edit, delete, rename, or modify local files or folders.
     - Use code_mutation for requests to create, edit, fix, patch, or generate code, apps, scripts, websites, tests, or project files.
+    - Use file_read with work_shape narrow_read and route_hint tool for a narrow local file, directory, search, or lookup request.
+    - Use file_read with work_shape broad_project_analysis and route_hint agentic for broad codebase/project/repository analysis, architecture review, or improvement recommendations.
     - Use web_browse only for opening, browsing, inspecting, or researching an external/current website, browser page, URL, or web search.
     - Do not decide permissions and do not execute tools.
 
     Required JSON shape:
-    {"intent":"file_mutation","confidence":0.91,"reason":"short reason"}
+    {"intent":"file_read","work_shape":"broad_project_analysis","route_hint":"agentic","confidence":0.91,"reason":"short reason"}
     """
   end
 
@@ -303,6 +340,30 @@ defmodule AgentMachine.LLMRouter do
 
   defp intent_description(:delegation),
     do: "explicitly use agents, workers, subagents, or delegated work"
+
+  defp work_shape_description(:conversation),
+    do: "normal conversation or explanation without tool use"
+
+  defp work_shape_description(:narrow_read),
+    do: "one small local read, listing, search, or lookup"
+
+  defp work_shape_description(:broad_project_analysis),
+    do: "multi-file project, codebase, repository, architecture, or improvement analysis"
+
+  defp work_shape_description(:mutation),
+    do: "local file or code creation, editing, repair, deletion, or refactoring"
+
+  defp work_shape_description(:test_execution),
+    do: "running tests, checks, or explicit test commands"
+
+  defp work_shape_description(:web_research),
+    do: "external website, URL, browser, or web-search research"
+
+  defp work_shape_description(:explicit_delegation),
+    do: "explicit user request for agents, workers, subagents, or delegated work"
+
+  defp work_shape_description(:generic_tool_use),
+    do: "explicit generic tool, API, MCP, or integration use"
 
   defp prompt(input) do
     [

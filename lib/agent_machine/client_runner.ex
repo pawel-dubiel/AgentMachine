@@ -98,6 +98,8 @@ defmodule AgentMachine.ClientRunner do
       classifier: Map.get(route, :classifier),
       classifier_model: Map.get(route, :classifier_model),
       classified_intent: Map.get(route, :classified_intent),
+      work_shape: Map.get(route, :work_shape),
+      route_hint: Map.get(route, :route_hint),
       confidence: Map.get(route, :confidence),
       active_harnesses: Enum.map(spec.tool_harnesses || [], &Atom.to_string/1),
       at: DateTime.utc_now()

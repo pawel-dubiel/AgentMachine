@@ -58,7 +58,9 @@ defmodule AgentMachine.RunContextPromptTest do
               selected: "tool",
               reason: "time_intent_with_read_only_tool",
               tool_intent: "time",
-              strategy: "swarm"
+              strategy: "swarm",
+              work_shape: "generic_tool_use",
+              route_hint: "tool"
             }
           )
       )
@@ -69,7 +71,9 @@ defmodule AgentMachine.RunContextPromptTest do
                  "requested" => "auto",
                  "selected" => "tool",
                  "tool_intent" => "time",
-                 "strategy" => "swarm"
+                 "strategy" => "swarm",
+                 "work_shape" => "generic_tool_use",
+                 "route_hint" => "tool"
                }
              }
            } = JSON.decode!(text)

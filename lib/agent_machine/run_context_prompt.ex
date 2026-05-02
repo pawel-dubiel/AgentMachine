@@ -157,7 +157,15 @@ defmodule AgentMachine.RunContextPrompt do
     Map.put(
       facts,
       :workflow_route,
-      Map.take(route, [:requested, :selected, :reason, :strategy, :tool_intent])
+      Map.take(route, [
+        :requested,
+        :selected,
+        :reason,
+        :strategy,
+        :tool_intent,
+        :work_shape,
+        :route_hint
+      ])
     )
   end
 

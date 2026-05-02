@@ -4,6 +4,12 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Extended the LLM workflow router contract with `work_shape` and `route_hint`
+  so broad codebase analysis can be routed agentically while Elixir keeps final
+  capability and permission enforcement.
+- Changed auto routing so broad project/codebase analysis requests use the
+  agentic planner path when read tools are configured, while narrow file reads
+  stay on the lightweight tool route.
 - Moved the default TUI config path to `~/.agent-machine/tui-config.json`,
   added legacy OS config fallback, and allowed nearest project
   `.agent-machine`/`.agentMachine` config files to override non-secret settings.

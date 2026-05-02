@@ -150,6 +150,8 @@ defmodule AgentMachine.EventSummary do
       :classifier,
       :classifier_model,
       :classified_intent,
+      :work_shape,
+      :route_hint,
       :confidence,
       :active_harnesses,
       :agent_machine_role,

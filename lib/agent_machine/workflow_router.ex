@@ -1,7 +1,7 @@
 defmodule AgentMachine.WorkflowRouter do
   @moduledoc false
 
-  alias AgentMachine.{CapabilityRequired, Intent, RunSpec}
+  alias AgentMachine.{CapabilityRequired, Intent, RouterAdvice, RunSpec}
 
   @enforce_keys [
     :requested_workflow,
@@ -130,8 +130,13 @@ defmodule AgentMachine.WorkflowRouter do
     )
   end
 
-  defp route_auto_intent(_input, :none, classified) do
-    route(:auto, :chat, none_reason(classified), :none, false, classifier_meta(classified))
+  defp route_auto_intent(input, :none, classified) do
+    if project_analysis_intent?(input) do
+      require_read_capability!(input)
+      route_project_analysis(classified)
+    else
+      route(:auto, :chat, none_reason(classified), :none, false, classifier_meta(classified))
+    end
   end
 
   defp route_auto_intent(input, :delegation, classified) do
@@ -147,15 +152,7 @@ defmodule AgentMachine.WorkflowRouter do
 
   defp route_auto_intent(input, :file_read, classified) do
     require_read_capability!(input)
-
-    route(
-      :auto,
-      :tool,
-      "read_intent_with_read_only_tool",
-      :file_read,
-      true,
-      classifier_meta(classified)
-    )
+    route_file_read_intent(input, classified)
   end
 
   defp route_auto_intent(input, :time, classified), do: route_time_intent(input, classified)
@@ -185,26 +182,32 @@ defmodule AgentMachine.WorkflowRouter do
   end
 
   defp route_auto_intent(input, :tool_use, classified) do
-    if shell_capable_code_edit?(input) do
-      route(
-        :auto,
-        :agentic,
-        "tool_intent_with_code_edit_shell",
-        :tool_use,
-        true,
-        classifier_meta(classified)
-      )
-    else
-      require_read_only_tool_capability!(input, :tool_use)
+    cond do
+      project_analysis_intent?(input) ->
+        require_read_capability!(input)
+        route_project_analysis(classified)
 
-      route(
-        :auto,
-        :tool,
-        "tool_intent_with_read_only_tool",
-        :tool_use,
-        true,
-        classifier_meta(classified)
-      )
+      shell_capable_code_edit?(input) ->
+        route(
+          :auto,
+          :agentic,
+          "tool_intent_with_code_edit_shell",
+          :tool_use,
+          true,
+          classifier_meta(classified)
+        )
+
+      true ->
+        require_read_only_tool_capability!(input, :tool_use)
+
+        route(
+          :auto,
+          :tool,
+          "tool_intent_with_read_only_tool",
+          :tool_use,
+          true,
+          classifier_meta(classified)
+        )
     end
   end
 
@@ -245,6 +248,44 @@ defmodule AgentMachine.WorkflowRouter do
       true,
       classifier_meta(classified)
     )
+  end
+
+  defp route_project_analysis(classified) do
+    route(
+      :auto,
+      :agentic,
+      "project_analysis_intent_with_read_tools",
+      :file_read,
+      true,
+      classifier_meta(classified)
+    )
+  end
+
+  defp route_file_read_intent(input, classified) do
+    cond do
+      llm_broad_project_analysis?(classified) or project_analysis_intent?(input) ->
+        route_project_analysis(classified)
+
+      llm_agentic_route_hint?(classified) ->
+        route(
+          :auto,
+          :agentic,
+          "llm_agentic_route_hint_with_read_tools",
+          :file_read,
+          true,
+          classifier_meta(classified)
+        )
+
+      true ->
+        route(
+          :auto,
+          :tool,
+          "read_intent_with_read_only_tool",
+          :file_read,
+          true,
+          classifier_meta(classified)
+        )
+    end
   end
 
   defp route(
@@ -364,7 +405,7 @@ defmodule AgentMachine.WorkflowRouter do
     validate_optional_number!(confidence, :confidence)
     validate_optional_binary!(reason, :reason)
 
-    %{
+    classifier_result = %{
       intent: intent,
       classified_intent: classified_intent,
       classifier: classifier,
@@ -372,6 +413,8 @@ defmodule AgentMachine.WorkflowRouter do
       confidence: confidence,
       reason: reason
     }
+
+    maybe_put_llm_advisory_fields!(classifier_result, result)
   end
 
   defp validate_classifier_result!(result) do
@@ -406,6 +449,38 @@ defmodule AgentMachine.WorkflowRouter do
           "workflow router classifier returned invalid classifier: #{inspect(classifier)}"
   end
 
+  defp maybe_put_llm_advisory_fields!(%{classifier: "llm"} = classifier_result, result) do
+    work_shape =
+      result
+      |> required_classifier_field!(:work_shape)
+      |> RouterAdvice.normalize_work_shape!(
+        "workflow router classifier returned invalid work_shape"
+      )
+
+    route_hint =
+      result
+      |> required_classifier_field!(:route_hint)
+      |> RouterAdvice.normalize_route_hint!(
+        "workflow router classifier returned invalid route_hint"
+      )
+
+    classifier_result
+    |> Map.put(:work_shape, work_shape)
+    |> Map.put(:route_hint, route_hint)
+  end
+
+  defp maybe_put_llm_advisory_fields!(classifier_result, _result), do: classifier_result
+
+  defp required_classifier_field!(result, field) do
+    case Map.fetch(result, field) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        raise ArgumentError, "workflow router llm classifier is missing #{inspect(field)}"
+    end
+  end
+
   defp validate_optional_binary!(nil, _field), do: :ok
   defp validate_optional_binary!(value, _field) when is_binary(value), do: :ok
 
@@ -429,6 +504,16 @@ defmodule AgentMachine.WorkflowRouter do
       confidence: Map.get(classified, :confidence),
       classified_intent: classified |> Map.fetch!(:classified_intent) |> Atom.to_string()
     }
+    |> maybe_put_classifier_atom(:work_shape, classified)
+    |> maybe_put_classifier_atom(:route_hint, classified)
+  end
+
+  defp maybe_put_classifier_atom(meta, key, classified) do
+    case Map.fetch(classified, key) do
+      {:ok, value} when is_atom(value) -> Map.put(meta, key, Atom.to_string(value))
+      {:ok, value} -> Map.put(meta, key, value)
+      :error -> meta
+    end
   end
 
   defp none_reason(%{classifier: classifier, reason: reason})
@@ -446,6 +531,17 @@ defmodule AgentMachine.WorkflowRouter do
   end
 
   defp local_web_browse_without_target?(_input, _classified), do: false
+
+  defp llm_broad_project_analysis?(%{
+         classifier: "llm",
+         work_shape: :broad_project_analysis
+       }),
+       do: true
+
+  defp llm_broad_project_analysis?(_classified), do: false
+
+  defp llm_agentic_route_hint?(%{classifier: "llm", route_hint: :agentic}), do: true
+  defp llm_agentic_route_hint?(_classified), do: false
 
   defp effective_text(%__MODULE__{task: task, pending_action: pending_action})
        when is_binary(pending_action) do
@@ -556,6 +652,52 @@ defmodule AgentMachine.WorkflowRouter do
       "inside this dir",
       "inside this directory"
     ]) and file_reference?(normalized)
+  end
+
+  defp project_analysis_intent?(input) do
+    normalized =
+      input
+      |> effective_text()
+      |> normalize()
+
+    project_analysis_action?(normalized) and project_analysis_target?(normalized)
+  end
+
+  defp project_analysis_action?(text) do
+    contains_any?(text, [
+      "analyze ",
+      "analyse ",
+      "review ",
+      "audit ",
+      "inspect ",
+      "evaluate ",
+      "assess ",
+      "recommend improvements",
+      "recommend architectural improvements",
+      "what to improve",
+      "tell me what to improve",
+      "improvements",
+      "improve in"
+    ])
+  end
+
+  defp project_analysis_target?(text) do
+    contains_any?(text, [
+      "this project",
+      "the project",
+      "current project",
+      "project at ",
+      "project in ",
+      "codebase",
+      "code base",
+      "repo",
+      "repository",
+      "source code",
+      "this code",
+      "the code",
+      "/users/",
+      "/tmp/"
+    ])
   end
 
   defp time_intent?(text) do

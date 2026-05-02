@@ -919,6 +919,8 @@ defmodule AgentMachine.ClientRunnerTest do
 
     route_event = Enum.find(decoded, &(get_in(&1, ["event", "type"]) == "workflow_routed"))
     assert get_in(route_event, ["event", "tools_exposed"]) == false
+    assert Map.has_key?(route_event["event"], "work_shape")
+    assert Map.has_key?(route_event["event"], "route_hint")
 
     assert Enum.any?(
              decoded,

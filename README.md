@@ -71,13 +71,15 @@ practical path for each request:
 
 - plain chat for normal conversation.
 - fast read-only tool use for inspection and lookup.
-- agentic planner/worker execution for delegated, write, code-edit, test, or
-  browser work.
+- agentic planner/worker execution for broad project/codebase analysis,
+  delegated work, write, code-edit, test, or browser work.
 
 By default, auto mode asks the selected provider/model to classify the request
-through a strict JSON router prompt before any workflow starts. Deterministic
-rules still guard obvious tool intents, and `/router deterministic` or
-`/router local <model-dir>` can select the older explicit router modes.
+through a strict JSON router prompt before any workflow starts. The LLM router
+returns an intent, work shape, and advisory route hint; Elixir still validates
+capabilities, permissions, and the final route. Deterministic rules still guard
+obvious tool intents, and `/router deterministic` or `/router local <model-dir>`
+can select the older explicit router modes.
 Local router model installs are pinned to an immutable Hugging Face revision and
 verify SHA-256 hashes for every downloaded artifact before use.
 
