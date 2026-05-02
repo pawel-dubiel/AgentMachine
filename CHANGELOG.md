@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Required structured `completion_evidence` for agentic reviewer completion
+  decisions and validate reviewer evidence references before finalization.
 - Added opt-in bounded agentic persistence for `--workflow agentic`, with
   structured goal-review decisions, follow-up worker scheduling, exhaustion
   failures, JSON/JSONL summary metadata, and TUI `/agentic-persistence`

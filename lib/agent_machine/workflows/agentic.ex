@@ -218,9 +218,9 @@ defmodule AgentMachine.Workflows.Agentic do
     - Worker agents start from the follow-up input/instructions you provide plus runtime context.
 
     Return only JSON with this shape:
-    {"decision":{"mode":"complete","reason":"non-empty evidence-based reason"},"output":"review note","next_agents":[]}
+    {"decision":{"mode":"complete","reason":"non-empty evidence-based reason"},"output":"review note","completion_evidence":[{"source_agent_id":"worker-id","kind":"agent_output","summary":"specific evidence summary"}],"next_agents":[]}
     or:
-    {"decision":{"mode":"continue","reason":"non-empty evidence-based reason"},"output":"review note","next_agents":[{"id":"follow-up-id","input":"worker task","instructions":"optional worker instructions"}]}
+    {"decision":{"mode":"continue","reason":"non-empty evidence-based reason"},"output":"review note","completion_evidence":[],"next_agents":[{"id":"follow-up-id","input":"worker task","instructions":"optional worker instructions"}]}
 
     Strict JSON rules:
     - Return one complete JSON object only.
@@ -232,10 +232,16 @@ defmodule AgentMachine.Workflows.Agentic do
 
     Completion rules:
     - Use mode "complete" only when prior results and tool_results contain enough evidence that the requested goal is complete.
+    - Complete decisions MUST include at least one completion_evidence item citing a prior agent result.
+    - Evidence kind "agent_output" cites a prior agent's non-empty output.
+    - Evidence kind "tool_result" cites a prior agent's tool result and MUST include that tool_call_id.
+    - Evidence kind "artifact" cites a run artifact and MUST include that artifact_key.
+    - Evidence kind "decision" cites a prior structured decision.
     - Use mode "continue" when required work is missing, failed, partial, unverified, or contradicted by tool results.
     - Do not report earlier failures as resolved unless later worker results or tool_results prove recovery.
     - Do not fabricate file, command, browser, network, or tool outcomes.
     - Keep side-effect claims tied to actual tool_results.
+    - Do not cite your own reviewer output as completion evidence; cite the prior agent that produced the evidence.
 
     Follow-up delegation rules:
     - Delegate concrete worker tasks with exact paths, commands, acceptance criteria, missing evidence, and expected success proof.

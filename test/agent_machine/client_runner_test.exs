@@ -1132,13 +1132,30 @@ defmodule AgentMachine.ClientRunnerTest do
             attempt: 1,
             error: "first attempt failed"
           },
+          "worker-b" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "worker-b",
+            status: :ok,
+            output: "recovered work",
+            attempt: 1
+          },
           "goal-reviewer-1" => %AgentResult{
             run_id: "run-1",
             agent_id: "goal-reviewer-1",
             status: :ok,
             output: "review complete",
             attempt: 1,
-            decision: %{mode: "complete", reason: "later evidence confirms recovery"}
+            decision: %{
+              mode: "complete",
+              reason: "later evidence confirms recovery",
+              completion_evidence: [
+                %{
+                  source_agent_id: "worker-b",
+                  kind: "agent_output",
+                  summary: "worker-b confirmed recovery"
+                }
+              ]
+            }
           },
           "finalizer" => %AgentResult{
             run_id: "run-1",
@@ -1157,6 +1174,7 @@ defmodule AgentMachine.ClientRunnerTest do
         goal_review_completed: true,
         agent_graph: %{
           "worker-a" => %{parent_agent_id: "planner"},
+          "worker-b" => %{parent_agent_id: "goal-reviewer-0"},
           "goal-reviewer-1" => %{agent_machine_role: "goal_reviewer"},
           "finalizer" => %{}
         }
@@ -1165,6 +1183,14 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.status == "completed"
     assert summary.error == nil
     assert summary.final_output == "final answer"
+
+    assert summary.results["goal-reviewer-1"].decision.completion_evidence == [
+             %{
+               source_agent_id: "worker-b",
+               kind: "agent_output",
+               summary: "worker-b confirmed recovery"
+             }
+           ]
 
     assert summary.agentic_persistence == %{
              enabled: true,

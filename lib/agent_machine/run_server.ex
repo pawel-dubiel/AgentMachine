@@ -405,50 +405,64 @@ defmodule AgentMachine.RunServer do
          run,
          %{status: :ok, decision: %{mode: "complete"}} = result
        ) do
-    event =
-      agentic_review_decided_event(
-        run,
-        result.agent_id,
-        "complete",
-        result.decision.reason,
-        []
-      )
+    case validate_goal_review_completion_evidence(run, result) do
+      :ok ->
+        event =
+          agentic_review_decided_event(
+            run,
+            result.agent_id,
+            "complete",
+            result.decision.reason,
+            [],
+            goal_review_completion_evidence(result)
+          )
 
-    run
-    |> Map.put(:goal_review_completed, true)
-    |> append_event(event)
-    |> start_ready_pending_agents()
+        run
+        |> Map.put(:goal_review_completed, true)
+        |> append_event(event)
+        |> start_ready_pending_agents()
+
+      {:error, reason} ->
+        fail_run(run, reason)
+    end
   end
 
   defp continue_after_goal_review_result(
          run,
          %{status: :ok, decision: %{mode: "continue"}} = result
        ) do
-    continue_count = run.goal_review_continue_count + 1
-    delegated_ids = Enum.map(result.next_agents || [], & &1.id)
+    case validate_goal_review_completion_evidence(run, result) do
+      :ok ->
+        continue_count = run.goal_review_continue_count + 1
+        delegated_ids = Enum.map(result.next_agents || [], & &1.id)
 
-    run =
-      run
-      |> Map.put(:goal_review_continue_count, continue_count)
-      |> append_event(
-        agentic_review_decided_event(
-          %{run | goal_review_continue_count: continue_count},
-          result.agent_id,
-          "continue",
-          result.decision.reason,
-          delegated_ids
-        )
-      )
+        run =
+          run
+          |> Map.put(:goal_review_continue_count, continue_count)
+          |> append_event(
+            agentic_review_decided_event(
+              %{run | goal_review_continue_count: continue_count},
+              result.agent_id,
+              "continue",
+              result.decision.reason,
+              delegated_ids,
+              goal_review_completion_evidence(result)
+            )
+          )
 
-    if continue_count > agentic_persistence_rounds!(run) do
-      fail_run(
-        run,
-        "agentic persistence exhausted after #{agentic_persistence_rounds!(run)} continue round(s)"
-      )
-    else
-      schedule_next_agents(run, result)
-      |> finish_or_fail(run)
-      |> start_ready_pending_agents()
+        if continue_count > agentic_persistence_rounds!(run) do
+          fail_run(
+            run,
+            "agentic persistence exhausted after #{agentic_persistence_rounds!(run)} continue round(s)"
+          )
+        else
+          schedule_next_agents(run, result)
+          |> finish_or_fail(run)
+          |> start_ready_pending_agents()
+        end
+
+      {:error, reason} ->
+        fail_run(run, reason)
     end
   end
 
@@ -458,6 +472,197 @@ defmodule AgentMachine.RunServer do
       "goal reviewer #{result.agent_id} returned invalid decision: #{inspect(result.decision)}"
     )
   end
+
+  defp validate_goal_review_completion_evidence(run, %{decision: %{mode: "complete"}} = result) do
+    case goal_review_completion_evidence(result) do
+      [] ->
+        {:error,
+         "goal reviewer #{result.agent_id} complete decision requires completion evidence"}
+
+      evidence ->
+        validate_goal_review_completion_evidence_items(run, result, evidence)
+    end
+  end
+
+  defp validate_goal_review_completion_evidence(run, result) do
+    validate_goal_review_completion_evidence_items(
+      run,
+      result,
+      goal_review_completion_evidence(result)
+    )
+  end
+
+  defp validate_goal_review_completion_evidence_items(run, result, evidence) do
+    Enum.reduce_while(evidence, :ok, fn item, :ok ->
+      case validate_goal_review_completion_evidence_item(run, result, item) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp validate_goal_review_completion_evidence_item(run, result, item) when is_map(item) do
+    with {:ok, source_agent_id} <- evidence_string(item, :source_agent_id),
+         :ok <- validate_evidence_source_agent(run, result, source_agent_id),
+         {:ok, kind} <- evidence_string(item, :kind) do
+      source_result = Map.fetch!(run.results, source_agent_id)
+      validate_evidence_kind_reference(run, result, item, source_result, source_agent_id, kind)
+    end
+  end
+
+  defp validate_goal_review_completion_evidence_item(_run, result, item) do
+    {:error,
+     "goal reviewer #{result.agent_id} completion_evidence item must be a map, got: #{inspect(item)}"}
+  end
+
+  defp validate_evidence_source_agent(run, result, source_agent_id) do
+    prior_results = Map.delete(run.results, result.agent_id)
+
+    cond do
+      source_agent_id == result.agent_id ->
+        {:error,
+         "goal reviewer #{result.agent_id} completion_evidence source_agent_id must reference a prior agent result, got reviewer id #{inspect(source_agent_id)}"}
+
+      not Map.has_key?(prior_results, source_agent_id) ->
+        {:error,
+         "goal reviewer #{result.agent_id} completion_evidence references unknown source_agent_id #{inspect(source_agent_id)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_evidence_kind_reference(
+         _run,
+         _result,
+         _item,
+         source_result,
+         source_agent_id,
+         "agent_output"
+       ) do
+    case source_result.output do
+      output when is_binary(output) and byte_size(output) > 0 ->
+        :ok
+
+      output ->
+        {:error,
+         "completion_evidence source_agent_id #{inspect(source_agent_id)} has no non-empty output to cite, got: #{inspect(output)}"}
+    end
+  end
+
+  defp validate_evidence_kind_reference(
+         _run,
+         _result,
+         _item,
+         source_result,
+         source_agent_id,
+         "decision"
+       ) do
+    if is_map(source_result.decision) do
+      :ok
+    else
+      {:error,
+       "completion_evidence source_agent_id #{inspect(source_agent_id)} has no decision to cite"}
+    end
+  end
+
+  defp validate_evidence_kind_reference(
+         _run,
+         _result,
+         item,
+         source_result,
+         source_agent_id,
+         "tool_result"
+       ) do
+    with {:ok, tool_call_id} <- evidence_string(item, :tool_call_id),
+         true <- source_tool_result?(source_result, tool_call_id) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, reason}
+
+      false ->
+        {:error,
+         "completion_evidence tool_call_id #{inspect(evidence_value(item, :tool_call_id))} was not found in source_agent_id #{inspect(source_agent_id)}"}
+    end
+  end
+
+  defp validate_evidence_kind_reference(
+         run,
+         _result,
+         item,
+         _source_result,
+         source_agent_id,
+         "artifact"
+       ) do
+    with {:ok, artifact_key} <- evidence_string(item, :artifact_key),
+         {:ok, artifact_source} <- artifact_source_for_evidence(run, artifact_key),
+         true <- artifact_source == source_agent_id do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, reason}
+
+      false ->
+        {:error,
+         "completion_evidence artifact_key #{inspect(evidence_value(item, :artifact_key))} was not produced by source_agent_id #{inspect(source_agent_id)}"}
+    end
+  end
+
+  defp validate_evidence_kind_reference(
+         _run,
+         result,
+         _item,
+         _source_result,
+         _source_agent_id,
+         kind
+       ) do
+    {:error,
+     "goal reviewer #{result.agent_id} completion_evidence kind must be agent_output, tool_result, artifact, or decision, got: #{inspect(kind)}"}
+  end
+
+  defp source_tool_result?(source_result, tool_call_id) do
+    case source_result.tool_results do
+      tool_results when is_map(tool_results) -> Map.has_key?(tool_results, tool_call_id)
+      _other -> false
+    end
+  end
+
+  defp artifact_source_for_evidence(run, artifact_key) do
+    case Enum.find(run.artifact_sources, fn {key, _source} -> to_string(key) == artifact_key end) do
+      {_key, source} -> {:ok, source}
+      nil -> {:error, "completion_evidence artifact_key #{inspect(artifact_key)} was not found"}
+    end
+  end
+
+  defp evidence_string(item, key) do
+    case evidence_value(item, key) do
+      value when is_binary(value) and byte_size(value) > 0 ->
+        {:ok, value}
+
+      value ->
+        {:error, "completion_evidence #{key} must be a non-empty string, got: #{inspect(value)}"}
+    end
+  end
+
+  defp evidence_value(item, key) when is_map(item) do
+    case Map.fetch(item, key) do
+      {:ok, value} -> value
+      :error -> Map.get(item, Atom.to_string(key))
+    end
+  end
+
+  defp goal_review_completion_evidence(%{decision: %{completion_evidence: evidence}})
+       when is_list(evidence) do
+    evidence
+  end
+
+  defp goal_review_completion_evidence(%{decision: %{"completion_evidence" => evidence}})
+       when is_list(evidence) do
+    evidence
+  end
+
+  defp goal_review_completion_evidence(_result), do: []
 
   defp finish_or_fail({:ok, updated_run}, _run), do: finish_if_idle(updated_run)
   defp finish_or_fail({:failed_run, failed_run}, _run), do: failed_run
@@ -1407,7 +1612,14 @@ defmodule AgentMachine.RunServer do
     }
   end
 
-  defp agentic_review_decided_event(run, reviewer_id, mode, reason, delegated_ids) do
+  defp agentic_review_decided_event(
+         run,
+         reviewer_id,
+         mode,
+         reason,
+         delegated_ids,
+         completion_evidence
+       ) do
     %{
       type: :agentic_review_decided,
       run_id: run.id,
@@ -1418,6 +1630,8 @@ defmodule AgentMachine.RunServer do
       round: run.goal_review_count,
       continue_count: run.goal_review_continue_count,
       delegated_agent_ids: delegated_ids,
+      completion_evidence_count: length(completion_evidence),
+      completion_evidence: completion_evidence,
       at: DateTime.utc_now()
     }
   end

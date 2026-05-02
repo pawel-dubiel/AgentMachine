@@ -106,9 +106,12 @@ Agentic persistence is explicit and bounded. When
 `agentic_persistence_rounds` is set for an `agentic` run, the runtime starts a
 goal reviewer after the planner and workers go idle. The reviewer must return
 strict JSON saying either `complete` with no follow-up agents or `continue`
-with concrete worker specs. Each `continue` consumes one configured round and
-all reviewers/follow-up workers count against `max_steps`; exhaustion fails the
-run instead of summarizing success. Persistence is rejected for non-agentic
+with concrete worker specs. A `complete` decision must also include structured
+`completion_evidence` entries that cite prior agent output, tool results,
+artifacts, or decisions; unknown evidence sources fail the run before the
+finalizer starts. Each `continue` consumes one configured round and all
+reviewers/follow-up workers count against `max_steps`; exhaustion fails the run
+instead of summarizing success. Persistence is rejected for non-agentic
 workflows and for the swarm strategy in this version.
 
 **Swarm strategy**

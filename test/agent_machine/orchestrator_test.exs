@@ -820,6 +820,15 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.status == :completed
     assert run.agent_order == ["planner", "worker-a", "goal-reviewer-1", "finalizer"]
     assert run.results["goal-reviewer-1"].decision.mode == "complete"
+
+    assert run.results["goal-reviewer-1"].decision.completion_evidence == [
+             %{
+               source_agent_id: "worker-a",
+               kind: "agent_output",
+               summary: "worker-a confirms initial worker completed the task"
+             }
+           ]
+
     assert run.goal_review_continue_count == 0
     assert run.goal_review_completed == true
     assert run.results["finalizer"].output =~ "reviewed=goal-reviewer-1 complete"
@@ -827,7 +836,9 @@ defmodule AgentMachine.OrchestratorTest do
     assert Enum.any?(run.events, fn event ->
              event.type == :agentic_review_decided and event.reviewer_id == "goal-reviewer-1" and
                event.mode == "complete" and event.round == 1 and event.continue_count == 0 and
-               event.delegated_agent_ids == []
+               event.delegated_agent_ids == [] and event.completion_evidence_count == 1 and
+               event.completion_evidence ==
+                 run.results["goal-reviewer-1"].decision.completion_evidence
            end)
   end
 
@@ -858,9 +869,64 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["goal-reviewer-1"].decision.delegated_agent_ids == ["follow-up"]
     assert run.results["follow-up"].output == "follow-up output"
     assert run.results["goal-reviewer-2"].decision.mode == "complete"
+
+    assert run.results["goal-reviewer-2"].decision.completion_evidence == [
+             %{
+               source_agent_id: "follow-up",
+               kind: "agent_output",
+               summary: "follow-up confirms follow-up completed missing work"
+             }
+           ]
+
     assert run.goal_review_continue_count == 1
     assert run.goal_review_completed == true
     assert run.results["finalizer"].output =~ "follow_up=true"
+  end
+
+  test "agentic persistence accepts reviewer artifact completion evidence" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 4,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("complete-artifact"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :completed
+
+    assert run.results["goal-reviewer-1"].decision.completion_evidence == [
+             %{
+               source_agent_id: "worker-a",
+               kind: "artifact",
+               summary: "worker-a produced the worker_marker artifact",
+               artifact_key: "worker_marker"
+             }
+           ]
+  end
+
+  test "agentic persistence fails when reviewer completion evidence references missing work" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 4,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("complete-unknown-evidence"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :failed
+
+    assert run.error =~
+             ~s(completion_evidence references unknown source_agent_id "missing-worker")
+
+    assert run.goal_review_completed == false
+    refute Map.has_key?(run.results, "finalizer")
+    refute Enum.any?(run.events, &(&1.type == :agentic_review_decided))
   end
 
   test "agentic persistence fails when continue decisions exhaust configured rounds" do
@@ -3166,6 +3232,7 @@ defmodule AgentMachine.TestProviders.AgenticPersistence do
     {:ok,
      %{
        output: output,
+       artifacts: %{"worker_marker" => "worker-a completed initial work"},
        usage: usage(agent, output)
      }}
   end
@@ -3194,11 +3261,22 @@ defmodule AgentMachine.TestProviders.AgenticPersistence do
     review_complete(agent, "initial worker completed the task")
   end
 
+  def complete(%Agent{id: "goal-reviewer-" <> _suffix, input: "complete-artifact"} = agent, _opts) do
+    review_complete_artifact(agent)
+  end
+
+  def complete(
+        %Agent{id: "goal-reviewer-" <> _suffix, input: "complete-unknown-evidence"} = agent,
+        _opts
+      ) do
+    review_complete(agent, "missing worker supposedly completed the task", "missing-worker")
+  end
+
   def complete(%Agent{id: "goal-reviewer-" <> _suffix, input: "continue-once"} = agent, opts) do
     context = Keyword.fetch!(opts, :run_context)
 
     if Map.has_key?(context.results, "follow-up") do
-      review_complete(agent, "follow-up completed missing work")
+      review_complete(agent, "follow-up completed missing work", "follow-up")
     else
       review_continue(agent, "missing follow-up evidence", "follow-up")
     end
@@ -3228,12 +3306,40 @@ defmodule AgentMachine.TestProviders.AgenticPersistence do
      }}
   end
 
-  defp review_complete(agent, reason) do
+  defp review_complete(agent, reason, source_agent_id \\ "worker-a") do
     output = "review complete: #{reason}"
 
     review(agent, %{
       "decision" => %{"mode" => "complete", "reason" => reason},
       "output" => output,
+      "completion_evidence" => [
+        %{
+          "source_agent_id" => source_agent_id,
+          "kind" => "agent_output",
+          "summary" => "#{source_agent_id} confirms #{reason}"
+        }
+      ],
+      "next_agents" => []
+    })
+  end
+
+  defp review_complete_artifact(agent) do
+    output = "review complete: worker-a produced artifact"
+
+    review(agent, %{
+      "decision" => %{
+        "mode" => "complete",
+        "reason" => "worker-a produced the worker_marker artifact"
+      },
+      "output" => output,
+      "completion_evidence" => [
+        %{
+          "source_agent_id" => "worker-a",
+          "kind" => "artifact",
+          "summary" => "worker-a produced the worker_marker artifact",
+          "artifact_key" => "worker_marker"
+        }
+      ],
       "next_agents" => []
     })
   end
@@ -3244,6 +3350,7 @@ defmodule AgentMachine.TestProviders.AgenticPersistence do
     review(agent, %{
       "decision" => %{"mode" => "continue", "reason" => reason},
       "output" => output,
+      "completion_evidence" => [],
       "next_agents" => [
         %{
           "id" => follow_up_id,

@@ -124,6 +124,8 @@ defmodule AgentMachine.EventSummary do
       :round,
       :continue_count,
       :mode,
+      :completion_evidence_count,
+      :completion_evidence,
       :tool_call_id,
       :request_id,
       :kind,

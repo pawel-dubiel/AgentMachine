@@ -8,6 +8,13 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "complete", "reason" => "Worker evidence is sufficient."},
         "output" => "The task is complete.",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "worker-a reported that the task is complete."
+          }
+        ],
         "next_agents" => []
       })
 
@@ -17,6 +24,13 @@ defmodule AgentMachine.AgenticReviewResponseTest do
     assert payload.decision == %{
              mode: "complete",
              reason: "Worker evidence is sufficient.",
+             completion_evidence: [
+               %{
+                 source_agent_id: "worker-a",
+                 kind: "agent_output",
+                 summary: "worker-a reported that the task is complete."
+               }
+             ],
              delegated_agent_ids: []
            }
   end
@@ -27,6 +41,7 @@ defmodule AgentMachine.AgenticReviewResponseTest do
         %{
           "decision" => %{"mode" => "continue", "reason" => "Missing verification."},
           "output" => "Need one follow-up.",
+          "completion_evidence" => [],
           "next_agents" => [
             %{
               "id" => "follow-up",
@@ -41,6 +56,7 @@ defmodule AgentMachine.AgenticReviewResponseTest do
     assert payload.decision == %{
              mode: "continue",
              reason: "Missing verification.",
+             completion_evidence: [],
              delegated_agent_ids: ["follow-up"]
            }
 
@@ -63,8 +79,87 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "complete", "reason" => "done"},
         "output" => "done",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "worker-a completed the task."
+          }
+        ],
         "next_agents" => [],
         "extra" => true
+      })
+    end
+  end
+
+  test "rejects complete decisions without concrete completion evidence" do
+    assert_raise ArgumentError, ~r/missing required completion_evidence field/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "complete", "reason" => "done"},
+        "output" => "done",
+        "next_agents" => []
+      })
+    end
+
+    assert_raise ArgumentError,
+                 ~r/complete decision requires at least one completion_evidence item/,
+                 fn ->
+                   normalize(%{
+                     "decision" => %{"mode" => "complete", "reason" => "done"},
+                     "output" => "done",
+                     "completion_evidence" => [],
+                     "next_agents" => []
+                   })
+                 end
+  end
+
+  test "rejects malformed completion evidence items" do
+    assert_raise ArgumentError, ~r/completion_evidence item contains unsupported key/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "complete", "reason" => "done"},
+        "output" => "done",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "done",
+            "extra" => true
+          }
+        ],
+        "next_agents" => []
+      })
+    end
+
+    assert_raise ArgumentError, ~r/completion_evidence kind must be one of/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "complete", "reason" => "done"},
+        "output" => "done",
+        "completion_evidence" => [
+          %{"source_agent_id" => "worker-a", "kind" => "guess", "summary" => "done"}
+        ],
+        "next_agents" => []
+      })
+    end
+
+    assert_raise ArgumentError, ~r/tool_result evidence requires tool_call_id/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "complete", "reason" => "done"},
+        "output" => "done",
+        "completion_evidence" => [
+          %{"source_agent_id" => "worker-a", "kind" => "tool_result", "summary" => "done"}
+        ],
+        "next_agents" => []
+      })
+    end
+
+    assert_raise ArgumentError, ~r/artifact evidence requires artifact_key/, fn ->
+      normalize(%{
+        "decision" => %{"mode" => "complete", "reason" => "done"},
+        "output" => "done",
+        "completion_evidence" => [
+          %{"source_agent_id" => "worker-a", "kind" => "artifact", "summary" => "done"}
+        ],
+        "next_agents" => []
       })
     end
   end
@@ -74,6 +169,13 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "complete", "reason" => ""},
         "output" => "done",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "worker-a completed the task."
+          }
+        ],
         "next_agents" => []
       })
     end
@@ -82,6 +184,13 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "complete", "reason" => "done"},
         "output" => "",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "worker-a completed the task."
+          }
+        ],
         "next_agents" => []
       })
     end
@@ -92,6 +201,7 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "maybe", "reason" => "invalid"},
         "output" => "review",
+        "completion_evidence" => [],
         "next_agents" => []
       })
     end
@@ -102,6 +212,13 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "complete", "reason" => "invalid"},
         "output" => "review",
+        "completion_evidence" => [
+          %{
+            "source_agent_id" => "worker-a",
+            "kind" => "agent_output",
+            "summary" => "worker-a completed the task."
+          }
+        ],
         "next_agents" => [%{"id" => "worker", "input" => "work"}]
       })
     end
@@ -112,6 +229,7 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "continue", "reason" => "invalid"},
         "output" => "review",
+        "completion_evidence" => [],
         "next_agents" => []
       })
     end
@@ -122,6 +240,7 @@ defmodule AgentMachine.AgenticReviewResponseTest do
       normalize(%{
         "decision" => %{"mode" => "continue", "reason" => "invalid"},
         "output" => "review",
+        "completion_evidence" => [],
         "next_agents" => [%{"id" => "", "input" => "work"}]
       })
     end
