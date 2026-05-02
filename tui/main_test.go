@@ -359,6 +359,200 @@ func TestInitialModelFailsOnInvalidSavedTheme(t *testing.T) {
 	}
 }
 
+func TestTUIConfigPathUsesHomeAgentMachineByDefault(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	workspace := filepath.Join(dir, "workspace", "project")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(workspace)
+
+	configPath, err := tuiConfigPath()
+	if err != nil {
+		t.Fatalf("expected config path, got %v", err)
+	}
+
+	expected := filepath.Join(home, ".agent-machine", "tui-config.json")
+	if configPath != expected {
+		t.Fatalf("expected %q, got %q", expected, configPath)
+	}
+}
+
+func TestLoadResolvedSavedConfigAppliesProjectOverrideWithoutSecrets(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	project := filepath.Join(dir, "repo")
+	subdir := filepath.Join(project, "apps", "demo")
+	if err := os.MkdirAll(subdir, 0o700); err != nil {
+		t.Fatalf("failed to create project fixture: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(subdir)
+
+	userPath := filepath.Join(home, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(userPath, savedConfig{
+		OpenRouterAPIKey: "user-secret",
+		Provider:         "echo",
+		ToolTimeout:      "1000",
+	}); err != nil {
+		t.Fatalf("failed to write user config: %v", err)
+	}
+
+	projectPath := filepath.Join(project, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(projectPath, savedConfig{
+		Provider:        "openrouter",
+		OpenRouterModel: "x-ai/grok-4.3",
+		ToolRoot:        ".",
+		ToolTimeout:     "120000",
+		MCPConfig:       ".agent-machine/mcp.json",
+	}); err != nil {
+		t.Fatalf("failed to write project config: %v", err)
+	}
+
+	resolution, err := resolveTUIConfig()
+	if err != nil {
+		t.Fatalf("expected config resolution, got %v", err)
+	}
+	config, loadedLegacy, err := loadResolvedSavedConfig(resolution)
+	if err != nil {
+		t.Fatalf("expected merged config, got %v", err)
+	}
+
+	if loadedLegacy {
+		t.Fatal("expected user config, not legacy fallback")
+	}
+	if resolution.Path != userPath {
+		t.Fatalf("expected user config path %q, got %q", userPath, resolution.Path)
+	}
+	if resolution.ProjectPath != projectPath {
+		t.Fatalf("expected project config path %q, got %q", projectPath, resolution.ProjectPath)
+	}
+	if config.OpenRouterAPIKey != "user-secret" {
+		t.Fatalf("expected user API key to remain user scoped, got %#v", config)
+	}
+	if config.Provider != "openrouter" || config.OpenRouterModel != "x-ai/grok-4.3" {
+		t.Fatalf("expected project provider/model override, got %#v", config)
+	}
+	if config.ToolTimeout != "120000" || config.ToolRoot != project {
+		t.Fatalf("expected project tool override with resolved root, got %#v", config)
+	}
+	expectedMCPConfig := filepath.Join(project, ".agent-machine", "mcp.json")
+	if config.MCPConfig != expectedMCPConfig {
+		t.Fatalf("expected project MCP path %q, got %q", expectedMCPConfig, config.MCPConfig)
+	}
+}
+
+func TestInitialModelMigratesLegacyConfigToHomeAgentMachine(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("failed to create workspace fixture: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Chdir(workspace)
+
+	legacyPath, err := legacyTUIConfigPath()
+	if err != nil {
+		t.Fatalf("expected legacy config path, got %v", err)
+	}
+	if err := saveSavedConfig(legacyPath, savedConfig{Theme: string(themeMatrix)}); err != nil {
+		t.Fatalf("failed to write legacy config: %v", err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model to load legacy config, got %v", err)
+	}
+
+	if m.configPath != filepath.Join(home, ".agent-machine", "tui-config.json") {
+		t.Fatalf("expected new user config path, got %q", m.configPath)
+	}
+	if m.theme != themeMatrix {
+		t.Fatalf("expected legacy theme to load, got %q", m.theme)
+	}
+	migrated, err := loadSavedConfig(m.configPath)
+	if err != nil {
+		t.Fatalf("expected migrated user config, got %v", err)
+	}
+	if migrated.Theme != string(themeMatrix) {
+		t.Fatalf("expected migrated legacy config, got %#v", migrated)
+	}
+}
+
+func TestProjectTUIConfigRejectsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	project := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatalf("failed to create project fixture: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(project)
+
+	projectPath := filepath.Join(project, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(projectPath, savedConfig{OpenAIAPIKey: "project-secret"}); err != nil {
+		t.Fatalf("failed to write project config: %v", err)
+	}
+
+	resolution, err := resolveTUIConfig()
+	if err != nil {
+		t.Fatalf("expected config resolution, got %v", err)
+	}
+	_, _, err = loadResolvedSavedConfig(resolution)
+	if err == nil || !strings.Contains(err.Error(), "must not contain API keys") {
+		t.Fatalf("expected project secret rejection, got %v", err)
+	}
+}
+
+func TestProjectTUIConfigCannotInheritFullAccessForToolSurface(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	project := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatalf("failed to create project fixture: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(project)
+
+	userPath := filepath.Join(home, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(userPath, savedConfig{
+		ToolApproval: "full-access",
+		ToolRoot:     project,
+	}); err != nil {
+		t.Fatalf("failed to write user config: %v", err)
+	}
+
+	projectPath := filepath.Join(project, ".agent-machine", "tui-config.json")
+	if err := saveSavedConfig(projectPath, savedConfig{
+		MCPConfig: ".agent-machine/mcp.json",
+	}); err != nil {
+		t.Fatalf("failed to write project config: %v", err)
+	}
+
+	resolution, err := resolveTUIConfig()
+	if err != nil {
+		t.Fatalf("expected config resolution, got %v", err)
+	}
+	_, _, err = loadResolvedSavedConfig(resolution)
+	if err == nil || !strings.Contains(err.Error(), "must not inherit full-access") {
+		t.Fatalf("expected full-access inheritance rejection, got %v", err)
+	}
+}
+
 func TestStatusLineRendersContextBudgetEvents(t *testing.T) {
 	available := 69000
 	used := 42.3

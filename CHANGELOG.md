@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Moved the default TUI config path to `~/.agent-machine/tui-config.json`,
+  added legacy OS config fallback, and allowed nearest project
+  `.agent-machine`/`.agentMachine` config files to override non-secret settings.
 - Split shared workflow provider/tool option helpers and canonical router
   intents into small internal modules to reduce duplicated workflow code and
   router compile coupling.

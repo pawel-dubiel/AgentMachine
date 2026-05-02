@@ -423,12 +423,13 @@ func initialModelWithArgs(args []string) (model, error) {
 		return model{}, err
 	}
 
-	configPath, err := tuiConfigPath()
+	configResolution, err := resolveTUIConfig()
 	if err != nil {
 		return model{}, err
 	}
+	configPath := configResolution.Path
 
-	savedConfig, err := loadSavedConfig(configPath)
+	savedConfig, loadedLegacyConfig, err := loadResolvedSavedConfig(configResolution)
 	if err != nil {
 		return model{}, err
 	}
@@ -439,7 +440,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err := migrateManagedMCPConfig(configPath, &savedConfig); err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() || migratedRouterDefault {
+	if startup.hasOverrides() || migratedRouterDefault || loadedLegacyConfig {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}

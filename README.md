@@ -220,17 +220,23 @@ Agent detail views show streamed provider text separately from the final
 normalized output, decision, errors, and compacted event history. The TUI also
 supports `classic` and Matrix-inspired `matrix` themes through `/theme`.
 
-The TUI keeps saved settings in a local user config file with `0600`
-permissions. Override the location with `AGENT_MACHINE_TUI_CONFIG`.
+The TUI keeps saved user settings in `~/.agent-machine/tui-config.json` with
+`0600` permissions. Override the exact config path with
+`AGENT_MACHINE_TUI_CONFIG`.
 
-Default config paths:
+Config precedence:
 
 ```text
-macOS: ~/Library/Application Support/agent-machine/tui-config.json
-Linux: ~/.config/agent-machine/tui-config.json
+AGENT_MACHINE_TUI_CONFIG
+nearest ./.agent-machine/tui-config.json or ./.agentMachine/tui-config.json
+~/.agent-machine/tui-config.json
+legacy OS config dir fallback, such as ~/Library/Application Support/agent-machine/tui-config.json
 ```
 
-Session logs are written under the same config area in `logs/*.jsonl`.
+Project config files may override non-secret settings. Provider API keys must
+stay in the user config, project `full-access` tool approval is rejected, and
+project path settings must stay inside the project root. Session logs are
+written under the user config area in `logs/*.jsonl`.
 Sidechain agent transcripts are stored under `logs/sessions/<session-id>/`.
 
 The TUI talks to the runtime through:
