@@ -5,7 +5,7 @@ defmodule AgentMachine.RunServer do
 
   use GenServer
 
-  alias AgentMachine.{AgentResult, AgentRunner, ContextBudget, ContextCompactor}
+  alias AgentMachine.{Agent, AgentResult, AgentRunner, ContextBudget, ContextCompactor}
   alias AgentMachine.Tools.PathGuard
 
   @default_heartbeat_interval_ms 10_000
@@ -60,7 +60,9 @@ defmodule AgentMachine.RunServer do
 
   @impl true
   def init({run_id, agents, finalizer, opts}) do
+    validate_goal_review_opts!(opts)
     agent_graph = initial_agent_graph(agents)
+    goal_reviewer = goal_reviewer_from_opts(opts)
     run_context = empty_run_context(agent_graph)
     {ready_agents, pending_agents} = split_ready_agents(agents, %{})
     initial_events = [run_started_event(run_id)] ++ skills_events(run_id, opts)
@@ -84,6 +86,10 @@ defmodule AgentMachine.RunServer do
       events: events,
       finalizer: finalizer,
       finalizer_started: false,
+      goal_reviewer: goal_reviewer,
+      goal_review_count: 0,
+      goal_review_continue_count: 0,
+      goal_review_completed: false,
       agent_graph: agent_graph,
       usage: nil,
       opts: opts,
@@ -171,6 +177,32 @@ defmodule AgentMachine.RunServer do
 
   defp split_ready_agents(agents, results) do
     Enum.split_with(agents, &dependencies_satisfied?(&1, results))
+  end
+
+  defp goal_reviewer_from_opts(opts) do
+    case Keyword.fetch(opts, :goal_reviewer) do
+      :error ->
+        nil
+
+      {:ok, reviewer} ->
+        Agent.new!(reviewer)
+    end
+  end
+
+  defp validate_goal_review_opts!(opts) do
+    case {Keyword.fetch(opts, :agentic_persistence_rounds), Keyword.fetch(opts, :goal_reviewer)} do
+      {:error, :error} ->
+        :ok
+
+      {{:ok, rounds}, {:ok, _reviewer}} ->
+        require_positive_integer!(rounds, :agentic_persistence_rounds)
+
+      {{:ok, _rounds}, :error} ->
+        raise ArgumentError, ":agentic_persistence_rounds requires :goal_reviewer"
+
+      {:error, {:ok, _reviewer}} ->
+        raise ArgumentError, ":goal_reviewer requires :agentic_persistence_rounds"
+    end
   end
 
   defp dependencies_satisfied?(agent, results) do
@@ -310,12 +342,12 @@ defmodule AgentMachine.RunServer do
     end
   end
 
-  defp store_result(run, _agent, result) do
+  defp store_result(run, agent, result) do
     run = %{run | results: Map.put(run.results, result.agent_id, result)}
 
     case merge_result_artifacts(run, result) do
       {:ok, run} ->
-        continue_run_after_result(run, result)
+        continue_run_after_result(run, agent, result)
 
       {:error, reason} ->
         fail_run(run, reason)
@@ -347,8 +379,11 @@ defmodule AgentMachine.RunServer do
     |> mark_running()
   end
 
-  defp continue_run_after_result(run, result) do
+  defp continue_run_after_result(run, agent, result) do
     cond do
+      goal_reviewer_agent?(agent) ->
+        continue_after_goal_review_result(run, result)
+
       finalizer_result?(run, result) and has_next_agents?(result) ->
         fail_run(run, "finalizer must not delegate follow-up agents")
 
@@ -360,6 +395,68 @@ defmodule AgentMachine.RunServer do
       true ->
         start_ready_pending_agents(run)
     end
+  end
+
+  defp continue_after_goal_review_result(run, %{status: :error} = result) do
+    fail_run(run, "goal reviewer #{result.agent_id} failed: #{result.error || "unknown error"}")
+  end
+
+  defp continue_after_goal_review_result(
+         run,
+         %{status: :ok, decision: %{mode: "complete"}} = result
+       ) do
+    event =
+      agentic_review_decided_event(
+        run,
+        result.agent_id,
+        "complete",
+        result.decision.reason,
+        []
+      )
+
+    run
+    |> Map.put(:goal_review_completed, true)
+    |> append_event(event)
+    |> start_ready_pending_agents()
+  end
+
+  defp continue_after_goal_review_result(
+         run,
+         %{status: :ok, decision: %{mode: "continue"}} = result
+       ) do
+    continue_count = run.goal_review_continue_count + 1
+    delegated_ids = Enum.map(result.next_agents || [], & &1.id)
+
+    run =
+      run
+      |> Map.put(:goal_review_continue_count, continue_count)
+      |> append_event(
+        agentic_review_decided_event(
+          %{run | goal_review_continue_count: continue_count},
+          result.agent_id,
+          "continue",
+          result.decision.reason,
+          delegated_ids
+        )
+      )
+
+    if continue_count > agentic_persistence_rounds!(run) do
+      fail_run(
+        run,
+        "agentic persistence exhausted after #{agentic_persistence_rounds!(run)} continue round(s)"
+      )
+    else
+      schedule_next_agents(run, result)
+      |> finish_or_fail(run)
+      |> start_ready_pending_agents()
+    end
+  end
+
+  defp continue_after_goal_review_result(run, result) do
+    fail_run(
+      run,
+      "goal reviewer #{result.agent_id} returned invalid decision: #{inspect(result.decision)}"
+    )
   end
 
   defp finish_or_fail({:ok, updated_run}, _run), do: finish_if_idle(updated_run)
@@ -437,6 +534,9 @@ defmodule AgentMachine.RunServer do
       run.pending_agents != [] ->
         mark_running(run)
 
+      should_start_goal_reviewer?(run) ->
+        start_goal_reviewer(run)
+
       should_start_finalizer?(run) ->
         start_finalizer(run)
 
@@ -461,7 +561,17 @@ defmodule AgentMachine.RunServer do
 
   defp should_start_finalizer?(%{finalizer: nil}), do: false
   defp should_start_finalizer?(%{finalizer_started: true}), do: false
-  defp should_start_finalizer?(run), do: not direct_planner_result?(run)
+
+  defp should_start_finalizer?(run) do
+    not direct_planner_result?(run) and goal_review_allows_finalizer?(run)
+  end
+
+  defp should_start_goal_reviewer?(%{goal_reviewer: nil}), do: false
+  defp should_start_goal_reviewer?(%{goal_review_completed: true}), do: false
+  defp should_start_goal_reviewer?(run), do: not direct_planner_result?(run)
+
+  defp goal_review_allows_finalizer?(%{goal_reviewer: nil}), do: true
+  defp goal_review_allows_finalizer?(%{goal_review_completed: completed}), do: completed
 
   defp direct_planner_result?(%{results: %{"planner" => %{status: :ok, decision: decision}}}) do
     direct_decision?(decision)
@@ -475,6 +585,44 @@ defmodule AgentMachine.RunServer do
 
   defp finalizer_result?(%{finalizer: nil}, _result), do: false
   defp finalizer_result?(%{finalizer: finalizer}, result), do: result.agent_id == finalizer.id
+
+  defp goal_reviewer_agent?(%Agent{metadata: metadata}) when is_map(metadata) do
+    metadata_value(metadata, :agent_machine_role) == "goal_reviewer"
+  end
+
+  defp goal_reviewer_agent?(_agent), do: false
+
+  defp start_goal_reviewer(run) do
+    case reserve_optional_step(run) do
+      {:ok, step_count} ->
+        review_count = run.goal_review_count + 1
+        reviewer = %{run.goal_reviewer | id: "goal-reviewer-#{review_count}"}
+
+        with {:ok, run} <- register_goal_reviewer(run, reviewer),
+             {:ok, run} <- maybe_compact_before_spawn(run, [reviewer], nil) do
+          run_context = run_context(run)
+          {tasks, events} = spawn_agents([reviewer], run.opts, run_context, run.agent_graph)
+
+          run
+          |> Map.merge(%{
+            tasks: tasks,
+            agent_order: run.agent_order ++ [reviewer.id],
+            goal_review_count: review_count,
+            step_count: step_count,
+            status: :running,
+            usage: nil,
+            finished_at: nil
+          })
+          |> append_events(events)
+        else
+          {:error, %{} = failed_run} -> failed_run
+          {:error, reason} -> fail_run(run, reason)
+        end
+
+      {:error, reason} ->
+        fail_run(run, reason)
+    end
+  end
 
   defp start_finalizer(run) do
     case reserve_optional_step(run) do
@@ -789,6 +937,18 @@ defmodule AgentMachine.RunServer do
         | agent_graph:
             Map.put(run.agent_graph, run.finalizer.id, agent_graph_entry(run.finalizer, nil, 0))
       }
+    end
+  end
+
+  defp register_goal_reviewer(run, reviewer) do
+    if Map.has_key?(run.agent_graph, reviewer.id) do
+      {:error, "goal reviewer id conflicts with existing agent id: #{inspect(reviewer.id)}"}
+    else
+      {:ok,
+       %{
+         run
+         | agent_graph: Map.put(run.agent_graph, reviewer.id, agent_graph_entry(reviewer, nil, 0))
+       }}
     end
   end
 
@@ -1247,6 +1407,21 @@ defmodule AgentMachine.RunServer do
     }
   end
 
+  defp agentic_review_decided_event(run, reviewer_id, mode, reason, delegated_ids) do
+    %{
+      type: :agentic_review_decided,
+      run_id: run.id,
+      agent_id: reviewer_id,
+      reviewer_id: reviewer_id,
+      mode: mode,
+      reason: reason,
+      round: run.goal_review_count,
+      continue_count: run.goal_review_continue_count,
+      delegated_agent_ids: delegated_ids,
+      at: DateTime.utc_now()
+    }
+  end
+
   defp result_duration_ms(%{
          started_at: %DateTime{} = started_at,
          finished_at: %DateTime{} = finished_at
@@ -1265,6 +1440,12 @@ defmodule AgentMachine.RunServer do
       :error ->
         {:error, "dynamic agent delegation requires explicit :max_steps option"}
     end
+  end
+
+  defp agentic_persistence_rounds!(run) do
+    rounds = Keyword.fetch!(run.opts, :agentic_persistence_rounds)
+    require_positive_integer!(rounds, :agentic_persistence_rounds)
+    rounds
   end
 
   defp validate_next_agents(run, next_agents, parent_agent_id) do

@@ -13,6 +13,8 @@ defmodule AgentMachine.Workflows.Agentic do
     provider = WorkflowProvider.provider_module(spec)
     pricing = WorkflowProvider.pricing(spec)
     swarm? = swarm_strategy?(route)
+    persistence? = not is_nil(spec.agentic_persistence_rounds)
+    validate_persistence_strategy!(persistence?, swarm?)
 
     planner = %{
       id: "planner",
@@ -34,11 +36,13 @@ defmodule AgentMachine.Workflows.Agentic do
       id: "finalizer",
       provider: provider,
       model: WorkflowProvider.model(spec),
-      instructions: finalizer_instructions(swarm?),
+      instructions: finalizer_instructions(swarm?, persistence?),
       input: "Create the final answer for this task: #{spec.task}",
       pricing: pricing,
       metadata: %{agent_machine_disable_tools: true}
     }
+
+    goal_reviewer = goal_reviewer(spec, provider, pricing, swarm?, persistence?)
 
     opts =
       [
@@ -48,6 +52,7 @@ defmodule AgentMachine.Workflows.Agentic do
         finalizer: finalizer,
         stream_response: spec.stream_response
       ]
+      |> maybe_put_agentic_persistence(spec.agentic_persistence_rounds, goal_reviewer)
       |> WorkflowProvider.put_http_opts(spec)
       |> WorkflowToolOptions.put_full_tool_opts(spec)
       |> WorkflowOptions.put_context_opts(spec)
@@ -58,6 +63,39 @@ defmodule AgentMachine.Workflows.Agentic do
   defp swarm_strategy?(%{strategy: "swarm"}), do: true
   defp swarm_strategy?(%{"strategy" => "swarm"}), do: true
   defp swarm_strategy?(_route), do: false
+
+  defp validate_persistence_strategy!(true, true) do
+    raise ArgumentError, "agentic persistence cannot be combined with swarm strategy in v1"
+  end
+
+  defp validate_persistence_strategy!(_persistence?, _swarm?), do: :ok
+
+  defp maybe_put_agentic_persistence(opts, nil, nil), do: opts
+
+  defp maybe_put_agentic_persistence(opts, rounds, goal_reviewer) do
+    opts
+    |> Keyword.put(:agentic_persistence_rounds, rounds)
+    |> Keyword.put(:goal_reviewer, goal_reviewer)
+  end
+
+  defp goal_reviewer(_spec, _provider, _pricing, _swarm?, false), do: nil
+
+  defp goal_reviewer(spec, provider, pricing, swarm?, true) do
+    %{
+      id: "goal-reviewer",
+      provider: provider,
+      model: WorkflowProvider.model(spec),
+      instructions: goal_reviewer_instructions(),
+      input: "Review whether this task is complete: #{spec.task}",
+      pricing: pricing,
+      metadata: %{
+        agent_machine_response: "agentic_review",
+        agent_machine_role: "goal_reviewer",
+        agent_machine_disable_tools: true,
+        agent_machine_worker_instructions: worker_runtime_instructions(swarm?)
+      }
+    }
+  end
 
   defp maybe_put_swarm_strategy(metadata, true),
     do: Map.put(metadata, :agent_machine_strategy, "swarm")
@@ -169,11 +207,51 @@ defmodule AgentMachine.Workflows.Agentic do
     end
   end
 
-  defp finalizer_instructions(false) do
+  defp goal_reviewer_instructions do
+    """
+    You are the goal reviewer for an AgentMachine agentic run.
+
+    AgentMachine runtime model:
+    - You inspect prior planner and worker results from runtime context.
+    - You either declare the user goal complete or delegate concrete follow-up worker agents.
+    - You do not directly spawn OS processes, run tools, browse, edit files, or verify state yourself.
+    - Worker agents start from the follow-up input/instructions you provide plus runtime context.
+
+    Return only JSON with this shape:
+    {"decision":{"mode":"complete","reason":"non-empty evidence-based reason"},"output":"review note","next_agents":[]}
+    or:
+    {"decision":{"mode":"continue","reason":"non-empty evidence-based reason"},"output":"review note","next_agents":[{"id":"follow-up-id","input":"worker task","instructions":"optional worker instructions"}]}
+
+    Strict JSON rules:
+    - Return one complete JSON object only.
+    - Do not wrap the object in markdown fences, prose, bullets, comments, XML, or any other text.
+    - Use double quotes for every key and string value.
+    - Do not use trailing commas after the last object property or array item.
+    - Escape newlines, quotes, and backslashes inside string values.
+    - Ensure every array and object is closed before sending the response.
+
+    Completion rules:
+    - Use mode "complete" only when prior results and tool_results contain enough evidence that the requested goal is complete.
+    - Use mode "continue" when required work is missing, failed, partial, unverified, or contradicted by tool results.
+    - Do not report earlier failures as resolved unless later worker results or tool_results prove recovery.
+    - Do not fabricate file, command, browser, network, or tool outcomes.
+    - Keep side-effect claims tied to actual tool_results.
+
+    Follow-up delegation rules:
+    - Delegate concrete worker tasks with exact paths, commands, acceptance criteria, missing evidence, and expected success proof.
+    - For a single-owner task, create one follow-up worker that inspects and changes state sequentially. Do not split one owner task into parallel workers.
+    - Use depends_on only when follow-up workers have real ordering dependencies.
+    - Tell follow-up workers to report partial failures and tool errors instead of pretending the goal is complete.
+    """
+    |> String.trim()
+  end
+
+  defp finalizer_instructions(false, persistence?) do
     """
     Create the final user-facing answer from the completed run context.
     If the planner decision mode is "direct", return the planner output as the final answer.
     If the planner decision mode is "delegate", use worker outputs and tool_results to create the final answer.
+    #{reviewer_finalizer_instruction(persistence?)}
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
     Say what completed, what failed or remained partial, which side effects are confirmed by tool_results, and what was not verified.
@@ -182,9 +260,9 @@ defmodule AgentMachine.Workflows.Agentic do
     |> String.trim()
   end
 
-  defp finalizer_instructions(true) do
+  defp finalizer_instructions(true, persistence?) do
     [
-      finalizer_instructions(false),
+      finalizer_instructions(false, persistence?),
       """
       Swarm finalization rules:
       - Summarize which variants were created and where their workspaces live.
@@ -196,5 +274,11 @@ defmodule AgentMachine.Workflows.Agentic do
     ]
     |> Enum.join("\n\n")
     |> String.trim()
+  end
+
+  defp reviewer_finalizer_instruction(false), do: ""
+
+  defp reviewer_finalizer_instruction(true) do
+    "Use goal reviewer completion evidence when present. Treat earlier failures as resolved only when later worker results or the reviewer decision explicitly support recovery."
   end
 end

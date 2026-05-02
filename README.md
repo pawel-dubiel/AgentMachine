@@ -24,6 +24,9 @@ were available, which agents ran, and what changed.
 - Load reusable skills that add task-specific instructions and references.
 - Route simple requests through a fast path and larger tasks through agentic
   planner/worker flows, using a local zero-shot intent model when installed.
+- Run opt-in bounded agentic persistence, where the runtime reviews worker
+  outcomes, delegates concrete follow-up work, and only finalizes after an
+  explicit completion decision.
 - Create controlled swarm runs for explicit multiple-variant requests, with
   isolated variant workspaces and evaluator comparison.
 - Compact long conversations manually and compact run context automatically
@@ -98,6 +101,15 @@ delegation responses are strict JSON and fail fast when the provider returns
 malformed JSON. Assistant responses and agent final output render basic
 Markdown formatting such as bold text, headings, inline code, links, lists, and
 blockquotes.
+
+Agentic persistence is explicit and bounded. When
+`agentic_persistence_rounds` is set for an `agentic` run, the runtime starts a
+goal reviewer after the planner and workers go idle. The reviewer must return
+strict JSON saying either `complete` with no follow-up agents or `continue`
+with concrete worker specs. Each `continue` consumes one configured round and
+all reviewers/follow-up workers count against `max_steps`; exhaustion fails the
+run instead of summarizing success. Persistence is rejected for non-agentic
+workflows and for the swarm strategy in this version.
 
 **Swarm strategy**
 
@@ -207,6 +219,8 @@ Useful first commands:
 /context tokenizer <path>
 /context reserve <tokens>
 /context run-compaction on <compact-percent> <max-compactions>
+/agentic-persistence <rounds> <max-steps> <timeout-ms>
+/agentic-persistence off
 /tools off
 /tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
 /tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
@@ -376,6 +390,26 @@ stays unknown instead of assuming zero. Automatic run-context compaction only
 runs when enabled with a context window, compact threshold, maximum compaction
 count, and a known budget measurement; otherwise it emits a skipped event.
 The TUI mirrors the latest budget event in the status line.
+
+Bounded agentic persistence is also explicit:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider echo \
+  --timeout-ms 300000 \
+  --max-steps 9 \
+  --max-attempts 1 \
+  --agentic-persistence-rounds 2 \
+  --jsonl \
+  --stream-response \
+  "Finish this task and verify the outcome"
+```
+
+The same setting is available in the TUI with
+`/agentic-persistence <rounds> <max-steps> <timeout-ms>`. Enabling it forces
+the next runs to send `workflow=agentic` plus those exact budgets;
+`/agentic-persistence off` clears all persistence fields.
 
 Common Make targets:
 

@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added opt-in bounded agentic persistence for `--workflow agentic`, with
+  structured goal-review decisions, follow-up worker scheduling, exhaustion
+  failures, JSON/JSONL summary metadata, and TUI `/agentic-persistence`
+  controls.
 - Extended the LLM workflow router contract with `work_shape` and `route_hint`
   so broad codebase analysis can be routed agentically while Elixir keeps final
   capability and permission enforcement.

@@ -79,6 +79,62 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "validates agentic persistence rounds as an explicit agentic-only option" do
+    assert %RunSpec{agentic_persistence_rounds: 2} =
+             RunSpec.new!(%{
+               task: "do persistent work",
+               workflow: :agentic,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 6,
+               max_attempts: 1,
+               agentic_persistence_rounds: 2
+             })
+
+    for invalid <- [0, -1, "2"] do
+      assert_raise ArgumentError, ~r/:agentic_persistence_rounds/, fn ->
+        RunSpec.new!(%{
+          task: "do persistent work",
+          workflow: :agentic,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 6,
+          max_attempts: 1,
+          agentic_persistence_rounds: invalid
+        })
+      end
+    end
+
+    assert_raise ArgumentError, ~r/requires :workflow :agentic/, fn ->
+      RunSpec.new!(%{
+        task: "do persistent work",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        agentic_persistence_rounds: 1
+      })
+    end
+  end
+
+  test "agentic persistence rejects swarm strategy in v1" do
+    spec =
+      RunSpec.new!(%{
+        task: "compare approaches",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 8,
+        max_attempts: 1,
+        agentic_persistence_rounds: 1
+      })
+
+    assert_raise ArgumentError, ~r/cannot be combined with swarm strategy/, fn ->
+      Agentic.build!(spec, %{selected: "agentic", strategy: "swarm"})
+    end
+  end
+
   test "validates explicit context options without guessed defaults" do
     assert %RunSpec{
              context_window_tokens: 10_000,
@@ -1063,6 +1119,61 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.results["assistant"].status == "error"
   end
 
+  test "agentic persistence completion can resolve earlier worker failures in the client summary" do
+    summary =
+      ClientRunner.summarize_for_test!(%{
+        id: "run-1",
+        status: :completed,
+        results: %{
+          "worker-a" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "worker-a",
+            status: :error,
+            attempt: 1,
+            error: "first attempt failed"
+          },
+          "goal-reviewer-1" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "goal-reviewer-1",
+            status: :ok,
+            output: "review complete",
+            attempt: 1,
+            decision: %{mode: "complete", reason: "later evidence confirms recovery"}
+          },
+          "finalizer" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "finalizer",
+            status: :ok,
+            output: "final answer",
+            attempt: 1
+          }
+        },
+        artifacts: %{},
+        usage: nil,
+        opts: [agentic_persistence_rounds: 1],
+        events: [],
+        error: nil,
+        goal_review_continue_count: 1,
+        goal_review_completed: true,
+        agent_graph: %{
+          "worker-a" => %{parent_agent_id: "planner"},
+          "goal-reviewer-1" => %{agent_machine_role: "goal_reviewer"},
+          "finalizer" => %{}
+        }
+      })
+
+    assert summary.status == "completed"
+    assert summary.error == nil
+    assert summary.final_output == "final answer"
+
+    assert summary.agentic_persistence == %{
+             enabled: true,
+             rounds: 1,
+             continue_count: 1,
+             completed: true
+           }
+  end
+
   test "timeout summaries include timeout status and explicit reason" do
     summary =
       ClientRunner.summarize_for_test!(%{
@@ -1256,6 +1367,28 @@ defmodule AgentMachine.ClientRunnerTest do
         "1",
         "--event-session-id",
         "session-1",
+        "hello"
+      ])
+    end
+  end
+
+  test "mix agent_machine.run rejects agentic persistence outside agentic workflow" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--agentic-persistence-rounds requires --workflow agentic/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--agentic-persistence-rounds",
+        "1",
         "hello"
       ])
     end

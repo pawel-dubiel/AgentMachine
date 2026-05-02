@@ -29,8 +29,16 @@ type summary struct {
 	Skills             []skillSummary              `json:"skills"`
 	Checklist          []workItem                  `json:"checklist"`
 	Usage              usageSummary                `json:"usage"`
+	AgenticPersistence agenticPersistenceSummary   `json:"agentic_persistence"`
 	Events             []eventSummary              `json:"events"`
 	CapabilityRequired capabilityRequired          `json:"capability_required"`
+}
+
+type agenticPersistenceSummary struct {
+	Enabled       bool `json:"enabled"`
+	Rounds        *int `json:"rounds"`
+	ContinueCount int  `json:"continue_count"`
+	Completed     bool `json:"completed"`
 }
 
 type skillSummary struct {
@@ -113,6 +121,9 @@ type eventSummary struct {
 	Attempt               int            `json:"attempt"`
 	NextAttempt           int            `json:"next_attempt"`
 	Round                 int            `json:"round"`
+	ContinueCount         int            `json:"continue_count"`
+	Mode                  string         `json:"mode"`
+	ReviewerID            string         `json:"reviewer_id"`
 	ToolCallID            string         `json:"tool_call_id"`
 	Tool                  string         `json:"tool"`
 	Permission            string         `json:"permission"`
@@ -258,72 +269,77 @@ const (
 )
 
 type runConfig struct {
-	Task              string
-	Workflow          runWorkflow
-	Provider          provider
-	APIKey            string
-	Model             string
-	InputPrice        string
-	OutputPrice       string
-	HTTPTimeout       string
-	RunTimeout        string
-	ToolHarness       string
-	ToolRoot          string
-	ToolTimeout       string
-	ToolMaxRounds     string
-	ToolApproval      string
-	TestCommands      []string
-	MCPConfig         string
-	RouterMode        string
-	RouterModelDir    string
-	RouterTimeout     string
-	RouterConfidence  string
-	SkillsMode        string
-	SkillsDir         string
-	SkillNames        []string
-	AllowSkillScripts bool
-	ContextWindow     string
-	ContextWarning    string
-	ContextTokenizer  string
-	ReservedOutput    string
-	RunContextCompact string
-	ContextCompactPct string
-	MaxContextCompact string
-	LogFile           string
-	EventLogFile      string
-	EventSessionID    string
+	Task                     string
+	Workflow                 runWorkflow
+	Provider                 provider
+	APIKey                   string
+	Model                    string
+	InputPrice               string
+	OutputPrice              string
+	HTTPTimeout              string
+	RunTimeout               string
+	MaxSteps                 string
+	AgenticPersistenceRounds string
+	ToolHarness              string
+	ToolRoot                 string
+	ToolTimeout              string
+	ToolMaxRounds            string
+	ToolApproval             string
+	TestCommands             []string
+	MCPConfig                string
+	RouterMode               string
+	RouterModelDir           string
+	RouterTimeout            string
+	RouterConfidence         string
+	SkillsMode               string
+	SkillsDir                string
+	SkillNames               []string
+	AllowSkillScripts        bool
+	ContextWindow            string
+	ContextWarning           string
+	ContextTokenizer         string
+	ReservedOutput           string
+	RunContextCompact        string
+	ContextCompactPct        string
+	MaxContextCompact        string
+	LogFile                  string
+	EventLogFile             string
+	EventSessionID           string
 }
 
 type savedConfig struct {
-	OpenAIAPIKey      string   `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey  string   `json:"openrouter_api_key,omitempty"`
-	Workflow          string   `json:"workflow,omitempty"`
-	Provider          string   `json:"provider,omitempty"`
-	OpenAIModel       string   `json:"openai_model,omitempty"`
-	OpenRouterModel   string   `json:"openrouter_model,omitempty"`
-	Theme             string   `json:"theme,omitempty"`
-	ToolHarness       string   `json:"tool_harness,omitempty"`
-	ToolRoot          string   `json:"tool_root,omitempty"`
-	ToolTimeout       string   `json:"tool_timeout_ms,omitempty"`
-	ToolMaxRounds     string   `json:"tool_max_rounds,omitempty"`
-	ToolApproval      string   `json:"tool_approval_mode,omitempty"`
-	TestCommands      []string `json:"test_commands,omitempty"`
-	MCPConfig         string   `json:"mcp_config,omitempty"`
-	RouterMode        string   `json:"router_mode,omitempty"`
-	RouterModelDir    string   `json:"router_model_dir,omitempty"`
-	RouterTimeout     string   `json:"router_timeout_ms,omitempty"`
-	RouterConfidence  string   `json:"router_confidence_threshold,omitempty"`
-	SkillsMode        string   `json:"skills_mode,omitempty"`
-	SkillsDir         string   `json:"skills_dir,omitempty"`
-	SkillNames        []string `json:"skill_names,omitempty"`
-	AllowSkillScripts bool     `json:"allow_skill_scripts,omitempty"`
-	ContextWindow     string   `json:"context_window_tokens,omitempty"`
-	ContextWarning    string   `json:"context_warning_percent,omitempty"`
-	ContextTokenizer  string   `json:"context_tokenizer_path,omitempty"`
-	ReservedOutput    string   `json:"reserved_output_tokens,omitempty"`
-	RunContextCompact string   `json:"run_context_compaction,omitempty"`
-	ContextCompactPct string   `json:"run_context_compact_percent,omitempty"`
-	MaxContextCompact string   `json:"max_context_compactions,omitempty"`
+	OpenAIAPIKey               string   `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey           string   `json:"openrouter_api_key,omitempty"`
+	Workflow                   string   `json:"workflow,omitempty"`
+	Provider                   string   `json:"provider,omitempty"`
+	OpenAIModel                string   `json:"openai_model,omitempty"`
+	OpenRouterModel            string   `json:"openrouter_model,omitempty"`
+	Theme                      string   `json:"theme,omitempty"`
+	ToolHarness                string   `json:"tool_harness,omitempty"`
+	ToolRoot                   string   `json:"tool_root,omitempty"`
+	ToolTimeout                string   `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds              string   `json:"tool_max_rounds,omitempty"`
+	ToolApproval               string   `json:"tool_approval_mode,omitempty"`
+	TestCommands               []string `json:"test_commands,omitempty"`
+	MCPConfig                  string   `json:"mcp_config,omitempty"`
+	AgenticPersistenceRounds   string   `json:"agentic_persistence_rounds,omitempty"`
+	AgenticPersistenceMaxSteps string   `json:"agentic_persistence_max_steps,omitempty"`
+	AgenticPersistenceTimeout  string   `json:"agentic_persistence_timeout_ms,omitempty"`
+	RouterMode                 string   `json:"router_mode,omitempty"`
+	RouterModelDir             string   `json:"router_model_dir,omitempty"`
+	RouterTimeout              string   `json:"router_timeout_ms,omitempty"`
+	RouterConfidence           string   `json:"router_confidence_threshold,omitempty"`
+	SkillsMode                 string   `json:"skills_mode,omitempty"`
+	SkillsDir                  string   `json:"skills_dir,omitempty"`
+	SkillNames                 []string `json:"skill_names,omitempty"`
+	AllowSkillScripts          bool     `json:"allow_skill_scripts,omitempty"`
+	ContextWindow              string   `json:"context_window_tokens,omitempty"`
+	ContextWarning             string   `json:"context_warning_percent,omitempty"`
+	ContextTokenizer           string   `json:"context_tokenizer_path,omitempty"`
+	ReservedOutput             string   `json:"reserved_output_tokens,omitempty"`
+	RunContextCompact          string   `json:"run_context_compaction,omitempty"`
+	ContextCompactPct          string   `json:"run_context_compact_percent,omitempty"`
+	MaxContextCompact          string   `json:"max_context_compactions,omitempty"`
 }
 
 type startupOptions struct {
@@ -926,7 +942,11 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	if err != nil {
 		return m.withRunPreparationError(err), nil
 	}
-	config.Workflow = workflow
+	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
+		config.Workflow = workflowAgentic
+	} else {
+		config.Workflow = workflow
+	}
 	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
@@ -1282,6 +1302,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleCompactCommand(args)
 	case "context":
 		return m.handleContextCommand(args)
+	case "agentic-persistence":
+		return m.handleAgenticPersistenceCommand(args)
 	case "tools":
 		return m.handleToolsCommand(args)
 	case "skills":
@@ -1536,6 +1558,83 @@ func (m model) saveContextConfig(message string) (tea.Model, tea.Cmd) {
 	}
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: message})
 	return m, nil
+}
+
+func (m model) handleAgenticPersistenceCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.agenticPersistenceStatus()})
+		return m, nil
+	}
+
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.AgenticPersistenceRounds = ""
+		m.savedConfig.AgenticPersistenceMaxSteps = ""
+		m.savedConfig.AgenticPersistenceTimeout = ""
+		if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.agenticPersistenceStatus()})
+		return m, nil
+	}
+
+	if len(args) != 3 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /agentic-persistence <rounds> <max-steps> <timeout-ms>|off"})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[0], "agentic persistence rounds"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[1], "max steps"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[2], "timeout ms"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	m.savedConfig.AgenticPersistenceRounds = args[0]
+	m.savedConfig.AgenticPersistenceMaxSteps = args[1]
+	m.savedConfig.AgenticPersistenceTimeout = args[2]
+	if err := validateSavedAgenticPersistenceConfig(m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.agenticPersistenceStatus()})
+	return m, nil
+}
+
+func validateSavedAgenticPersistenceConfig(config savedConfig) error {
+	rounds := strings.TrimSpace(config.AgenticPersistenceRounds)
+	maxSteps := strings.TrimSpace(config.AgenticPersistenceMaxSteps)
+	timeout := strings.TrimSpace(config.AgenticPersistenceTimeout)
+	if rounds == "" && maxSteps == "" && timeout == "" {
+		return nil
+	}
+	if rounds == "" || maxSteps == "" || timeout == "" {
+		return errors.New("saved agentic persistence requires rounds, max steps, and timeout ms together")
+	}
+	return validateAgenticPersistenceConfig(runConfig{
+		Workflow:                 workflowAgentic,
+		MaxSteps:                 config.AgenticPersistenceMaxSteps,
+		RunTimeout:               config.AgenticPersistenceTimeout,
+		AgenticPersistenceRounds: config.AgenticPersistenceRounds,
+	})
+}
+
+func (m model) agenticPersistenceStatus() string {
+	if strings.TrimSpace(m.savedConfig.AgenticPersistenceRounds) == "" {
+		return "agentic persistence: off"
+	}
+	return "agentic persistence: rounds=" + m.savedConfig.AgenticPersistenceRounds +
+		" max_steps=" + m.savedConfig.AgenticPersistenceMaxSteps +
+		" timeout_ms=" + m.savedConfig.AgenticPersistenceTimeout
 }
 
 func (m model) handleQueueCommand(args []string) (tea.Model, tea.Cmd) {
@@ -3158,34 +3257,40 @@ func (m *model) applySummaryResults(summary summary) {
 
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
-		Task:              task,
-		Workflow:          workflowAuto,
-		Provider:          m.provider,
-		APIKey:            m.apiKey(),
-		Model:             m.modelID(),
-		ToolHarness:       m.savedConfig.ToolHarness,
-		ToolRoot:          m.savedConfig.ToolRoot,
-		ToolTimeout:       m.savedConfig.ToolTimeout,
-		ToolMaxRounds:     m.savedConfig.ToolMaxRounds,
-		ToolApproval:      m.savedConfig.ToolApproval,
-		TestCommands:      append([]string(nil), m.savedConfig.TestCommands...),
-		MCPConfig:         m.savedConfig.MCPConfig,
-		RouterMode:        m.savedConfig.RouterMode,
-		RouterModelDir:    m.savedConfig.RouterModelDir,
-		RouterTimeout:     m.savedConfig.RouterTimeout,
-		RouterConfidence:  m.savedConfig.RouterConfidence,
-		SkillsMode:        m.savedConfig.SkillsMode,
-		SkillsDir:         m.savedConfig.SkillsDir,
-		SkillNames:        append([]string(nil), m.savedConfig.SkillNames...),
-		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
-		ContextWarning:    m.savedConfig.ContextWarning,
-		ContextTokenizer:  m.savedConfig.ContextTokenizer,
-		ReservedOutput:    m.savedConfig.ReservedOutput,
-		RunContextCompact: m.savedConfig.RunContextCompact,
-		ContextCompactPct: m.savedConfig.ContextCompactPct,
-		MaxContextCompact: m.savedConfig.MaxContextCompact,
-		EventLogFile:      m.eventLogFile,
-		EventSessionID:    m.eventSessionID,
+		Task:                     task,
+		Workflow:                 workflowAuto,
+		Provider:                 m.provider,
+		APIKey:                   m.apiKey(),
+		Model:                    m.modelID(),
+		ToolHarness:              m.savedConfig.ToolHarness,
+		ToolRoot:                 m.savedConfig.ToolRoot,
+		ToolTimeout:              m.savedConfig.ToolTimeout,
+		ToolMaxRounds:            m.savedConfig.ToolMaxRounds,
+		ToolApproval:             m.savedConfig.ToolApproval,
+		TestCommands:             append([]string(nil), m.savedConfig.TestCommands...),
+		MCPConfig:                m.savedConfig.MCPConfig,
+		MaxSteps:                 m.savedConfig.AgenticPersistenceMaxSteps,
+		AgenticPersistenceRounds: m.savedConfig.AgenticPersistenceRounds,
+		RouterMode:               m.savedConfig.RouterMode,
+		RouterModelDir:           m.savedConfig.RouterModelDir,
+		RouterTimeout:            m.savedConfig.RouterTimeout,
+		RouterConfidence:         m.savedConfig.RouterConfidence,
+		SkillsMode:               m.savedConfig.SkillsMode,
+		SkillsDir:                m.savedConfig.SkillsDir,
+		SkillNames:               append([]string(nil), m.savedConfig.SkillNames...),
+		AllowSkillScripts:        m.savedConfig.AllowSkillScripts,
+		ContextWarning:           m.savedConfig.ContextWarning,
+		ContextTokenizer:         m.savedConfig.ContextTokenizer,
+		ReservedOutput:           m.savedConfig.ReservedOutput,
+		RunContextCompact:        m.savedConfig.RunContextCompact,
+		ContextCompactPct:        m.savedConfig.ContextCompactPct,
+		MaxContextCompact:        m.savedConfig.MaxContextCompact,
+		EventLogFile:             m.eventLogFile,
+		EventSessionID:           m.eventSessionID,
+	}
+	if strings.TrimSpace(m.savedConfig.AgenticPersistenceRounds) != "" {
+		config.Workflow = workflowAgentic
+		config.RunTimeout = m.savedConfig.AgenticPersistenceTimeout
 	}
 
 	if pricing, ok := m.selectedModelPricing(config.Model); ok {
@@ -3325,6 +3430,9 @@ func validateConfig(config runConfig) error {
 	if _, err := parseWorkflow(string(config.Workflow)); err != nil {
 		return err
 	}
+	if err := validateAgenticPersistenceConfig(config); err != nil {
+		return err
+	}
 	if err := validateToolConfig(config); err != nil {
 		return err
 	}
@@ -3370,6 +3478,32 @@ func validateConfig(config runConfig) error {
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+func validateAgenticPersistenceConfig(config runConfig) error {
+	if strings.TrimSpace(config.MaxSteps) != "" {
+		if err := validatePositiveInt(config.MaxSteps, "max steps"); err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(config.AgenticPersistenceRounds) == "" {
+		return nil
+	}
+
+	if config.Workflow != workflowAgentic {
+		return errors.New("agentic persistence requires agentic workflow")
+	}
+	if err := validatePositiveInt(config.AgenticPersistenceRounds, "agentic persistence rounds"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(config.MaxSteps) == "" {
+		return errors.New("agentic persistence requires explicit max steps")
+	}
+	if strings.TrimSpace(config.RunTimeout) == "" {
+		return errors.New("agentic persistence requires explicit timeout ms")
+	}
+	return validatePositiveInt(config.RunTimeout, "run timeout ms")
 }
 
 func validateCompactConfig(config runConfig) error {
@@ -3929,7 +4063,7 @@ func (m model) contextStatus() string {
 
 func runningStatus(config runConfig) string {
 	idleTimeout := runTimeoutMS(config)
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func hardCapTimeoutMS(idleTimeout string) string {
@@ -3949,6 +4083,13 @@ func runWorkflowStatus(workflow runWorkflow) string {
 	default:
 		return emptyAsNone(string(workflow))
 	}
+}
+
+func runAgenticPersistenceStatus(config runConfig) string {
+	if strings.TrimSpace(config.AgenticPersistenceRounds) == "" {
+		return "persistence off"
+	}
+	return "persistence rounds=" + config.AgenticPersistenceRounds + " max_steps=" + runMaxSteps(config)
 }
 
 func runToolsStatus(config runConfig) string {
@@ -4125,6 +4266,10 @@ func (m *model) applySavedSettings() error {
 
 	if err := validateSavedContextConfig(m.savedConfig); err != nil {
 		return fmt.Errorf("invalid saved context settings in TUI config: %w", err)
+	}
+
+	if err := validateSavedAgenticPersistenceConfig(m.savedConfig); err != nil {
+		return fmt.Errorf("invalid saved agentic persistence in TUI config: %w", err)
 	}
 
 	if m.providerSet {

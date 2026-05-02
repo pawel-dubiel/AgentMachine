@@ -314,7 +314,7 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	maxStepsValue, err := positiveIntValue(maxSteps(config.Workflow), "max steps")
+	maxStepsValue, err := positiveIntValue(runMaxSteps(config), "max steps")
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +369,13 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 	}
 	if err := putSessionContextPayload(run, config); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
+		rounds, err := positiveIntValue(config.AgenticPersistenceRounds, "agentic persistence rounds")
+		if err != nil {
+			return nil, err
+		}
+		run["agentic_persistence_rounds"] = rounds
 	}
 	return run, nil
 }
@@ -547,7 +554,7 @@ func buildRunArgs(config runConfig) []string {
 		"--workflow", string(config.Workflow),
 		"--provider", string(config.Provider),
 		"--timeout-ms", runTimeoutMS(config),
-		"--max-steps", maxSteps(config.Workflow),
+		"--max-steps", runMaxSteps(config),
 		"--max-attempts", "1",
 		"--jsonl",
 		"--stream-response",
@@ -639,6 +646,10 @@ func buildRunArgs(config runConfig) []string {
 	}
 	if config.MaxContextCompact != "" {
 		args = append(args, "--max-context-compactions", config.MaxContextCompact)
+	}
+
+	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
+		args = append(args, "--agentic-persistence-rounds", config.AgenticPersistenceRounds)
 	}
 
 	return append(args, config.Task)
@@ -746,6 +757,13 @@ func maxSteps(workflow runWorkflow) string {
 	default:
 		return ""
 	}
+}
+
+func runMaxSteps(config runConfig) string {
+	if strings.TrimSpace(config.MaxSteps) != "" {
+		return config.MaxSteps
+	}
+	return maxSteps(config.Workflow)
 }
 
 func runTimeoutMS(config runConfig) string {

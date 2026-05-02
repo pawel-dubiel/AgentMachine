@@ -127,6 +127,35 @@ func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesAgenticPersistenceOnlyWhenEnabled(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:                     "review this project",
+		Workflow:                 workflowAgentic,
+		Provider:                 providerEcho,
+		RunTimeout:               "300000",
+		MaxSteps:                 "9",
+		AgenticPersistenceRounds: "2",
+	})
+
+	if !containsArgPair(args, "--workflow", "agentic") ||
+		!containsArgPair(args, "--timeout-ms", "300000") ||
+		!containsArgPair(args, "--max-steps", "9") {
+		t.Fatalf("expected explicit persistence runtime args, got %#v", args)
+	}
+	assertContainsSequence(t, args, []string{"--agentic-persistence-rounds", "2", "review this project"})
+
+	withoutPersistence := buildRunArgs(runConfig{
+		Task:     "review this project",
+		Workflow: workflowAgentic,
+		Provider: providerEcho,
+	})
+	for _, arg := range withoutPersistence {
+		if arg == "--agentic-persistence-rounds" {
+			t.Fatalf("unexpected persistence flag when disabled: %#v", withoutPersistence)
+		}
+	}
+}
+
 func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 	payload, err := sessionRunPayload(runConfig{
 		Task:              "review this project",
@@ -166,6 +195,27 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 	pricing, ok := payload["pricing"].(map[string]any)
 	if !ok || pricing["input_per_million"] != 1.0 || pricing["output_per_million"] != 3.0 {
 		t.Fatalf("unexpected pricing payload: %#v", payload["pricing"])
+	}
+}
+
+func TestSessionRunPayloadIncludesAgenticPersistenceWhenEnabled(t *testing.T) {
+	payload, err := sessionRunPayload(runConfig{
+		Task:                     "review this project",
+		Workflow:                 workflowAgentic,
+		Provider:                 providerEcho,
+		RunTimeout:               "300000",
+		MaxSteps:                 "9",
+		AgenticPersistenceRounds: "2",
+	})
+	if err != nil {
+		t.Fatalf("sessionRunPayload returned error: %v", err)
+	}
+
+	if payload["workflow"] != "agentic" || payload["max_steps"] != 9 || payload["timeout_ms"] != 300000 {
+		t.Fatalf("unexpected agentic persistence payload: %#v", payload)
+	}
+	if payload["agentic_persistence_rounds"] != 2 {
+		t.Fatalf("expected persistence rounds in payload, got %#v", payload)
 	}
 }
 
@@ -1601,6 +1651,53 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 	}
 }
 
+func TestAgentsViewRendersWorkChecklistToolRows(t *testing.T) {
+	m := model{
+		agents: map[string]agentState{
+			"planner": {ID: "planner", Status: "ok"},
+			"worker":  {ID: "worker", ParentAgentID: "planner", Status: "running"},
+		},
+		agentOrder: []string{"planner", "worker"},
+		workItems: map[string]workItem{
+			"agent:planner": {
+				ID:            "agent:planner",
+				Kind:          "agent",
+				Label:         "planner",
+				Status:        "done",
+				LatestSummary: "planner finished",
+			},
+			"agent:worker": {
+				ID:            "agent:worker",
+				Kind:          "agent",
+				Label:         "worker",
+				ParentID:      "agent:planner",
+				Status:        "running",
+				LatestSummary: "worker started attempt 1",
+			},
+			"tool:worker:call-1": {
+				ID:            "tool:worker:call-1",
+				Kind:          "tool",
+				Label:         "worker read README.md",
+				ParentID:      "agent:worker",
+				Status:        "done",
+				LatestSummary: "worker read README.md",
+			},
+		},
+		workOrder: []string{"agent:planner", "agent:worker", "tool:worker:call-1"},
+		eventLog: []eventSummary{
+			{Type: "tool_call_finished", AgentID: "worker", Summary: "worker read README.md"},
+		},
+	}
+
+	view := m.agentsView()
+	if !strings.Contains(view, "Latest event") {
+		t.Fatalf("expected latest event label in agents view, got %q", view)
+	}
+	if !strings.Contains(view, "Work") || !strings.Contains(view, "worker read README.md") {
+		t.Fatalf("expected work checklist rows in agents view, got %q", view)
+	}
+}
+
 func TestResolveConfigUsesOpenAIPricingProfileAndTimeoutDefault(t *testing.T) {
 	resolved, err := resolveConfig(runConfig{
 		Task:     "review this project",
@@ -2376,6 +2473,72 @@ func TestMCPConfigCommandRejectsMissingToolBudget(t *testing.T) {
 	}
 }
 
+func TestAgenticPersistenceCommandPersistsExplicitValues(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/agentic-persistence 2 9 300000")
+	result := modelAfter.(model)
+
+	if result.savedConfig.AgenticPersistenceRounds != "2" ||
+		result.savedConfig.AgenticPersistenceMaxSteps != "9" ||
+		result.savedConfig.AgenticPersistenceTimeout != "300000" {
+		t.Fatalf("expected agentic persistence values, got %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AgenticPersistenceRounds != "2" ||
+		loaded.AgenticPersistenceMaxSteps != "9" ||
+		loaded.AgenticPersistenceTimeout != "300000" {
+		t.Fatalf("expected persisted agentic persistence values, got %#v", loaded)
+	}
+}
+
+func TestAgenticPersistenceCommandClearsAllFields(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		configPath: configPath,
+		savedConfig: savedConfig{
+			AgenticPersistenceRounds:   "2",
+			AgenticPersistenceMaxSteps: "9",
+			AgenticPersistenceTimeout:  "300000",
+		},
+	}
+
+	modelAfter, _ := m.handleCommand("/agentic-persistence off")
+	result := modelAfter.(model)
+
+	if result.savedConfig.AgenticPersistenceRounds != "" ||
+		result.savedConfig.AgenticPersistenceMaxSteps != "" ||
+		result.savedConfig.AgenticPersistenceTimeout != "" {
+		t.Fatalf("expected cleared persistence config, got %#v", result.savedConfig)
+	}
+}
+
+func TestAgenticPersistenceCommandRejectsInvalidValues(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{configPath: configPath}
+
+	modelAfter, _ := m.handleCommand("/agentic-persistence 0 9 300000")
+	result := modelAfter.(model)
+
+	if result.savedConfig.AgenticPersistenceRounds != "" {
+		t.Fatalf("expected invalid persistence config not to save, got %#v", result.savedConfig)
+	}
+	if len(result.messages) == 0 ||
+		!strings.Contains(result.messages[len(result.messages)-1].Text, "positive integer") {
+		t.Fatalf("expected validation message, got %#v", result.messages)
+	}
+}
+
 func TestMCPConfigCommandRejectsInheritedToolBudget(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
@@ -2935,6 +3098,59 @@ func TestFilesystemWriteStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 	}
 	if result.pendingToolTask != "" || result.pendingToolHarness != "" || result.pendingToolRoot != "" {
 		t.Fatalf("expected no TUI-inferred tool request, got task=%q harness=%q root=%q", result.pendingToolTask, result.pendingToolHarness, result.pendingToolRoot)
+	}
+}
+
+func TestStartRunForcesAgenticWorkflowWhenPersistenceEnabled(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		configPath:  configPath,
+		savedConfig: savedConfig{
+			AgenticPersistenceRounds:   "2",
+			AgenticPersistenceMaxSteps: "9",
+			AgenticPersistenceTimeout:  "300000",
+		},
+	}
+
+	updated, cmd := m.startRun("review this project")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected runtime command")
+	}
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected agentic workflow, got %q", result.activeConfig.Workflow)
+	}
+	if result.activeConfig.AgenticPersistenceRounds != "2" ||
+		result.activeConfig.MaxSteps != "9" ||
+		result.activeConfig.RunTimeout != "300000" {
+		t.Fatalf("expected explicit persistence runtime config, got %#v", result.activeConfig)
+	}
+}
+
+func TestValidateConfigRejectsIncompleteAgenticPersistence(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:                     "review this project",
+		Workflow:                 workflowAgentic,
+		Provider:                 providerEcho,
+		AgenticPersistenceRounds: "2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "explicit max steps") {
+		t.Fatalf("expected missing max steps error, got %v", err)
+	}
+
+	err = validateConfig(runConfig{
+		Task:                     "review this project",
+		Workflow:                 workflowBasic,
+		Provider:                 providerEcho,
+		RunTimeout:               "300000",
+		MaxSteps:                 "9",
+		AgenticPersistenceRounds: "2",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires agentic workflow") {
+		t.Fatalf("expected non-agentic workflow error, got %v", err)
 	}
 }
 

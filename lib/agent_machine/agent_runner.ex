@@ -3,6 +3,7 @@ defmodule AgentMachine.AgentRunner do
 
   alias AgentMachine.{
     Agent,
+    AgenticReviewResponse,
     AgentResult,
     ContextBudget,
     DelegationResponse,
@@ -29,7 +30,7 @@ defmodule AgentMachine.AgentRunner do
     case complete_agent(agent, opts, run_id, attempt) do
       {:ok, %{payload: %{output: output} = payload, usage: provider_usage} = completion}
       when is_binary(output) ->
-        payload = DelegationResponse.normalize_payload!(agent, payload)
+        payload = normalize_structured_payload!(agent, payload)
         output = payload.output
         usage = Usage.from_provider!(agent, run_id, provider_usage)
         decision = decision_from_payload!(payload)
@@ -140,6 +141,14 @@ defmodule AgentMachine.AgentRunner do
       started_at: started_at,
       finished_at: DateTime.utc_now()
     }
+  end
+
+  defp normalize_structured_payload!(agent, payload) do
+    if AgenticReviewResponse.applies?(agent) do
+      AgenticReviewResponse.normalize_payload!(agent, payload)
+    else
+      DelegationResponse.normalize_payload!(agent, payload)
+    end
   end
 
   defp complete_agent(agent, opts, run_id, attempt) do

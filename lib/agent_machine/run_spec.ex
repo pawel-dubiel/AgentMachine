@@ -40,6 +40,7 @@ defmodule AgentMachine.RunSpec do
     :run_context_compaction,
     :run_context_compact_percent,
     :max_context_compactions,
+    :agentic_persistence_rounds,
     :router_mode,
     :router_model_dir,
     :router_timeout_ms,
@@ -78,6 +79,7 @@ defmodule AgentMachine.RunSpec do
           run_context_compaction: :off | :on,
           run_context_compact_percent: pos_integer() | nil,
           max_context_compactions: pos_integer() | nil,
+          agentic_persistence_rounds: pos_integer() | nil,
           router_mode: :deterministic | :local | :llm,
           router_model_dir: binary() | nil,
           router_timeout_ms: pos_integer() | nil,
@@ -115,6 +117,7 @@ defmodule AgentMachine.RunSpec do
     validate_skill_options!(spec)
     validate_tool_options!(spec)
     validate_context_options!(spec)
+    validate_agentic_persistence_options!(spec)
     validate_router_options!(spec)
     spec
   end
@@ -257,6 +260,26 @@ defmodule AgentMachine.RunSpec do
     require_positive_integer!(spec.context_window_tokens, :context_window_tokens)
     require_percent!(spec.run_context_compact_percent, :run_context_compact_percent)
     require_positive_integer!(spec.max_context_compactions, :max_context_compactions)
+  end
+
+  defp validate_agentic_persistence_options!(%__MODULE__{agentic_persistence_rounds: nil}),
+    do: :ok
+
+  defp validate_agentic_persistence_options!(%__MODULE__{
+         workflow: :agentic,
+         agentic_persistence_rounds: rounds
+       }) do
+    require_positive_integer!(rounds, :agentic_persistence_rounds)
+  end
+
+  defp validate_agentic_persistence_options!(%__MODULE__{
+         workflow: workflow,
+         agentic_persistence_rounds: rounds
+       }) do
+    require_positive_integer!(rounds, :agentic_persistence_rounds)
+
+    raise ArgumentError,
+          "run spec :agentic_persistence_rounds requires :workflow :agentic, got: #{inspect(workflow)}"
   end
 
   defp require_run_context_compaction!(value) when value in [:off, :on], do: :ok

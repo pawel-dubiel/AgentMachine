@@ -469,7 +469,12 @@ func (m model) workChecklistView() string {
 		return m.agentChecklistViewFallback()
 	}
 
-	lines := []string{m.styles().Label.Render("Work")}
+	lines := append([]string{m.styles().Label.Render("Work")}, m.workChecklistRows()...)
+	return strings.Join(lines, "\n")
+}
+
+func (m model) workChecklistRows() []string {
+	lines := make([]string, 0, len(m.workOrder))
 	for _, id := range m.workOrder {
 		item, ok := m.workItems[id]
 		if !ok {
@@ -477,7 +482,7 @@ func (m model) workChecklistView() string {
 		}
 		lines = append(lines, m.workChecklistLine(item))
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func (m model) agentChecklistViewFallback() string {
@@ -990,6 +995,7 @@ func (m model) setupView() string {
 		"key: " + keyStatus(m.apiKey()),
 		m.routerStatus(),
 		m.toolsStatus(),
+		m.agenticPersistenceStatus(),
 		m.contextStatus(),
 		m.skillsStatus(),
 		"session log: " + emptyAsNone(m.eventLogFile),
@@ -1015,6 +1021,7 @@ func (m model) setupView() string {
 		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>",
 		"/context run-compaction off",
+		"/agentic-persistence <rounds> <max-steps> <timeout-ms>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",
@@ -1160,7 +1167,7 @@ func (m model) agentsView() string {
 
 	lines := []string{m.styles().Label.Render("Agents")}
 	if len(m.eventLog) > 0 {
-		lines = append(lines, liveActivityHeader(m), eventDisplayLineWithTheme(m.eventLog[len(m.eventLog)-1], m.activeTheme()), "")
+		lines = append(lines, m.styles().Label.Render("Latest event"), eventDisplayLineWithTheme(m.eventLog[len(m.eventLog)-1], m.activeTheme()), "")
 	}
 	if route := workflowRouteLine(m.lastSummary.WorkflowRoute); route != "" {
 		lines = append(lines, route, "")
@@ -1176,6 +1183,10 @@ func (m model) agentsView() string {
 			prefix = "> "
 		}
 		lines = append(lines, prefix+m.agentTreeLine(agent))
+	}
+	if rows := m.workChecklistRows(); len(rows) > 0 {
+		lines = append(lines, "", m.styles().Label.Render("Work"))
+		lines = append(lines, rows...)
 	}
 	lines = append(lines, "", "Enter opens selected agent. Use /agent <id>, Tab, Esc, or /back.")
 	return strings.Join(lines, "\n")
@@ -1386,6 +1397,7 @@ func helpTextForTheme(theme tuiTheme) string {
 		"/context tokenizer <path>|off",
 		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>|off",
+		"/agentic-persistence <rounds> <max-steps> <timeout-ms>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
 		"/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>",

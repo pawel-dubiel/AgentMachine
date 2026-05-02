@@ -805,6 +805,103 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.usage.agents == 4
   end
 
+  test "agentic persistence runs a reviewer before the finalizer" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 4,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("complete"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :completed
+    assert run.agent_order == ["planner", "worker-a", "goal-reviewer-1", "finalizer"]
+    assert run.results["goal-reviewer-1"].decision.mode == "complete"
+    assert run.goal_review_continue_count == 0
+    assert run.goal_review_completed == true
+    assert run.results["finalizer"].output =~ "reviewed=goal-reviewer-1 complete"
+
+    assert Enum.any?(run.events, fn event ->
+             event.type == :agentic_review_decided and event.reviewer_id == "goal-reviewer-1" and
+               event.mode == "complete" and event.round == 1 and event.continue_count == 0 and
+               event.delegated_agent_ids == []
+           end)
+  end
+
+  test "agentic persistence can continue once before completing and finalizing" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 6,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("continue-once"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :completed
+
+    assert run.agent_order == [
+             "planner",
+             "worker-a",
+             "goal-reviewer-1",
+             "follow-up",
+             "goal-reviewer-2",
+             "finalizer"
+           ]
+
+    assert run.results["goal-reviewer-1"].decision.mode == "continue"
+    assert run.results["goal-reviewer-1"].decision.delegated_agent_ids == ["follow-up"]
+    assert run.results["follow-up"].output == "follow-up output"
+    assert run.results["goal-reviewer-2"].decision.mode == "complete"
+    assert run.goal_review_continue_count == 1
+    assert run.goal_review_completed == true
+    assert run.results["finalizer"].output =~ "follow_up=true"
+  end
+
+  test "agentic persistence fails when continue decisions exhaust configured rounds" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 8,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("always-continue"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :failed
+    assert run.error =~ "agentic persistence exhausted after 1 continue round(s)"
+    assert run.goal_review_continue_count == 2
+    refute Map.has_key?(run.results, "finalizer")
+
+    assert Enum.count(run.events, &(&1.type == :agentic_review_decided)) == 2
+  end
+
+  test "agentic persistence reviewers and follow-ups count against max_steps" do
+    agents = [agentic_persistence_planner()]
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 4,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("continue-once"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :failed
+    assert run.error =~ "exceed max_steps 4"
+    assert run.agent_order == ["planner", "worker-a", "goal-reviewer-1", "follow-up"]
+    refute Map.has_key?(run.results, "goal-reviewer-2")
+    refute Map.has_key?(run.results, "finalizer")
+  end
+
   test "skips finalizer after a direct planner decision" do
     agents = [
       %{
@@ -834,6 +931,34 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["planner"].output == "Direct answer."
     assert run.results["planner"].decision.mode == "direct"
     assert run.usage.agents == 1
+  end
+
+  test "direct planner decisions bypass agentic persistence reviewers" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.StructuredDirectPlanner,
+        model: "test",
+        input: "answer directly",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+        metadata: %{agent_machine_response: "delegation"}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               finalizer: agentic_persistence_finalizer(),
+               goal_reviewer: agentic_persistence_reviewer("continue-once"),
+               agentic_persistence_rounds: 1
+             )
+
+    assert run.status == :completed
+    assert run.agent_order == ["planner"]
+    refute Map.has_key?(run.results, "goal-reviewer-1")
+    refute Map.has_key?(run.results, "finalizer")
+    assert run.goal_review_completed == false
   end
 
   test "fails fast when finalizer id duplicates an agent id" do
@@ -1911,6 +2036,41 @@ defmodule AgentMachine.OrchestratorTest do
     root
   end
 
+  defp agentic_persistence_planner do
+    %{
+      id: "planner",
+      provider: AgentMachine.TestProviders.AgenticPersistence,
+      model: "test",
+      input: "plan persistent work",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+  end
+
+  defp agentic_persistence_reviewer(mode) do
+    %{
+      id: "goal-reviewer",
+      provider: AgentMachine.TestProviders.AgenticPersistence,
+      model: "test",
+      input: mode,
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+      metadata: %{
+        agent_machine_response: "agentic_review",
+        agent_machine_role: "goal_reviewer",
+        agent_machine_worker_instructions: "Runtime follow-up rules."
+      }
+    }
+  end
+
+  defp agentic_persistence_finalizer do
+    %{
+      id: "finalizer",
+      provider: AgentMachine.TestProviders.AgenticPersistence,
+      model: "test",
+      input: "finalize persistent run",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+    }
+  end
+
   defp drain_approval_contexts(acc) do
     receive do
       {:approval_context, context} ->
@@ -2955,6 +3115,153 @@ defmodule AgentMachine.TestProviders.Finalizing do
       input: input,
       pricing: pricing
     }
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.AgenticPersistence do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.{Agent, JSON}
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    output = "planned persistent worker"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [
+         %{
+           id: "worker-a",
+           provider: __MODULE__,
+           model: "test",
+           input: "initial persistent worker",
+           pricing: agent.pricing
+         }
+       ]
+     }}
+  end
+
+  def complete(%Agent{id: "worker-a"} = agent, _opts) do
+    output = "worker-a output"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  def complete(%Agent{id: "follow-up"} = agent, _opts) do
+    output = "follow-up output"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  def complete(%Agent{id: "follow-up-" <> _suffix} = agent, _opts) do
+    output = "#{agent.id} output"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  def complete(%Agent{id: "goal-reviewer-" <> _suffix, input: "complete"} = agent, _opts) do
+    review_complete(agent, "initial worker completed the task")
+  end
+
+  def complete(%Agent{id: "goal-reviewer-" <> _suffix, input: "continue-once"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+
+    if Map.has_key?(context.results, "follow-up") do
+      review_complete(agent, "follow-up completed missing work")
+    else
+      review_continue(agent, "missing follow-up evidence", "follow-up")
+    end
+  end
+
+  def complete(%Agent{id: "goal-reviewer-" <> suffix, input: "always-continue"} = agent, _opts) do
+    review_continue(agent, "still missing evidence", "follow-up-#{suffix}")
+  end
+
+  def complete(%Agent{id: "finalizer"} = agent, opts) do
+    context = Keyword.fetch!(opts, :run_context)
+
+    reviewer =
+      context.results
+      |> Map.keys()
+      |> Enum.filter(&String.starts_with?(&1, "goal-reviewer-"))
+      |> Enum.sort()
+      |> List.last()
+
+    follow_up? = Map.has_key?(context.results, "follow-up")
+    output = "reviewed=#{reviewer} complete follow_up=#{follow_up?}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp review_complete(agent, reason) do
+    output = "review complete: #{reason}"
+
+    review(agent, %{
+      "decision" => %{"mode" => "complete", "reason" => reason},
+      "output" => output,
+      "next_agents" => []
+    })
+  end
+
+  defp review_continue(agent, reason, follow_up_id) do
+    output = "review continue: #{reason}"
+
+    review(agent, %{
+      "decision" => %{"mode" => "continue", "reason" => reason},
+      "output" => output,
+      "next_agents" => [
+        %{
+          "id" => follow_up_id,
+          "input" => "Collect missing completion evidence.",
+          "instructions" => "Report concrete evidence."
+        }
+      ]
+    })
+  end
+
+  defp review(agent, body) do
+    output = JSON.encode!(body)
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
   end
 
   defp usage(agent, output) do

@@ -14,6 +14,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     timeout_ms: :integer,
     max_steps: :integer,
     max_attempts: :integer,
+    agentic_persistence_rounds: :integer,
     http_timeout_ms: :integer,
     tool_harness: :keep,
     tool_timeout_ms: :integer,
@@ -220,14 +221,18 @@ defmodule Mix.Tasks.AgentMachine.Run do
   end
 
   defp attrs_from_opts(opts, positional) do
+    workflow = workflow_from_opts!(opts)
+    validate_agentic_persistence_opts!(opts, workflow)
+
     %{
       task: task_from_positional!(positional),
-      workflow: workflow_from_opts!(opts),
+      workflow: workflow,
       provider: provider_from_opts!(opts),
       model: Keyword.get(opts, :model),
       timeout_ms: fetch_required_option!(opts, :timeout_ms),
       max_steps: fetch_required_option!(opts, :max_steps),
       max_attempts: fetch_required_option!(opts, :max_attempts),
+      agentic_persistence_rounds: Keyword.get(opts, :agentic_persistence_rounds),
       http_timeout_ms: Keyword.get(opts, :http_timeout_ms),
       pricing: pricing_from_opts(opts),
       tool_harnesses: tool_harnesses_from_opts!(opts),
@@ -260,6 +265,20 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp task_from_positional!(positional) do
     Mix.raise("expected exactly one non-empty task argument, got: #{inspect(positional)}")
+  end
+
+  defp validate_agentic_persistence_opts!(opts, :agentic) do
+    if Keyword.has_key?(opts, :agentic_persistence_rounds) do
+      :ok
+    end
+  end
+
+  defp validate_agentic_persistence_opts!(opts, workflow) do
+    if Keyword.has_key?(opts, :agentic_persistence_rounds) do
+      Mix.raise(
+        "--agentic-persistence-rounds requires --workflow agentic, got: #{inspect(workflow)}"
+      )
+    end
   end
 
   defp workflow_from_opts!(opts) do

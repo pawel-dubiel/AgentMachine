@@ -280,6 +280,7 @@ defmodule AgentMachine.ClientRunner do
       checklist: [],
       usage: empty_usage(),
       events: [summarize_event(event)],
+      agentic_persistence: disabled_agentic_persistence_summary(),
       capability_required: CapabilityRequired.to_map(exception),
       task: spec.task
     }
@@ -296,11 +297,12 @@ defmodule AgentMachine.ClientRunner do
 
   defp summarize_run(run) do
     failed_results = failed_results(run.results)
+    unresolved_failed_results = unresolved_failed_results(run, failed_results)
 
     %{
       run_id: run.id,
-      status: summary_status(run, failed_results),
-      error: summary_error(run, failed_results),
+      status: summary_status(run, unresolved_failed_results),
+      error: summary_error(run, unresolved_failed_results),
       final_output: final_output(run),
       workflow_route: workflow_route(run),
       results: summarize_results(run.results),
@@ -308,6 +310,7 @@ defmodule AgentMachine.ClientRunner do
       skills: summarize_skills(run),
       checklist: RunChecklist.from_events(run.events),
       usage: run.usage || empty_usage(),
+      agentic_persistence: agentic_persistence_summary(run),
       events: Enum.map(run.events, &summarize_event/1)
     }
     |> Redactor.redact_output()
@@ -337,6 +340,44 @@ defmodule AgentMachine.ClientRunner do
     results
     |> Map.values()
     |> Enum.filter(&(&1.status == :error))
+  end
+
+  defp unresolved_failed_results(run, failed_results) do
+    if agentic_persistence_completed?(run) do
+      Enum.filter(failed_results, &terminal_failed_result?(run, &1))
+    else
+      failed_results
+    end
+  end
+
+  defp terminal_failed_result?(_run, %{agent_id: agent_id})
+       when agent_id in ["planner", "finalizer"],
+       do: true
+
+  defp terminal_failed_result?(run, %{agent_id: agent_id}) do
+    run.agent_graph
+    |> Map.get(agent_id, %{})
+    |> Map.get(:agent_machine_role)
+    |> Kernel.==("goal_reviewer")
+  end
+
+  defp agentic_persistence_completed?(run) do
+    agentic_persistence_summary(run).completed
+  end
+
+  defp agentic_persistence_summary(run) do
+    rounds = run |> Map.get(:opts, []) |> Keyword.get(:agentic_persistence_rounds)
+
+    %{
+      enabled: not is_nil(rounds),
+      rounds: rounds,
+      continue_count: Map.get(run, :goal_review_continue_count, 0),
+      completed: Map.get(run, :goal_review_completed, false)
+    }
+  end
+
+  defp disabled_agentic_persistence_summary do
+    %{enabled: false, rounds: nil, continue_count: 0, completed: false}
   end
 
   defp final_output(run) do

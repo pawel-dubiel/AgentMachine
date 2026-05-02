@@ -13,6 +13,7 @@ defmodule AgentMachine.SessionProtocol do
     "timeout_ms" => :timeout_ms,
     "max_steps" => :max_steps,
     "max_attempts" => :max_attempts,
+    "agentic_persistence_rounds" => :agentic_persistence_rounds,
     "http_timeout_ms" => :http_timeout_ms,
     "pricing" => :pricing,
     "tool_harness" => :tool_harness,

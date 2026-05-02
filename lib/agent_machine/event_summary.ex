@@ -40,6 +40,10 @@ defmodule AgentMachine.EventSummary do
     "#{agent_id} scheduled #{count} delegated agent(s)"
   end
 
+  defp summary(%{type: :agentic_review_decided, reviewer_id: reviewer_id, mode: mode}) do
+    "#{reviewer_id} decided agentic review #{mode}"
+  end
+
   defp summary(%{type: :provider_request_started, agent_id: agent_id}) do
     "#{agent_id} sent provider request"
   end
@@ -113,10 +117,13 @@ defmodule AgentMachine.EventSummary do
     event
     |> Map.take([
       :agent_id,
+      :reviewer_id,
       :parent_agent_id,
       :attempt,
       :next_attempt,
       :round,
+      :continue_count,
+      :mode,
       :tool_call_id,
       :request_id,
       :kind,

@@ -1,7 +1,7 @@
 defmodule AgentMachine.DelegationResponse do
   @moduledoc false
 
-  alias AgentMachine.{Agent, JSON}
+  alias AgentMachine.{Agent, DelegatedAgentSpec, JSON}
 
   def normalize_payload!(%Agent{} = agent, payload) do
     if structured_delegation_response?(agent) do
@@ -292,115 +292,11 @@ defmodule AgentMachine.DelegationResponse do
 
   defp normalize_delegated_specs!(_agent, next_agents) when next_agents == [], do: []
 
-  defp normalize_delegated_specs!(agent, next_agents) when is_list(next_agents) do
-    Enum.map(next_agents, &normalize_delegated_spec!(agent, &1))
-  end
-
-  defp normalize_delegated_specs!(_agent, next_agents) do
-    raise ArgumentError,
-          "agent_machine delegation response next_agents must be a list, got: #{inspect(next_agents)}"
-  end
-
-  defp normalize_delegated_spec!(agent, spec) when is_map(spec) do
-    allowed_keys = ["id", "input", "instructions", "metadata", "depends_on"]
-    unknown_keys = spec |> Map.keys() |> Enum.reject(&(&1 in allowed_keys))
-
-    if unknown_keys != [] do
-      raise ArgumentError,
-            "delegated worker spec contains unsupported key(s): #{inspect(unknown_keys)}"
-    end
-
-    %{
-      id: fetch_required_string!(spec, "id"),
-      provider: agent.provider,
-      model: agent.model,
-      input: fetch_required_string!(spec, "input"),
-      pricing: agent.pricing,
-      instructions: worker_instructions!(agent, optional_string!(spec, "instructions")),
-      metadata: optional_map!(spec, "metadata"),
-      depends_on: optional_string_list!(spec, "depends_on")
-    }
-  end
-
-  defp normalize_delegated_spec!(_agent, spec) do
-    raise ArgumentError, "delegated worker spec must be a JSON object, got: #{inspect(spec)}"
-  end
-
-  defp optional_string!(map, key) do
-    case Map.fetch(map, key) do
-      :error ->
-        nil
-
-      {:ok, nil} ->
-        nil
-
-      {:ok, value} when is_binary(value) and byte_size(value) > 0 ->
-        value
-
-      {:ok, value} ->
-        raise ArgumentError,
-              "delegated worker #{key} must be a non-empty string, got: #{inspect(value)}"
-    end
-  end
-
-  defp worker_instructions!(%Agent{metadata: metadata}, planner_instructions)
-       when is_map(metadata) do
-    case Map.get(metadata, :agent_machine_worker_instructions) ||
-           Map.get(metadata, "agent_machine_worker_instructions") do
-      nil ->
-        planner_instructions
-
-      runtime_instructions
-      when is_binary(runtime_instructions) and byte_size(runtime_instructions) > 0 ->
-        [runtime_instructions, planner_instructions]
-        |> Enum.reject(&is_nil/1)
-        |> Enum.join("\n\n")
-
-      invalid ->
-        raise ArgumentError,
-              "agent_machine_worker_instructions metadata must be a non-empty string, got: #{inspect(invalid)}"
-    end
-  end
-
-  defp worker_instructions!(_agent, planner_instructions), do: planner_instructions
-
-  defp optional_map!(map, key) do
-    case Map.fetch(map, key) do
-      :error ->
-        nil
-
-      {:ok, nil} ->
-        nil
-
-      {:ok, value} when is_map(value) ->
-        value
-
-      {:ok, value} ->
-        raise ArgumentError, "delegated worker #{key} must be an object, got: #{inspect(value)}"
-    end
-  end
-
-  defp optional_string_list!(map, key) do
-    case Map.fetch(map, key) do
-      :error ->
-        []
-
-      {:ok, value} when is_list(value) ->
-        validate_string_list!(value, key)
-        value
-
-      {:ok, value} ->
-        raise ArgumentError,
-              "delegated worker #{key} must be a list of strings, got: #{inspect(value)}"
-    end
-  end
-
-  defp validate_string_list!(value, key) do
-    if Enum.all?(value, &(is_binary(&1) and byte_size(&1) > 0)) do
-      :ok
-    else
-      raise ArgumentError,
-            "delegated worker #{key} must contain only non-empty strings, got: #{inspect(value)}"
-    end
-  end
+  defp normalize_delegated_specs!(agent, next_agents),
+    do:
+      DelegatedAgentSpec.normalize_specs!(
+        agent,
+        next_agents,
+        "agent_machine delegation response"
+      )
 end
