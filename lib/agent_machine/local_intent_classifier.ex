@@ -1,21 +1,10 @@
 defmodule AgentMachine.LocalIntentClassifier do
   @moduledoc false
 
-  alias AgentMachine.JSON
+  alias AgentMachine.{Intent, JSON}
 
   @model_id "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
-
-  @intents [
-    :none,
-    :file_read,
-    :file_mutation,
-    :code_mutation,
-    :test_command,
-    :time,
-    :web_browse,
-    :tool_use,
-    :delegation
-  ]
+  @intents Intent.intents()
 
   @hypotheses %{
     none: "This request is normal chat, explanation, or discussion without tool use.",
@@ -37,7 +26,7 @@ defmodule AgentMachine.LocalIntentClassifier do
   }
 
   def model_id, do: @model_id
-  def intents, do: @intents
+  def intents, do: Intent.intents()
 
   def candidate_inputs(input) when is_map(input) do
     premise = premise(input)
@@ -104,7 +93,8 @@ defmodule AgentMachine.LocalIntentClassifier do
 
   defp validate_scores!(scores) when is_list(scores) and length(scores) == length(@intents) do
     Enum.map(scores, fn
-      %{intent: intent, score: score} = item when intent in @intents and is_number(score) ->
+      %{intent: intent, score: score} = item when is_number(score) ->
+        intent = Intent.normalize!(intent, :intent)
         %{intent: intent, score: score * 1.0, reason: Map.get(item, :reason)}
 
       score ->

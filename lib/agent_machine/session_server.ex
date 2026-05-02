@@ -17,6 +17,7 @@ defmodule AgentMachine.SessionServer do
     ToolHarness,
     ToolPolicy,
     WorkflowOptions,
+    WorkflowProvider,
     WorkflowRouter
   }
 
@@ -346,9 +347,9 @@ defmodule AgentMachine.SessionServer do
   defp coordinator_agent(spec, context) do
     %{
       id: "coordinator",
-      provider: provider_module(spec),
-      model: model(spec),
-      pricing: pricing(spec),
+      provider: WorkflowProvider.provider_module(spec),
+      model: WorkflowProvider.model(spec),
+      pricing: WorkflowProvider.pricing(spec),
       input: coordinator_input(spec, context),
       instructions: coordinator_instructions()
     }
@@ -382,7 +383,7 @@ defmodule AgentMachine.SessionServer do
         SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
       end
     ]
-    |> put_http_opts(spec)
+    |> WorkflowProvider.put_http_opts(spec)
     |> WorkflowOptions.put_context_opts(spec)
   end
 
@@ -769,22 +770,6 @@ defmodule AgentMachine.SessionServer do
     })
 
     SessionWriter.write_line(state.writer, SessionProtocol.event_line!(event))
-  end
-
-  defp provider_module(%RunSpec{provider: :echo}), do: AgentMachine.Providers.Echo
-  defp provider_module(%RunSpec{provider: :openai}), do: AgentMachine.Providers.OpenAIResponses
-  defp provider_module(%RunSpec{provider: :openrouter}), do: AgentMachine.Providers.OpenRouterChat
-
-  defp model(%RunSpec{provider: :echo}), do: "echo"
-  defp model(%RunSpec{model: model}), do: model
-
-  defp pricing(%RunSpec{provider: :echo}), do: %{input_per_million: 0.0, output_per_million: 0.0}
-  defp pricing(%RunSpec{pricing: pricing}), do: pricing
-
-  defp put_http_opts(opts, %RunSpec{provider: :echo}), do: opts
-
-  defp put_http_opts(opts, %RunSpec{http_timeout_ms: http_timeout_ms}) do
-    Keyword.put(opts, :http_timeout_ms, http_timeout_ms)
   end
 
   defp current_attrs(%{current_attrs: attrs}) when is_map(attrs), do: {:ok, attrs}

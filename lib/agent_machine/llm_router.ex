@@ -3,9 +3,9 @@ defmodule AgentMachine.LLMRouter do
 
   use GenServer
 
-  alias AgentMachine.Agent
+  alias AgentMachine.{Agent, Intent}
 
-  @valid_intents AgentMachine.LocalIntentClassifier.intents()
+  @valid_intents Intent.intents()
   @intent_lookup Map.new(@valid_intents, &{Atom.to_string(&1), &1})
   @allowed_response_keys MapSet.new(["intent", "confidence", "reason"])
 
@@ -206,7 +206,13 @@ defmodule AgentMachine.LLMRouter do
     end
   end
 
-  defp normalize_intent!(intent, _field) when intent in @valid_intents, do: intent
+  defp normalize_intent!(intent, _field) when is_atom(intent) do
+    if Intent.valid?(intent) do
+      intent
+    else
+      raise ArgumentError, "llm router returned invalid intent: #{inspect(intent)}"
+    end
+  end
 
   defp normalize_intent!(intent, field) when is_binary(intent) do
     case Map.fetch(@intent_lookup, intent) do

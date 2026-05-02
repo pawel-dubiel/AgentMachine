@@ -7,17 +7,17 @@ defmodule AgentMachine.Workflows.Agentic do
   the user-facing result after all other agents complete.
   """
 
-  alias AgentMachine.{RunSpec, WorkflowOptions}
+  alias AgentMachine.{RunSpec, WorkflowOptions, WorkflowProvider, WorkflowToolOptions}
 
   def build!(%RunSpec{} = spec, route \\ %{}) when is_map(route) do
-    provider = provider_module(spec)
-    pricing = pricing(spec)
+    provider = WorkflowProvider.provider_module(spec)
+    pricing = WorkflowProvider.pricing(spec)
     swarm? = swarm_strategy?(route)
 
     planner = %{
       id: "planner",
       provider: provider,
-      model: model(spec),
+      model: WorkflowProvider.model(spec),
       instructions: planner_instructions(swarm?),
       input: spec.task,
       pricing: pricing,
@@ -33,7 +33,7 @@ defmodule AgentMachine.Workflows.Agentic do
     finalizer = %{
       id: "finalizer",
       provider: provider,
-      model: model(spec),
+      model: WorkflowProvider.model(spec),
       instructions: finalizer_instructions(swarm?),
       input: "Create the final answer for this task: #{spec.task}",
       pricing: pricing,
@@ -48,8 +48,8 @@ defmodule AgentMachine.Workflows.Agentic do
         finalizer: finalizer,
         stream_response: spec.stream_response
       ]
-      |> put_http_opts(spec)
-      |> put_tool_opts(spec)
+      |> WorkflowProvider.put_http_opts(spec)
+      |> WorkflowToolOptions.put_full_tool_opts(spec)
       |> WorkflowOptions.put_context_opts(spec)
 
     {[planner], opts}
@@ -63,95 +63,6 @@ defmodule AgentMachine.Workflows.Agentic do
     do: Map.put(metadata, :agent_machine_strategy, "swarm")
 
   defp maybe_put_swarm_strategy(metadata, false), do: metadata
-
-  defp provider_module(%RunSpec{provider: :echo}), do: AgentMachine.Providers.Echo
-  defp provider_module(%RunSpec{provider: :openai}), do: AgentMachine.Providers.OpenAIResponses
-  defp provider_module(%RunSpec{provider: :openrouter}), do: AgentMachine.Providers.OpenRouterChat
-
-  defp model(%RunSpec{provider: :echo}), do: "echo"
-
-  defp model(%RunSpec{provider: provider, model: model})
-       when provider in [:openai, :openrouter] do
-    model
-  end
-
-  defp pricing(%RunSpec{provider: :echo}) do
-    %{input_per_million: 0.0, output_per_million: 0.0}
-  end
-
-  defp pricing(%RunSpec{provider: provider, pricing: pricing})
-       when provider in [:openai, :openrouter] do
-    pricing
-  end
-
-  defp put_http_opts(opts, %RunSpec{provider: :echo}), do: opts
-
-  defp put_http_opts(opts, %RunSpec{provider: provider, http_timeout_ms: http_timeout_ms})
-       when provider in [:openai, :openrouter] do
-    Keyword.put(opts, :http_timeout_ms, http_timeout_ms)
-  end
-
-  defp put_tool_opts(opts, %RunSpec{tool_harnesses: nil}), do: opts
-
-  defp put_tool_opts(
-         opts,
-         %RunSpec{
-           tool_harnesses: harnesses,
-           tool_timeout_ms: tool_timeout_ms,
-           tool_max_rounds: tool_max_rounds,
-           tool_approval_mode: tool_approval_mode
-         } = spec
-       ) do
-    opts
-    |> Keyword.put(
-      :allowed_tools,
-      AgentMachine.ToolHarness.builtin_many!(harnesses, tool_harness_opts(spec))
-    )
-    |> Keyword.put(
-      :tool_policy,
-      AgentMachine.ToolHarness.builtin_policy_many!(harnesses, tool_harness_opts(spec))
-    )
-    |> Keyword.put(:tool_timeout_ms, tool_timeout_ms)
-    |> Keyword.put(:tool_max_rounds, tool_max_rounds)
-    |> Keyword.put(:tool_approval_mode, tool_approval_mode)
-    |> maybe_put_tool_root(harnesses, spec)
-    |> maybe_put_test_commands(spec)
-    |> maybe_put_mcp_config(spec)
-  end
-
-  defp tool_harness_opts(%RunSpec{
-         test_commands: test_commands,
-         mcp_config: mcp_config,
-         allow_skill_scripts: allow_skill_scripts,
-         tool_approval_mode: tool_approval_mode
-       }),
-       do: [
-         test_commands: test_commands,
-         mcp_config: mcp_config,
-         allow_skill_scripts: allow_skill_scripts,
-         tool_approval_mode: tool_approval_mode
-       ]
-
-  defp maybe_put_tool_root(opts, harnesses, %RunSpec{tool_root: root})
-       when is_list(harnesses) do
-    if Enum.any?(harnesses, &(&1 in [:local_files, :code_edit])) do
-      Keyword.put(opts, :tool_root, root)
-    else
-      opts
-    end
-  end
-
-  defp maybe_put_tool_root(opts, _harnesses, _spec), do: opts
-
-  defp maybe_put_test_commands(opts, %RunSpec{test_commands: nil}), do: opts
-
-  defp maybe_put_test_commands(opts, %RunSpec{test_commands: commands}),
-    do: Keyword.put(opts, :test_commands, commands)
-
-  defp maybe_put_mcp_config(opts, %RunSpec{mcp_config: nil}), do: opts
-
-  defp maybe_put_mcp_config(opts, %RunSpec{mcp_config: config}),
-    do: Keyword.put(opts, :mcp_config, config)
 
   defp planner_instructions(false) do
     """

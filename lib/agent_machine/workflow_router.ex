@@ -1,9 +1,7 @@
 defmodule AgentMachine.WorkflowRouter do
   @moduledoc false
 
-  alias AgentMachine.{CapabilityRequired, RunSpec}
-
-  @valid_intents AgentMachine.LocalIntentClassifier.intents()
+  alias AgentMachine.{CapabilityRequired, Intent, RunSpec}
 
   @enforce_keys [
     :requested_workflow,
@@ -32,8 +30,8 @@ defmodule AgentMachine.WorkflowRouter do
     router_model_dir: nil,
     router_timeout_ms: nil,
     router_confidence_threshold: nil,
-    classifier_module: AgentMachine.LocalIntentClassifier,
-    llm_router_module: AgentMachine.LLMRouter
+    classifier_module: :"Elixir.AgentMachine.LocalIntentClassifier",
+    llm_router_module: :"Elixir.AgentMachine.LLMRouter"
   ]
 
   def route!(%RunSpec{} = spec) do
@@ -395,11 +393,9 @@ defmodule AgentMachine.WorkflowRouter do
     end
   end
 
-  defp validate_classifier_intent!(intent, _field) when intent in @valid_intents, do: :ok
-
   defp validate_classifier_intent!(intent, field) do
-    raise ArgumentError,
-          "workflow router classifier returned invalid #{field}: #{inspect(intent)}"
+    Intent.normalize!(intent, "workflow router classifier returned invalid #{field}")
+    :ok
   end
 
   defp validate_classifier_name!(classifier) when is_binary(classifier) and classifier != "",
