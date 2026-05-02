@@ -45,6 +45,27 @@ defmodule AgentMachine.SessionTranscriptTest do
     assert record["output"] =~ "[REDACTED:"
   end
 
+  test "rejects session ids that would escape the session directory" do
+    session_dir = tmp_dir()
+    outside_dir = tmp_dir()
+    malicious_session_id = "../#{Path.basename(outside_dir)}"
+
+    assert_raise ArgumentError, ~r/session_id/, fn ->
+      SessionTranscript.append_session!(session_dir, malicious_session_id, %{
+        type: "metadata",
+        event: "poc"
+      })
+    end
+
+    refute File.exists?(Path.join(outside_dir, "context.jsonl"))
+  end
+
+  test "rejects agent ids that are not safe path segments" do
+    assert_raise ArgumentError, ~r/agent_id/, fn ->
+      SessionTranscript.agent_path(tmp_dir(), "session-1", "../agent-1")
+    end
+  end
+
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),

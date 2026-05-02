@@ -78,6 +78,8 @@ By default, auto mode asks the selected provider/model to classify the request
 through a strict JSON router prompt before any workflow starts. Deterministic
 rules still guard obvious tool intents, and `/router deterministic` or
 `/router local <model-dir>` can select the older explicit router modes.
+Local router model installs are pinned to an immutable Hugging Face revision and
+verify SHA-256 hashes for every downloaded artifact before use.
 
 **Tools are capabilities, not defaults**
 
@@ -488,6 +490,8 @@ MCP tool entries must include an explicit `inputSchema` object. AgentMachine
 exposes that schema under the provider-visible `arguments` property and
 validates arguments before any MCP transport call. Repeated identical malformed
 MCP calls fail early instead of consuming every configured tool round.
+Streamable HTTP MCP servers must use HTTPS unless they target loopback, and
+environment-sourced HTTP headers are rejected on plain HTTP.
 
 Browser navigation is a network-capable action, so it requires either
 interactive `ask-before-write` permission control or explicit `full-access`. A
@@ -559,6 +563,7 @@ AgentMachine prefers explicit errors over hidden defaults:
 - Tools are denied by default.
 - Roots, budgets, and approval modes must be explicit.
 - MCP secrets must come from environment references, not inline config values.
+- MCP HTTP configs do not send environment-sourced headers over plain HTTP.
 - Tool errors are returned to the model as tool results when safe, so it can try
   another approach within the configured round limit.
 - The runtime stops before model execution when auto routing needs a missing

@@ -346,6 +346,58 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
     assert File.read!(Path.join(root, "source.txt")) == "manual"
   end
 
+  test "rollback rejects checkpoint entries that escape through symlink parents" do
+    root = tmp_root()
+    outside = tmp_root()
+    on_exit(fn -> File.rm_rf(root) end)
+    on_exit(fn -> File.rm_rf(outside) end)
+    File.mkdir_p!(root)
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, Path.join(root, "link"))
+    File.write!(Path.join(outside, "pwned.txt"), "after")
+
+    checkpoint_id = "20260426T000000Z-1"
+    checkpoint_dir = Path.join([root, ".agent_machine", "checkpoints", checkpoint_id])
+    contents_dir = Path.join(checkpoint_dir, "contents")
+    before = "before"
+    before_sha = sha256(before)
+    File.mkdir_p!(contents_dir)
+    File.write!(Path.join(contents_dir, before_sha), before)
+
+    manifest = %{
+      "id" => checkpoint_id,
+      "created_at" => "2026-04-26T00:00:00Z",
+      "tool" => "apply_edits",
+      "checkpoint_path" => checkpoint_dir,
+      "status" => "applied",
+      "affected_paths" => ["link/pwned.txt"],
+      "entries" => [
+        %{
+          "path" => "link/pwned.txt",
+          "before" => %{
+            "state" => "file",
+            "sha256" => before_sha,
+            "bytes" => byte_size(before),
+            "content_path" => "contents/#{before_sha}"
+          },
+          "after" => %{
+            "state" => "file",
+            "sha256" => sha256("after"),
+            "bytes" => byte_size("after")
+          }
+        }
+      ]
+    }
+
+    File.write!(Path.join(checkpoint_dir, "manifest.json"), JSON.encode!(manifest))
+
+    assert {:error, message} =
+             RollbackCheckpoint.run(%{"checkpoint_id" => checkpoint_id}, tool_root: root)
+
+    assert message =~ "outside tool root"
+    assert File.read!(Path.join(outside, "pwned.txt")) == "after"
+  end
+
   test "rollback rejects path traversal and unknown checkpoint ids" do
     root = tmp_root()
     on_exit(fn -> File.rm_rf(root) end)

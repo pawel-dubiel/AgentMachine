@@ -2,7 +2,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   @moduledoc false
 
   alias AgentMachine.JSON
-  alias AgentMachine.Tools.{CodeEditSupport, ToolResultSummary}
+  alias AgentMachine.Tools.{CodeEditSupport, PathGuard, ToolResultSummary}
 
   @checkpoint_parent [".agent_machine", "checkpoints"]
   @checkpoint_id_pattern ~r/\A\d{8}T\d{6}Z-\d+\z/
@@ -10,12 +10,9 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   @snapshot_skip_dirs MapSet.new([".agent_machine", ".git", "_build", "deps", "node_modules"])
 
   def apply_plan!(root, tool_name, plan) when is_binary(root) and is_binary(tool_name) do
+    root = PathGuard.root!(tool_root: root)
     require_plan!(plan)
-
-    Enum.each(
-      Map.keys(plan),
-      &CodeEditSupport.reject_checkpoint_path!(root, &1, "write plan path")
-    )
+    plan = secure_plan!(root, plan)
 
     checkpoint_id = new_checkpoint_id()
     checkpoint_dir = checkpoint_dir(root, checkpoint_id)
@@ -52,6 +49,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   end
 
   def rollback!(root, checkpoint_id) when is_binary(root) do
+    root = PathGuard.root!(tool_root: root)
     checkpoint_id = require_checkpoint_id!(checkpoint_id)
     manifest = read_manifest!(root, checkpoint_id)
     entries = require_entries!(manifest)
@@ -73,6 +71,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   end
 
   def prepare_snapshot!(root, tool_name) when is_binary(root) and is_binary(tool_name) do
+    root = PathGuard.root!(tool_root: root)
     checkpoint_id = new_checkpoint_id()
     checkpoint_dir = checkpoint_dir(root, checkpoint_id)
     contents_dir = Path.join(checkpoint_dir, "contents")
@@ -109,6 +108,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   end
 
   def finalize_snapshot!(root, checkpoint_id) when is_binary(root) and is_binary(checkpoint_id) do
+    root = PathGuard.root!(tool_root: root)
     manifest = read_manifest!(root, checkpoint_id)
 
     unless manifest["snapshot"] == true do
@@ -190,6 +190,19 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
 
   defp require_plan!(plan) do
     raise ArgumentError, "write plan must be a non-empty map, got: #{inspect(plan)}"
+  end
+
+  defp secure_plan!(root, plan) do
+    Enum.reduce(plan, %{}, fn {path, action}, acc ->
+      target = PathGuard.writable_target!(root, path)
+      CodeEditSupport.reject_checkpoint_path!(root, target, "write plan path")
+
+      if Map.has_key?(acc, target) do
+        raise ArgumentError, "write plan contains duplicate target path: #{inspect(target)}"
+      end
+
+      Map.put(acc, target, action)
+    end)
   end
 
   defp new_checkpoint_id do
@@ -540,14 +553,30 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   end
 
   defp path_from_entry!(root, entry) do
-    path = Map.fetch!(entry, "path")
-    target = Path.expand(path, root)
+    path = checkpoint_relative_path!(Map.fetch!(entry, "path"))
+    target = PathGuard.writable_target!(root, path)
+    CodeEditSupport.reject_checkpoint_path!(root, target, "checkpoint path")
+    target
+  rescue
+    exception in ArgumentError ->
+      reraise ArgumentError,
+              [message: "checkpoint path is outside tool root: #{Exception.message(exception)}"],
+              __STACKTRACE__
+  end
 
-    if target == root or String.starts_with?(target, root <> "/") do
-      CodeEditSupport.reject_checkpoint_path!(root, target, "checkpoint path")
-      target
-    else
-      raise ArgumentError, "checkpoint path is outside tool root: #{inspect(path)}"
+  defp checkpoint_relative_path!(path) do
+    path = PathGuard.require_non_empty_binary!(path, "checkpoint path")
+    parts = Path.split(path)
+
+    cond do
+      Path.type(path) != :relative ->
+        raise ArgumentError, "checkpoint path must be relative, got: #{inspect(path)}"
+
+      parts in [[], ["."]] or Enum.member?(parts, "..") ->
+        raise ArgumentError, "checkpoint path must not contain traversal: #{inspect(path)}"
+
+      true ->
+        path
     end
   end
 

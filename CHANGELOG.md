@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed security review findings by hardening checkpoint rollback path
+  validation, session transcript IDs, MCP HTTP config, router model downloads,
+  and the TUI Markdown dependency.
 - Added foreground and background shell command tools to `code-edit` when
   running with prompted command approval or `full-access`, including bounded
   redacted output, per-run background command ownership, and code-edit rollback

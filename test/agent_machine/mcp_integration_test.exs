@@ -22,7 +22,7 @@ defmodule AgentMachine.MCPIntegrationTest do
           %{
             "id" => "docs",
             "transport" => "streamable_http",
-            "url" => "http://127.0.0.1:9999/mcp",
+            "url" => "https://docs.example/mcp",
             "headers" => %{"Authorization" => "env:DOCS_MCP_AUTH"},
             "tools" => [
               %{
@@ -76,7 +76,7 @@ defmodule AgentMachine.MCPIntegrationTest do
           %{
             "id" => "docs",
             "transport" => "streamable_http",
-            "url" => "http://127.0.0.1:9999/mcp",
+            "url" => "https://docs.example/mcp",
             "headers" => %{"Authorization" => "Bearer secret"},
             "tools" => [
               %{
@@ -90,6 +90,31 @@ defmodule AgentMachine.MCPIntegrationTest do
         ]
       })
     end
+  end
+
+  test "MCP streamable HTTP rejects cleartext secrets and non-loopback HTTP" do
+    assert_raise ArgumentError, ~r/must use https unless host is loopback/, fn ->
+      Config.from_map!(%{
+        "servers" => [
+          mcp_http_server("http://example.com/mcp", %{})
+        ]
+      })
+    end
+
+    assert_raise ArgumentError, ~r/headers are not allowed over plain http/, fn ->
+      Config.from_map!(%{
+        "servers" => [
+          mcp_http_server("http://127.0.0.1:9999/mcp", %{"Authorization" => "env:DOCS_AUTH"})
+        ]
+      })
+    end
+
+    assert %Config{servers: [%{url: "http://127.0.0.1:9999/mcp", headers: %{}}]} =
+             Config.from_map!(%{
+               "servers" => [
+                 mcp_http_server("http://127.0.0.1:9999/mcp", %{})
+               ]
+             })
   end
 
   test "multi-harness merges tools and policies" do
@@ -851,6 +876,23 @@ defmodule AgentMachine.MCPIntegrationTest do
       [_headers, body] -> byte_size(body) > 0
       _other -> false
     end
+  end
+
+  defp mcp_http_server(url, headers) do
+    %{
+      "id" => "docs",
+      "transport" => "streamable_http",
+      "url" => url,
+      "headers" => headers,
+      "tools" => [
+        %{
+          "name" => "search",
+          "permission" => "mcp_docs_search",
+          "risk" => "network",
+          "inputSchema" => %{"type" => "object"}
+        }
+      ]
+    }
   end
 
   defp request_body!(request) do

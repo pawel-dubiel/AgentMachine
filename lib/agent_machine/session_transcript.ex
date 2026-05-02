@@ -5,6 +5,7 @@ defmodule AgentMachine.SessionTranscript do
 
   alias AgentMachine.{JSON, Secrets.Redactor}
 
+  @safe_segment_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
   @record_types MapSet.new([
                   "metadata",
                   "user_message",
@@ -21,7 +22,20 @@ defmodule AgentMachine.SessionTranscript do
   end
 
   def agent_path(session_dir, session_id, agent_id) do
-    Path.join([session_root!(session_dir, session_id), "agents", agent_id <> ".jsonl"])
+    root = session_root!(session_dir, session_id)
+    agent_id = validate_agent_id!(agent_id)
+    path = Path.join([root, "agents", agent_id <> ".jsonl"])
+    ensure_inside!(path, root, "agent transcript path")
+  end
+
+  def validate_session_id!(session_id), do: safe_segment!(session_id, "session_id")
+
+  def validate_agent_id!(agent_id), do: safe_segment!(agent_id, "agent_id")
+
+  def validate_session_dir!(session_dir) do
+    session_dir
+    |> require_non_empty_binary!("session_dir")
+    |> Path.expand()
   end
 
   def append_session!(session_dir, session_id, record) when is_map(record) do
@@ -141,10 +155,14 @@ defmodule AgentMachine.SessionTranscript do
   end
 
   defp session_root!(session_dir, session_id) do
-    Path.join(
-      require_non_empty_binary!(session_dir, "session_dir"),
-      require_non_empty_binary!(session_id, "session_id")
-    )
+    session_dir = validate_session_dir!(session_dir)
+
+    root =
+      session_dir
+      |> Path.join(validate_session_id!(session_id))
+      |> Path.expand()
+
+    ensure_inside!(root, session_dir, "session root")
   end
 
   defp normalize_time!(%DateTime{} = time), do: DateTime.to_iso8601(time)
@@ -160,5 +178,28 @@ defmodule AgentMachine.SessionTranscript do
 
   defp require_non_empty_binary!(value, field) do
     raise ArgumentError, "transcript #{field} must be a non-empty binary, got: #{inspect(value)}"
+  end
+
+  defp safe_segment!(value, field) do
+    value = require_non_empty_binary!(value, field)
+
+    if Regex.match?(@safe_segment_pattern, value) do
+      value
+    else
+      raise ArgumentError,
+            "transcript #{field} must be a safe path segment containing only letters, numbers, ., _ or -, got: #{inspect(value)}"
+    end
+  end
+
+  defp ensure_inside!(path, root, label) do
+    path = Path.expand(path)
+    root = Path.expand(root)
+
+    if path == root or String.starts_with?(path, root <> "/") do
+      path
+    else
+      raise ArgumentError,
+            "transcript #{label} escaped configured session directory: #{inspect(path)}"
+    end
   end
 end

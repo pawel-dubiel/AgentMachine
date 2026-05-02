@@ -89,10 +89,14 @@ defmodule AgentMachine.MCP.Config do
         }
 
       :streamable_http ->
+        url = url!(Map.get(server, "url"))
+        headers = env_refs!(Map.get(server, "headers", %{}), "MCP HTTP headers")
+        validate_http_security!(url, headers)
+
         %{
           base
-          | url: url!(Map.get(server, "url")),
-            headers: env_refs!(Map.get(server, "headers", %{}), "MCP HTTP headers")
+          | url: url,
+            headers: headers
         }
     end
   end
@@ -177,12 +181,44 @@ defmodule AgentMachine.MCP.Config do
 
   defp url!(url) do
     url = require_non_empty_binary!(url, "MCP streamable_http url")
+    uri = URI.parse(url)
 
-    unless String.starts_with?(url, ["http://", "https://"]) do
-      raise ArgumentError, "MCP streamable_http url must start with http:// or https://"
+    unless uri.scheme in ["http", "https"] and is_binary(uri.host) and byte_size(uri.host) > 0 do
+      raise ArgumentError, "MCP streamable_http url must be an absolute http:// or https:// URL"
     end
 
     url
+  end
+
+  defp validate_http_security!(url, headers) do
+    uri = URI.parse(url)
+
+    cond do
+      uri.scheme == "https" ->
+        :ok
+
+      not loopback_host?(uri.host) ->
+        raise ArgumentError,
+              "MCP streamable_http url must use https unless host is loopback, got: #{inspect(url)}"
+
+      map_size(headers) > 0 ->
+        raise ArgumentError,
+              "MCP HTTP headers are not allowed over plain http, got: #{inspect(url)}"
+
+      true ->
+        :ok
+    end
+  end
+
+  defp loopback_host?(host) when is_binary(host) do
+    host = String.downcase(host)
+
+    host == "localhost" or
+      case :inet.parse_address(String.to_charlist(host)) do
+        {:ok, {127, _second, _third, _fourth}} -> true
+        {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+        _other -> false
+      end
   end
 
   defp string_list!(values, label) when is_list(values) do

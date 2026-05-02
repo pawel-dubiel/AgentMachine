@@ -57,7 +57,7 @@ defmodule AgentMachine.SessionServer do
 
   @impl true
   def init(opts) do
-    session_id = require_non_empty_binary!(Keyword.fetch!(opts, :session_id), :session_id)
+    session_id = Keyword.fetch!(opts, :session_id) |> SessionTranscript.validate_session_id!()
     session_dir = require_non_empty_binary!(Keyword.fetch!(opts, :session_dir), :session_dir)
     writer = Keyword.fetch!(opts, :writer)
     permission_control = Keyword.get(opts, :permission_control)

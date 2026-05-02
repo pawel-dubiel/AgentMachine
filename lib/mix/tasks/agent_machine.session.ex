@@ -11,6 +11,7 @@ defmodule Mix.Tasks.AgentMachine.Session do
     PermissionControl,
     SessionProtocol,
     SessionServer,
+    SessionTranscript,
     SessionWriter
   }
 
@@ -198,8 +199,13 @@ defmodule Mix.Tasks.AgentMachine.Session do
       Mix.raise("agent_machine.session requires --jsonl-stdio")
     end
 
-    require_non_empty_path!(Keyword.get(opts, :session_id), "--session-id")
-    require_non_empty_path!(Keyword.get(opts, :session_dir), "--session-dir")
+    opts
+    |> Keyword.get(:session_id)
+    |> SessionTranscript.validate_session_id!()
+
+    opts
+    |> Keyword.get(:session_dir)
+    |> require_non_empty_path!("--session-dir")
   end
 
   defp with_log_file(opts, callback) when is_function(callback, 1) do
