@@ -355,6 +355,9 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 		"session_tool_timeout_ms": sessionToolTimeout,
 		"session_tool_max_rounds": sessionToolMaxRounds,
 	}
+	if config.ProgressObserver {
+		run["progress_observer"] = true
+	}
 
 	if config.Provider != providerEcho {
 		httpTimeout, err := positiveIntValue(config.HTTPTimeout, "http timeout ms")
@@ -645,6 +648,9 @@ func buildRunArgs(config runConfig) []string {
 	}
 	if config.EventSessionID != "" {
 		args = append(args, "--event-session-id", config.EventSessionID)
+	}
+	if config.ProgressObserver {
+		args = append(args, "--progress-observer")
 	}
 
 	if config.ContextWindow != "" {

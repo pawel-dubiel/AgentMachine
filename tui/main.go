@@ -141,6 +141,11 @@ type eventSummary struct {
 	DurationMS            *int           `json:"duration_ms"`
 	Reason                string         `json:"reason"`
 	Summary               string         `json:"summary"`
+	Commentary            string         `json:"commentary"`
+	Source                string         `json:"source"`
+	EvidenceCount         int            `json:"evidence_count"`
+	AgentIDs              []string       `json:"agent_ids"`
+	ToolCallIDs           []string       `json:"tool_call_ids"`
 	Delta                 string         `json:"delta"`
 	Measurement           string         `json:"measurement"`
 	UsedTokens            int            `json:"used_tokens"`
@@ -305,6 +310,7 @@ type runConfig struct {
 	LogFile                  string
 	EventLogFile             string
 	EventSessionID           string
+	ProgressObserver         bool
 }
 
 type savedConfig struct {
@@ -340,6 +346,7 @@ type savedConfig struct {
 	RunContextCompact          string   `json:"run_context_compaction,omitempty"`
 	ContextCompactPct          string   `json:"run_context_compact_percent,omitempty"`
 	MaxContextCompact          string   `json:"max_context_compactions,omitempty"`
+	ProgressObserver           bool     `json:"progress_observer,omitempty"`
 }
 
 type startupOptions struct {
@@ -410,6 +417,7 @@ type model struct {
 	workItems               map[string]workItem
 	workOrder               []string
 	eventLog                []eventSummary
+	progressComments        []eventSummary
 	latestContextBudget     *eventSummary
 	eventScroll             int
 	eventAutoScroll         bool
@@ -985,6 +993,7 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 		m.workOrder = nil
 		m.eventLog = nil
 	}
+	m.progressComments = nil
 	m.latestContextBudget = nil
 	m.eventScroll = 0
 	m.eventAutoScroll = true
@@ -1308,6 +1317,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleCompactCommand(args)
 	case "context":
 		return m.handleContextCommand(args)
+	case "progress":
+		return m.handleProgressCommand(args)
 	case "agentic-persistence":
 		return m.handleAgenticPersistenceCommand(args)
 	case "tools":
@@ -1563,6 +1574,25 @@ func (m model) saveContextConfig(message string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: message})
+	return m, nil
+}
+
+func (m model) handleProgressCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 || (len(args) == 1 && args[0] == "status") {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.progressStatus()})
+		return m, nil
+	}
+	if len(args) != 2 || args[0] != "observer" || (args[1] != "on" && args[1] != "off") {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /progress observer on|off"})
+		return m, nil
+	}
+
+	m.savedConfig.ProgressObserver = args[1] == "on"
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.progressStatus()})
 	return m, nil
 }
 
@@ -2893,6 +2923,11 @@ func (m *model) applyEvent(event eventSummary) {
 		return
 	}
 
+	if event.Type == "progress_commentary" {
+		m.appendProgressCommentary(event)
+		return
+	}
+
 	m.eventLog = append(m.eventLog, event)
 	if m.eventAutoScroll {
 		m.clampEventScroll()
@@ -3226,6 +3261,24 @@ func toolWorkLabel(event eventSummary) string {
 	return event.ToolCallID
 }
 
+func (m *model) appendProgressCommentary(event eventSummary) {
+	text := strings.TrimSpace(event.Commentary)
+	if text == "" {
+		text = strings.TrimSpace(event.Summary)
+	}
+	if text == "" {
+		return
+	}
+	event.Commentary = text
+	if event.Summary == "" {
+		event.Summary = text
+	}
+	m.progressComments = append(m.progressComments, event)
+	if len(m.progressComments) > 8 {
+		m.progressComments = m.progressComments[len(m.progressComments)-8:]
+	}
+}
+
 func (m *model) appendAgentDelta(event eventSummary) {
 	if event.AgentID == "" {
 		return
@@ -3298,6 +3351,7 @@ func (m model) runConfig(task string) runConfig {
 		MaxContextCompact:        m.savedConfig.MaxContextCompact,
 		EventLogFile:             m.eventLogFile,
 		EventSessionID:           m.eventSessionID,
+		ProgressObserver:         m.savedConfig.ProgressObserver,
 	}
 	if strings.TrimSpace(m.savedConfig.AgenticPersistenceRounds) != "" {
 		config.Workflow = workflowAgentic
@@ -4083,9 +4137,16 @@ func (m model) contextStatus() string {
 	return strings.Join(parts, " ")
 }
 
+func (m model) progressStatus() string {
+	if m.savedConfig.ProgressObserver {
+		return "progress observer: on"
+	}
+	return "progress observer: off"
+}
+
 func runningStatus(config runConfig) string {
 	idleTimeout := runTimeoutMS(config)
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runRouterStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runRouterStatus(config) + " / " + runProgressStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func hardCapTimeoutMS(idleTimeout string) string {
@@ -4112,6 +4173,13 @@ func runAgenticPersistenceStatus(config runConfig) string {
 		return "persistence off"
 	}
 	return "persistence rounds=" + config.AgenticPersistenceRounds + " max_steps=" + runMaxSteps(config)
+}
+
+func runProgressStatus(config runConfig) string {
+	if config.ProgressObserver {
+		return "progress observer on"
+	}
+	return "progress observer off"
 }
 
 func runToolsStatus(config runConfig) string {

@@ -393,6 +393,9 @@ func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
 	overlayString(&base.RunContextCompact, override.RunContextCompact)
 	overlayString(&base.ContextCompactPct, override.ContextCompactPct)
 	overlayString(&base.MaxContextCompact, override.MaxContextCompact)
+	if override.ProgressObserver {
+		base.ProgressObserver = true
+	}
 	return base
 }
 

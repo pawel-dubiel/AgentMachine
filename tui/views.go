@@ -131,7 +131,7 @@ func contextBudgetStatus(event *eventSummary) string {
 }
 
 func (m model) chatView() string {
-	if len(m.messages) == 0 && len(m.queuedMessages) == 0 {
+	if len(m.messages) == 0 && len(m.queuedMessages) == 0 && len(m.progressComments) == 0 {
 		return m.styles().Hint.Render("No messages yet.")
 	}
 
@@ -148,6 +148,10 @@ func (m model) chatView() string {
 	if m.running {
 		b.WriteString(m.thinkingView())
 		b.WriteString("\n\n")
+		if progress := m.progressCommentaryView(); progress != "" {
+			b.WriteString(progress)
+			b.WriteString("\n\n")
+		}
 		if checklist := m.workChecklistView(); checklist != "" {
 			b.WriteString(checklist)
 			b.WriteString("\n\n")
@@ -158,6 +162,9 @@ func (m model) chatView() string {
 		}
 		b.WriteString(m.liveActivityView())
 		b.WriteString("\n")
+	} else if progress := m.progressCommentaryView(); progress != "" {
+		b.WriteString(progress)
+		b.WriteString("\n\n")
 	}
 	if m.pendingToolTask != "" && !m.running {
 		if b.Len() > 0 {
@@ -389,6 +396,38 @@ func (m model) thinkingView() string {
 		return styles.Signal.Render(frame+" ") + matrixGradientText(matrixWorkSignal(m.streamFrame), m.streamFrame)
 	}
 	return styles.Hint.Render("thinking " + frame)
+}
+
+func (m model) progressCommentaryView() string {
+	if len(m.progressComments) == 0 {
+		return ""
+	}
+
+	start := len(m.progressComments) - 4
+	if start < 0 {
+		start = 0
+	}
+
+	width := m.viewWidth()
+	if width < 20 {
+		width = 20
+	}
+
+	lines := []string{m.styles().Label.Render("Observer progress")}
+	for _, event := range m.progressComments[start:] {
+		text := strings.TrimSpace(event.Commentary)
+		if text == "" {
+			text = strings.TrimSpace(event.Summary)
+		}
+		if text == "" {
+			continue
+		}
+		lines = append(lines, wrapText(text, width))
+	}
+	if len(lines) == 1 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 func matrixWorkSignal(frame int) string {
@@ -997,6 +1036,7 @@ func (m model) setupView() string {
 		m.toolsStatus(),
 		m.agenticPersistenceStatus(),
 		m.contextStatus(),
+		m.progressStatus(),
 		m.skillsStatus(),
 		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
@@ -1021,6 +1061,7 @@ func (m model) setupView() string {
 		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>",
 		"/context run-compaction off",
+		"/progress observer on|off",
 		"/agentic-persistence <rounds> <max-steps> <timeout-ms>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",
@@ -1397,6 +1438,7 @@ func helpTextForTheme(theme tuiTheme) string {
 		"/context tokenizer <path>|off",
 		"/context reserve <tokens>|off",
 		"/context run-compaction on <compact-percent> <max-compactions>|off",
+		"/progress observer on|off",
 		"/agentic-persistence <rounds> <max-steps> <timeout-ms>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",

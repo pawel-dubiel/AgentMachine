@@ -369,6 +369,39 @@ func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
 	assertContainsSequence(t, args, []string{"--event-session-id", "session-1"})
 }
 
+func TestBuildRunArgsIncludesProgressObserver(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:             "hello",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RunTimeout:       "1000",
+		MaxSteps:         "1",
+		ProgressObserver: true,
+	})
+
+	assertContainsSequence(t, args, []string{"--progress-observer"})
+}
+
+func TestSessionRunPayloadIncludesProgressObserver(t *testing.T) {
+	payload, err := sessionRunPayload(runConfig{
+		Task:             "hello",
+		Workflow:         workflowAuto,
+		Provider:         providerEcho,
+		RunTimeout:       "1000",
+		MaxSteps:         "1",
+		EventLogFile:     filepath.Join(t.TempDir(), "session.jsonl"),
+		EventSessionID:   "session-1",
+		ProgressObserver: true,
+	})
+	if err != nil {
+		t.Fatalf("expected session run payload: %v", err)
+	}
+
+	if payload["progress_observer"] != true {
+		t.Fatalf("expected progress observer payload, got %#v", payload)
+	}
+}
+
 func TestBuildRunArgsIncludesContextOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:              "review this project",
@@ -1610,6 +1643,59 @@ func TestChatViewRendersMatrixWorkSignalWithoutStreamedText(t *testing.T) {
 	}
 	if strings.Contains(view, "hidden streamed content") {
 		t.Fatalf("expected streamed text to stay hidden, got %q", view)
+	}
+}
+
+func TestProgressCommentaryRendersOutsideConversationMessages(t *testing.T) {
+	m := model{running: true, eventAutoScroll: true}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"progress_commentary","run_id":"run-1","source":"observer","commentary":"The repo already has a broad skill surface, so I am narrowing the UI gap.","summary":"The repo already has a broad skill surface, so I am narrowing the UI gap.","evidence_count":3,"agent_ids":["worker"],"tool_call_ids":["call-1"],"at":"2026-04-25T10:00:00Z"}}`)
+
+	if len(updated.messages) != 0 {
+		t.Fatalf("expected progress commentary to stay out of conversation messages, got %#v", updated.messages)
+	}
+	if len(updated.progressComments) != 1 {
+		t.Fatalf("expected progress commentary state, got %#v", updated.progressComments)
+	}
+
+	view := updated.chatView()
+	if !strings.Contains(view, "Observer progress") || !strings.Contains(view, "broad skill surface") {
+		t.Fatalf("expected progress commentary in chat view, got %q", view)
+	}
+	if strings.Contains(updated.taskWithConversationContext("next request"), "broad skill surface") {
+		t.Fatalf("expected progress commentary to stay out of next LLM task context")
+	}
+	if compacted := compactableConversationMessages(updated.messages); len(compacted) != 0 {
+		t.Fatalf("expected progress commentary to stay out of compactable messages, got %#v", compacted)
+	}
+}
+
+func TestProgressObserverCommandPersistsConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{configPath: configPath, view: viewChat}
+
+	updated, _ := m.handleCommand("/progress observer on")
+	result := updated.(model)
+
+	if !result.savedConfig.ProgressObserver {
+		t.Fatalf("expected progress observer enabled, got %#v", result.savedConfig)
+	}
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "progress observer: on") {
+		t.Fatalf("expected progress status message, got %#v", result.messages)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config: %v", err)
+	}
+	if !loaded.ProgressObserver {
+		t.Fatalf("expected persisted progress observer, got %#v", loaded)
+	}
+
+	updated, _ = result.handleCommand("/progress observer off")
+	result = updated.(model)
+	if result.savedConfig.ProgressObserver {
+		t.Fatalf("expected progress observer disabled, got %#v", result.savedConfig)
 	}
 }
 

@@ -235,6 +235,7 @@ Useful first commands:
 /context tokenizer <path>
 /context reserve <tokens>
 /context run-compaction on <compact-percent> <max-compactions>
+/progress observer on|off
 /agentic-persistence <rounds> <max-steps> <timeout-ms>
 /agentic-persistence off
 /tools off
@@ -251,6 +252,10 @@ Useful first commands:
 Agent detail views show streamed provider text separately from the final
 normalized output, decision, errors, and compacted event history. The TUI also
 supports `classic` and Matrix-inspired `matrix` themes through `/theme`.
+When `/progress observer on` is enabled, a separate runtime observer model emits
+short `progress_commentary` updates under the live thinking area. These updates
+are UI-only activity for the current run; they are not appended to conversation
+messages, not sent to the next run prompt, and not included by `/compact`.
 
 The TUI keeps saved user settings in `~/.agent-machine/tui-config.json` with
 `0600` permissions. Override the exact config path with
@@ -279,8 +284,9 @@ mix agent_machine.session --jsonl-stdio --session-id <id> --session-dir <path>
 
 That daemon accepts JSONL commands such as `user_message`,
 `send_agent_message`, `read_agent_output`, `cancel_agent`, `shutdown`, and
-`permission_decision`. Normal one-shot CLI usage remains
-`mix agent_machine.run`.
+`permission_decision`. `user_message` may include `progress_observer: true`
+to enable the same background observer for that run. Normal one-shot CLI usage
+remains `mix agent_machine.run`.
 
 ## Providers
 
@@ -339,6 +345,32 @@ mix agent_machine.run \
   --stream-response \
   "Explain the current README"
 ```
+
+Enable model-written progress commentary with an explicit observer opt-in:
+
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider openrouter \
+  --model moonshotai/kimi-k2.6 \
+  --http-timeout-ms 30000 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 2.50 \
+  --timeout-ms 30000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --jsonl \
+  --progress-observer \
+  "Inspect the project and report the likely next change"
+```
+
+The observer is a background sidecar in the Elixir runtime. It receives only a
+bounded, redacted evidence pack derived from runtime events, has no tool access,
+does not change run state, and emits `progress_commentary` JSONL events with
+`run_id`, `commentary`, `source`, `evidence_count`, `agent_ids`,
+`tool_call_ids`, and `at`. The flag requires `--jsonl` and a real remote
+provider/model; the echo provider fails fast because it cannot produce observer
+commentary.
 
 Write a run log:
 
