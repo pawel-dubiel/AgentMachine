@@ -118,6 +118,71 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "validates planner review as an explicit agentic or auto option" do
+    assert %RunSpec{planner_review_mode: :jsonl_stdio, planner_review_max_revisions: 2} =
+             RunSpec.new!(%{
+               task: "do reviewed work",
+               workflow: :agentic,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 6,
+               max_attempts: 1,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 2
+             })
+
+    assert %RunSpec{planner_review_mode: :prompt, planner_review_max_revisions: 1} =
+             RunSpec.new!(%{
+               task: "do reviewed work",
+               workflow: :auto,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 6,
+               max_attempts: 1,
+               planner_review_mode: :prompt,
+               planner_review_max_revisions: 1
+             })
+
+    assert_raise ArgumentError,
+                 ~r/:planner_review_max_revisions requires :planner_review_mode/,
+                 fn ->
+                   RunSpec.new!(%{
+                     task: "do reviewed work",
+                     workflow: :agentic,
+                     provider: :echo,
+                     timeout_ms: 1_000,
+                     max_steps: 6,
+                     max_attempts: 1,
+                     planner_review_max_revisions: 1
+                   })
+                 end
+
+    assert_raise ArgumentError, ~r/:planner_review_max_revisions/, fn ->
+      RunSpec.new!(%{
+        task: "do reviewed work",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        planner_review_mode: :jsonl_stdio
+      })
+    end
+
+    assert_raise ArgumentError, ~r/requires :workflow :agentic or :auto/, fn ->
+      RunSpec.new!(%{
+        task: "do reviewed work",
+        workflow: :basic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        planner_review_mode: :jsonl_stdio,
+        planner_review_max_revisions: 1
+      })
+    end
+  end
+
   test "agentic persistence rejects swarm strategy in v1" do
     spec =
       RunSpec.new!(%{
@@ -719,11 +784,31 @@ defmodule AgentMachine.ClientRunnerTest do
     assert worker_instructions =~ "tool_results confirm it"
     assert worker_instructions =~ "MCP browser"
     assert Keyword.fetch!(opts, :max_steps) == 6
+    refute Keyword.has_key?(opts, :planner_review_mode)
     finalizer = Keyword.fetch!(opts, :finalizer)
     assert finalizer.id == "finalizer"
     assert finalizer.metadata == %{agent_machine_disable_tools: true}
     assert finalizer.instructions =~ "what completed"
     assert finalizer.instructions =~ "what was not verified"
+  end
+
+  test "agentic workflow carries explicit planner review runtime options" do
+    spec =
+      RunSpec.new!(%{
+        task: "do reviewed work",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        planner_review_mode: :jsonl_stdio,
+        planner_review_max_revisions: 2
+      })
+
+    {_agents, opts} = Agentic.build!(spec)
+
+    assert Keyword.fetch!(opts, :planner_review_mode) == :jsonl_stdio
+    assert Keyword.fetch!(opts, :planner_review_max_revisions) == 2
   end
 
   test "builds swarm-specific agentic planner and finalizer instructions" do
@@ -855,6 +940,40 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(summary.results) == ["assistant"]
     refute Map.has_key?(summary.results, "planner")
     assert summary.final_output =~ "agent assistant: explain progressive escalation"
+  end
+
+  test "planner review is rejected when auto routing does not select agentic" do
+    assert_raise ArgumentError, ~r/planner review requires an agentic workflow route/, fn ->
+      ClientRunner.run!(
+        %{
+          task: "explain progressive escalation",
+          workflow: :auto,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 6,
+          max_attempts: 1,
+          router_mode: :deterministic,
+          planner_review_mode: :jsonl_stdio,
+          planner_review_max_revisions: 1
+        },
+        planner_review_callback: fn _context -> {:approved, "ok"} end
+      )
+    end
+  end
+
+  test "planner review requires a client callback" do
+    assert_raise ArgumentError, ~r/:planner_review_callback is required/, fn ->
+      ClientRunner.run!(%{
+        task: "summarize the project",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        planner_review_mode: :jsonl_stdio,
+        planner_review_max_revisions: 1
+      })
+    end
   end
 
   test "emits workflow route telemetry" do
@@ -1420,6 +1539,74 @@ defmodule AgentMachine.ClientRunnerTest do
         "1",
         "--agentic-persistence-rounds",
         "1",
+        "hello"
+      ])
+    end
+  end
+
+  test "mix agent_machine.run validates planner review flags" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--planner-review jsonl-stdio requires --jsonl/, fn ->
+      Run.run([
+        "--workflow",
+        "agentic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "6",
+        "--max-attempts",
+        "1",
+        "--planner-review",
+        "jsonl-stdio",
+        "--planner-review-max-revisions",
+        "1",
+        "hello"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--planner-review-max-revisions requires --planner-review/, fn ->
+      Run.run([
+        "--workflow",
+        "agentic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "6",
+        "--max-attempts",
+        "1",
+        "--planner-review-max-revisions",
+        "1",
+        "--jsonl",
+        "hello"
+      ])
+    end
+
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise ArgumentError, ~r/requires :workflow :agentic or :auto/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "6",
+        "--max-attempts",
+        "1",
+        "--planner-review",
+        "prompt",
+        "--planner-review-max-revisions",
+        "1",
+        "--json",
         "hello"
       ])
     end

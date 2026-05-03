@@ -24,6 +24,8 @@ were available, which agents ran, and what changed.
 - Load reusable skills that add task-specific instructions and references.
 - Route simple requests through a fast path and larger tasks through agentic
   planner/worker flows, using a local zero-shot intent model when installed.
+- Pause agentic planner delegation for explicit approve, decline, or revision
+  feedback when planner review is enabled.
 - Run opt-in bounded agentic persistence, where the runtime reviews worker
   outcomes, delegates concrete follow-up work, and only finalizes after an
   explicit completion decision.
@@ -113,6 +115,15 @@ finalizer starts. Each `continue` consumes one configured round and all
 reviewers/follow-up workers count against `max_steps`; exhaustion fails the run
 instead of summarizing success. Persistence is rejected for non-agentic
 workflows and for the swarm strategy in this version.
+
+Planner review is a separate opt-in gate for delegation plans. When enabled for
+an agentic run, the runtime emits a `planner_review_requested` event after the
+planner proposes workers and before any worker starts. A user or TUI can
+approve the plan, decline it and fail the run before worker execution, or send
+feedback that reruns the planner. Revision loops are bounded by an explicit
+maximum revision count. Planner approval does not approve tool execution;
+write, command, and MCP permissions still use the normal runtime permission
+control path.
 
 **Swarm strategy**
 
@@ -235,6 +246,8 @@ Useful first commands:
 /context reserve <tokens>
 /context run-compaction on <compact-percent> <max-compactions>
 /progress observer on|off
+/planner-review on <max-revisions>
+/planner-review off
 /agentic-persistence <rounds> <max-steps> <timeout-ms>
 /agentic-persistence off
 /tools off
@@ -301,9 +314,10 @@ mix agent_machine.session --jsonl-stdio --session-id <id> --session-dir <path>
 
 That daemon accepts JSONL commands such as `user_message`,
 `send_agent_message`, `read_agent_output`, `cancel_agent`, `shutdown`, and
-`permission_decision`. `user_message` may include an explicit `log_file` path
-for the per-turn run log and `progress_observer: true` to enable the same
-background observer for that run. Normal one-shot CLI usage remains
+`permission_decision` or `planner_review_decision`. `user_message` may include
+an explicit `log_file` path for the per-turn run log, `progress_observer: true`
+to enable the same background observer for that run, and planner review options
+for agentic runs. Normal one-shot CLI usage remains
 `mix agent_machine.run`.
 
 ## Providers
@@ -476,6 +490,27 @@ The same setting is available in the TUI with
 `/agentic-persistence <rounds> <max-steps> <timeout-ms>`. Enabling it forces
 the next runs to send `workflow=agentic` plus those exact budgets;
 `/agentic-persistence off` clears all persistence fields.
+
+Planner review can be enabled for agentic or auto-routed agentic runs:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider echo \
+  --timeout-ms 300000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --planner-review jsonl-stdio \
+  --planner-review-max-revisions 2 \
+  --jsonl \
+  "Plan this task before doing it"
+```
+
+Interactive terminal review uses `--planner-review prompt` with the same
+explicit revision limit. The TUI command is
+`/planner-review on <max-revisions>`; it sends JSONL review decisions over the
+session stdin channel and shows the proposed worker ids, dependencies, goals,
+and planner reason. `/planner-review off` clears the setting.
 
 TUI filesystem tool roots are resolved from the directory where the TUI was
 started. For example, `/tools local-files . 120000 16 ask-before-write` stores

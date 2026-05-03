@@ -228,6 +228,17 @@ func TestBuildRunArgsIncludesAgenticPersistenceOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildRunArgsIncludesPlannerReviewWhenEnabled(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:                      "review this project",
+		Workflow:                  workflowAuto,
+		Provider:                  providerEcho,
+		PlannerReviewMaxRevisions: "2",
+	})
+
+	assertContainsSequence(t, args, []string{"--planner-review", "jsonl-stdio", "--planner-review-max-revisions", "2", "review this project"})
+}
+
 func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "run.jsonl")
 	payload, err := sessionRunPayload(runConfig{
@@ -293,6 +304,22 @@ func TestSessionRunPayloadIncludesAgenticPersistenceWhenEnabled(t *testing.T) {
 	}
 	if payload["agentic_persistence_rounds"] != 2 {
 		t.Fatalf("expected persistence rounds in payload, got %#v", payload)
+	}
+}
+
+func TestSessionRunPayloadIncludesPlannerReviewWhenEnabled(t *testing.T) {
+	payload, err := sessionRunPayload(runConfig{
+		Task:                      "review this project",
+		Workflow:                  workflowAuto,
+		Provider:                  providerEcho,
+		PlannerReviewMaxRevisions: "2",
+	})
+	if err != nil {
+		t.Fatalf("sessionRunPayload returned error: %v", err)
+	}
+
+	if payload["planner_review_mode"] != "jsonl-stdio" || payload["planner_review_max_revisions"] != 2 {
+		t.Fatalf("expected planner review payload, got %#v", payload)
 	}
 }
 
@@ -2959,6 +2986,64 @@ func TestAgenticPersistenceCommandRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestPlannerReviewCommandPersistsExplicitLimit(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	modelAfter, _ := m.handleCommand("/planner-review on 2")
+	result := modelAfter.(model)
+
+	if result.savedConfig.PlannerReviewMaxRevisions != "2" {
+		t.Fatalf("expected planner review value, got %#v", result.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PlannerReviewMaxRevisions != "2" {
+		t.Fatalf("expected persisted planner review value, got %#v", loaded)
+	}
+}
+
+func TestPlannerReviewCommandClearsLimit(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		configPath: configPath,
+		savedConfig: savedConfig{
+			PlannerReviewMaxRevisions: "2",
+		},
+	}
+
+	modelAfter, _ := m.handleCommand("/planner-review off")
+	result := modelAfter.(model)
+
+	if result.savedConfig.PlannerReviewMaxRevisions != "" {
+		t.Fatalf("expected cleared planner review config, got %#v", result.savedConfig)
+	}
+}
+
+func TestPlannerReviewCommandRejectsInvalidLimit(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{configPath: configPath}
+
+	modelAfter, _ := m.handleCommand("/planner-review on 0")
+	result := modelAfter.(model)
+
+	if result.savedConfig.PlannerReviewMaxRevisions != "" {
+		t.Fatalf("expected invalid planner review config not to save, got %#v", result.savedConfig)
+	}
+	if len(result.messages) == 0 ||
+		!strings.Contains(result.messages[len(result.messages)-1].Text, "positive integer") {
+		t.Fatalf("expected validation message, got %#v", result.messages)
+	}
+}
+
 func TestMCPConfigCommandRejectsInheritedToolBudget(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
@@ -4836,6 +4921,120 @@ func TestStreamLineTracksRuntimePermissionRequests(t *testing.T) {
 	}
 }
 
+func TestStreamLineTracksPlannerReviewRequests(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"planner_review_requested","run_id":"run-1","request_id":"review-1","planner_id":"planner","reason":"needs workers","delegated_agent_ids":["worker-a"],"proposed_agents":[{"id":"worker-a","input":"do part a","depends_on":[]}],"summary":"planner requested review"}}`)
+	if len(updated.pendingPlannerReviewID) != 1 || updated.pendingPlannerReviewID[0] != "review-1" {
+		t.Fatalf("expected pending planner review id, got %#v", updated.pendingPlannerReviewID)
+	}
+	request, ok := updated.currentPendingPlannerReview()
+	if !ok || request.RequestID != "review-1" || request.PlannerID != "planner" || request.ProposedAgents[0].ID != "worker-a" {
+		t.Fatalf("expected planner review details, got %#v ok=%v", request, ok)
+	}
+
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"planner_review_decided","run_id":"run-1","request_id":"review-1","planner_id":"planner","decision":"approve","summary":"planner review approve"}}`)
+	if len(updated.pendingPlannerReviewID) != 0 || len(updated.pendingPlannerReviews) != 0 {
+		t.Fatalf("expected planner review to clear after decision, got ids=%#v map=%#v", updated.pendingPlannerReviewID, updated.pendingPlannerReviews)
+	}
+}
+
+func TestPlannerReviewSelectorCanDeclineWithKeyboard(t *testing.T) {
+	stdin := &closeBuffer{}
+	m := model{
+		running: true,
+		view:    viewChat,
+		input:   textinput.New(),
+		stream:  &streamSession{stdin: stdin, persistent: true},
+		pendingPlannerReviews: map[string]eventSummary{
+			"review-1": {
+				RequestID:         "review-1",
+				PlannerID:         "planner",
+				Reason:            "needs workers",
+				DelegatedAgentIDs: []string{"worker-a"},
+				ProposedAgents:    []plannerAgent{{ID: "worker-a", Input: "do part a"}},
+			},
+		},
+		pendingPlannerReviewID: []string{"review-1"},
+	}
+
+	view := stripANSI(m.pendingPlannerReviewView())
+	if !strings.Contains(view, "> Approve plan") || !strings.Contains(view, "Request revision") || !strings.Contains(view, "worker-a") {
+		t.Fatalf("expected selectable planner review options, got %q", view)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	result := updated.(model)
+	if cmd == nil {
+		t.Fatal("expected planner review decision command")
+	}
+	if len(result.pendingPlannerReviewID) != 0 || len(result.pendingPlannerReviews) != 0 {
+		t.Fatalf("expected pending planner review to clear, got ids=%#v map=%#v", result.pendingPlannerReviewID, result.pendingPlannerReviews)
+	}
+
+	msg := cmd()
+	decision, ok := msg.(plannerReviewDecisionMsg)
+	if !ok {
+		t.Fatalf("expected planner review decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "review-1" || decision.Decision != "decline" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "planner_review_decision" || payload["request_id"] != "review-1" || payload["decision"] != "decline" {
+		t.Fatalf("unexpected planner review decision payload: %#v", payload)
+	}
+}
+
+func TestPlannerReviewTypedFeedbackRequestsRevision(t *testing.T) {
+	stdin := &closeBuffer{}
+	input := textinput.New()
+	input.SetValue("split into one worker only")
+	m := model{
+		running: true,
+		view:    viewChat,
+		input:   input,
+		stream:  &streamSession{stdin: stdin, persistent: true},
+		pendingPlannerReviews: map[string]eventSummary{
+			"review-1": {RequestID: "review-1", PlannerID: "planner"},
+		},
+		pendingPlannerReviewID: []string{"review-1"},
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+	if cmd == nil {
+		t.Fatal("expected planner review revision command")
+	}
+	if len(result.queuedMessages) != 0 {
+		t.Fatalf("expected feedback to revise planner instead of queueing, got %#v", result.queuedMessages)
+	}
+	if result.input.Value() != "" {
+		t.Fatalf("expected input to clear, got %q", result.input.Value())
+	}
+
+	msg := cmd()
+	decision, ok := msg.(plannerReviewDecisionMsg)
+	if !ok {
+		t.Fatalf("expected planner review decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "review-1" || decision.Decision != "revise" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "planner_review_decision" || payload["request_id"] != "review-1" || payload["decision"] != "revise" || payload["feedback"] != "split into one worker only" {
+		t.Fatalf("unexpected planner review decision payload: %#v", payload)
+	}
+}
+
 func TestRuntimePermissionSelectorCanChooseDenyWithKeyboard(t *testing.T) {
 	stdin := &closeBuffer{}
 	m := model{
@@ -4963,6 +5162,28 @@ func TestSendPermissionDecisionCommandWritesJSONL(t *testing.T) {
 	}
 	if payload["type"] != "permission_decision" || payload["request_id"] != "req-1" || payload["decision"] != "approve" || payload["reason"] != "TUI approve" {
 		t.Fatalf("unexpected permission decision payload: %#v", payload)
+	}
+}
+
+func TestSendPlannerReviewDecisionCommandWritesJSONL(t *testing.T) {
+	stdin := &closeBuffer{}
+	session := &streamSession{stdin: stdin}
+
+	msg := sendPlannerReviewDecisionCommand(session, "review-1", "revise", "make it smaller", "TUI revise")()
+	decision, ok := msg.(plannerReviewDecisionMsg)
+	if !ok {
+		t.Fatalf("expected planner review decision message, got %#v", msg)
+	}
+	if decision.Err != nil || decision.RequestID != "review-1" || decision.Decision != "revise" {
+		t.Fatalf("unexpected decision result: %#v", decision)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdin.String())), &payload); err != nil {
+		t.Fatalf("expected JSONL payload, got %q: %v", stdin.String(), err)
+	}
+	if payload["type"] != "planner_review_decision" || payload["request_id"] != "review-1" || payload["decision"] != "revise" || payload["feedback"] != "make it smaller" || payload["reason"] != "TUI revise" {
+		t.Fatalf("unexpected planner review decision payload: %#v", payload)
 	}
 }
 

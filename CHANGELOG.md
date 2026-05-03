@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added opt-in planner review for agentic runs, with CLI/TUI controls,
+  JSONL review decisions, approve/decline/revise runtime events, bounded
+  planner revisions, and worker scheduling paused until the plan is accepted.
 - Added TUI session context to the status lines, showing cumulative session token
   usage, launch working directory, and current git branch while preserving the
   input hints for idle, running, queued, and permission states, and updating

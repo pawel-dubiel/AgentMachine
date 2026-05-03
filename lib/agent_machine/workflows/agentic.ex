@@ -53,6 +53,7 @@ defmodule AgentMachine.Workflows.Agentic do
         stream_response: spec.stream_response
       ]
       |> maybe_put_agentic_persistence(spec.agentic_persistence_rounds, goal_reviewer)
+      |> maybe_put_planner_review(spec.planner_review_mode, spec.planner_review_max_revisions)
       |> WorkflowProvider.put_http_opts(spec)
       |> WorkflowToolOptions.put_full_tool_opts(spec)
       |> WorkflowOptions.put_context_opts(spec)
@@ -76,6 +77,14 @@ defmodule AgentMachine.Workflows.Agentic do
     opts
     |> Keyword.put(:agentic_persistence_rounds, rounds)
     |> Keyword.put(:goal_reviewer, goal_reviewer)
+  end
+
+  defp maybe_put_planner_review(opts, nil, nil), do: opts
+
+  defp maybe_put_planner_review(opts, mode, max_revisions) do
+    opts
+    |> Keyword.put(:planner_review_mode, mode)
+    |> Keyword.put(:planner_review_max_revisions, max_revisions)
   end
 
   defp goal_reviewer(_spec, _provider, _pricing, _swarm?, false), do: nil

@@ -410,6 +410,186 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.usage.agents == 3
   end
 
+  test "planner review approve schedules delegated workers unchanged" do
+    parent = self()
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.Delegating,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      send(parent, {:planner_review_context, context})
+      {:approved, "plan looks correct"}
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 1,
+               planner_review_callback: callback
+             )
+
+    assert run.agent_order == ["planner", "worker-a", "worker-b"]
+    assert Map.keys(run.results) |> Enum.sort() == ["planner", "worker-a", "worker-b"]
+
+    assert_receive {:planner_review_context,
+                    %{
+                      planner_id: "planner",
+                      reason: nil,
+                      delegated_agent_ids: ["worker-a", "worker-b"],
+                      proposed_agents: [%{id: "worker-a"}, %{id: "worker-b"}]
+                    }}
+
+    assert Enum.any?(run.events, &(&1.type == :planner_review_requested))
+
+    assert Enum.any?(
+             run.events,
+             &(&1.type == :planner_review_decided and &1.decision == "approve" and
+                 &1.reason == "plan looks correct")
+           )
+  end
+
+  test "planner review decline fails before worker execution" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.Delegating,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 1,
+               planner_review_callback: fn _context -> {:denied, "too broad"} end
+             )
+
+    assert run.error == "planner plan declined by user"
+    assert run.agent_order == ["planner"]
+    assert Map.keys(run.results) == ["planner"]
+
+    assert Enum.any?(
+             run.events,
+             &(&1.type == :planner_review_decided and &1.decision == "decline" and
+                 &1.reason == "too broad")
+           )
+  end
+
+  test "planner review revise reruns the planner with feedback before scheduling workers" do
+    {:ok, decisions} = Agent.start_link(fn -> 0 end)
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.PlannerReviewRevision,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn _context ->
+      Agent.get_and_update(decisions, fn
+        0 -> {{:revision_requested, "use a smaller worker"}, 1}
+        count -> {{:approved, "revised plan accepted"}, count + 1}
+      end)
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 1,
+               planner_review_callback: callback
+             )
+
+    assert run.agent_order == ["planner", "worker-revised"]
+    assert Map.keys(run.results) |> Enum.sort() == ["planner", "worker-revised"]
+    assert run.results["planner"].output == "revised plan"
+    assert run.results["worker-revised"].output == "finished worker-revised"
+
+    assert run.events
+           |> Enum.filter(&(&1.type == :planner_review_requested))
+           |> length() == 2
+
+    assert Enum.any?(
+             run.events,
+             &(&1.type == :planner_review_decided and &1.decision == "revise" and
+                 &1.reason == "use a smaller worker")
+           )
+  end
+
+  test "planner review fails fast when revision limit is exhausted" do
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.TestProviders.PlannerReviewRevision,
+        model: "test",
+        input: "split the work",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:error, {:failed, run}} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 1,
+               planner_review_callback: fn _context ->
+                 {:revision_requested, "revise again"}
+               end
+             )
+
+    assert run.error =~ "planner review revision limit exceeded after 1 revision(s)"
+    refute Map.has_key?(run.results, "worker-original")
+    refute Map.has_key?(run.results, "worker-revised")
+  end
+
+  test "planner review bypasses direct planner answers" do
+    parent = self()
+
+    agents = [
+      %{
+        id: "planner",
+        provider: AgentMachine.Providers.Echo,
+        model: "echo",
+        input: "answer directly",
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               max_steps: 3,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 1,
+               planner_review_callback: fn context ->
+                 send(parent, {:unexpected_planner_review, context})
+                 {:approved, "unexpected"}
+               end
+             )
+
+    assert run.agent_order == ["planner"]
+    refute Enum.any?(run.events, &(&1.type == :planner_review_requested))
+    refute_received {:unexpected_planner_review, _context}
+  end
+
   test "schedules delegated agents as a dependency DAG" do
     agents = [
       %{
@@ -2321,6 +2501,68 @@ defmodule AgentMachine.TestProviders.ContextAwareDelegating do
        artifacts: %{worker_summary: "worker used #{plan}"},
        usage: usage(agent, output)
      }}
+  end
+
+  defp usage(agent, output) do
+    input_tokens = token_count(agent.input)
+    output_tokens = token_count(output)
+
+    %{
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      total_tokens: input_tokens + output_tokens
+    }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.PlannerReviewRevision do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{id: "planner"} = agent, _opts) do
+    revised? = String.contains?(agent.input, "use a smaller worker")
+
+    {output, child_id, child_input} =
+      if revised? do
+        {"revised plan", "worker-revised", "do revised work"}
+      else
+        {"original plan", "worker-original", "do original work"}
+      end
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output),
+       next_agents: [child(child_id, child_input, agent.pricing)]
+     }}
+  end
+
+  def complete(%Agent{} = agent, _opts) do
+    output = "finished #{agent.id}"
+
+    {:ok,
+     %{
+       output: output,
+       usage: usage(agent, output)
+     }}
+  end
+
+  defp child(id, input, pricing) do
+    %{
+      id: id,
+      provider: __MODULE__,
+      model: "test",
+      input: input,
+      pricing: pricing
+    }
   end
 
   defp usage(agent, output) do

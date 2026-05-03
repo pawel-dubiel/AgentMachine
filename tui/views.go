@@ -64,7 +64,9 @@ func (m model) View() string {
 	b.WriteString("> ")
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
-	if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
+	if _, ok := m.currentPendingPlannerReview(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Planner review pending. Up/Down selects. Enter accepts. a=approve, d=decline. Type feedback to revise."), m.viewWidth())))
+	} else if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
 		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Runtime permission pending. Up/Down selects. Enter accepts. a=approve, d=deny."), m.viewWidth())))
 	} else if m.running {
 		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."), m.viewWidth())))
@@ -181,7 +183,10 @@ func (m model) chatView() string {
 			b.WriteString(checklist)
 			b.WriteString("\n\n")
 		}
-		if permission := m.pendingRuntimePermissionView(); permission != "" {
+		if review := m.pendingPlannerReviewView(); review != "" {
+			b.WriteString(review)
+			b.WriteString("\n\n")
+		} else if permission := m.pendingRuntimePermissionView(); permission != "" {
 			b.WriteString(permission)
 			b.WriteString("\n\n")
 		}
@@ -325,6 +330,15 @@ func splitRunes(text string, width int) (string, string) {
 	return string(runes[:width]), string(runes[width:])
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (m model) pendingToolPermissionView() string {
 	styles := m.styles()
 	root := emptyAsNone(m.pendingToolRoot)
@@ -352,6 +366,63 @@ func (m model) pendingToolPermissionView() string {
 	}
 
 	lines = append(lines, "", "Up/Down choose. Enter accepts. a=allow, y=full access, d/Esc=deny.")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(styles.Border).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m model) pendingPlannerReviewView() string {
+	request, ok := m.currentPendingPlannerReview()
+	if !ok {
+		return ""
+	}
+
+	styles := m.styles()
+	lines := []string{
+		styles.Label.Render("Planner Review"),
+		"planner: " + emptyAsNone(firstNonEmpty(request.PlannerID, request.AgentID)),
+		"request: " + emptyAsNone(request.RequestID),
+		"reason: " + emptyAsNone(request.Reason),
+		fmt.Sprintf("revisions: %d/%d", request.RevisionCount, request.MaxRevisions),
+	}
+	if request.Summary != "" {
+		lines = append(lines, "summary: "+request.Summary)
+	}
+	if len(request.ProposedAgents) > 0 {
+		lines = append(lines, "", "workers:")
+		for _, agent := range request.ProposedAgents {
+			line := "  - " + agent.ID
+			if len(agent.DependsOn) > 0 {
+				line += " depends_on=" + strings.Join(agent.DependsOn, ",")
+			}
+			if strings.TrimSpace(agent.Input) != "" {
+				line += ": " + compactQueueText(agent.Input)
+			}
+			lines = append(lines, line)
+		}
+	} else if len(request.DelegatedAgentIDs) > 0 {
+		lines = append(lines, "", "workers: "+strings.Join(request.DelegatedAgentIDs, ", "))
+	}
+	lines = append(lines, "")
+
+	options := pendingPlannerReviewOptions()
+	selected := m.pendingPlannerReviewChoice
+	if selected < 0 || selected >= len(options) {
+		selected = 0
+	}
+
+	for index, option := range options {
+		prefix := "  "
+		if index == selected {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+option.Label+" - "+option.Description)
+	}
+
+	lines = append(lines, "", "Up/Down choose. Enter accepts. a=approve, d/Esc=decline. Type feedback to request revision.")
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
@@ -848,6 +919,9 @@ func eventDisplayLineWithTheme(event eventSummary, theme tuiTheme) string {
 	if text := toolEventDisplayLine(event); text != "" {
 		return text
 	}
+	if text := plannerReviewEventDisplayLine(event, theme); text != "" {
+		return text
+	}
 	if text := permissionEventDisplayLine(event, theme); text != "" {
 		return text
 	}
@@ -864,6 +938,27 @@ func eventDisplayLineWithTheme(event eventSummary, theme tuiTheme) string {
 		text += "  " + hintTextForTheme(theme, extras)
 	}
 	return text
+}
+
+func plannerReviewEventDisplayLine(event eventSummary, theme tuiTheme) string {
+	switch event.Type {
+	case "planner_review_requested":
+		planner := firstNonEmpty(event.PlannerID, event.AgentID, "planner")
+		text := fmt.Sprintf("planner review requested: %s proposed %d worker(s)", planner, len(event.DelegatedAgentIDs))
+		if event.Reason != "" {
+			text += "  " + hintTextForTheme(theme, event.Reason)
+		}
+		return text
+	case "planner_review_decided":
+		planner := firstNonEmpty(event.PlannerID, event.AgentID, "planner")
+		text := fmt.Sprintf("planner review %s: %s", emptyAsNone(event.Decision), planner)
+		if event.Reason != "" {
+			text += "  " + hintTextForTheme(theme, event.Reason)
+		}
+		return text
+	default:
+		return ""
+	}
 }
 
 func toolEventDisplayLine(event eventSummary) string {
@@ -1062,6 +1157,7 @@ func (m model) setupView() string {
 		m.agenticPersistenceStatus(),
 		m.contextStatus(),
 		m.progressStatus(),
+		m.plannerReviewStatus(),
 		m.skillsStatus(),
 		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
@@ -1087,6 +1183,8 @@ func (m model) setupView() string {
 		"/context run-compaction on <compact-percent> <max-compactions>",
 		"/context run-compaction off",
 		"/progress observer on|off",
+		"/planner-review on <max-revisions>",
+		"/planner-review off",
 		"/agentic-persistence <rounds> <max-steps> <timeout-ms>|off",
 		"/compact",
 		"/tools time <timeout-ms> <max-rounds> <approval-mode>",

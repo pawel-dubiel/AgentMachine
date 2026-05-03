@@ -15,6 +15,31 @@ defmodule AgentMachine.PermissionControlTest do
              )
   end
 
+  test "parses planner review decisions" do
+    assert {"review-1", {:approved, "ok"}} =
+             PermissionControl.parse_decision!(
+               ~s({"type":"planner_review_decision","request_id":"review-1","decision":"approve","reason":"ok"})
+             )
+
+    assert {"review-2", {:denied, "no"}} =
+             PermissionControl.parse_decision!(
+               ~s({"type":"planner_review_decision","request_id":"review-2","decision":"decline","reason":"no"})
+             )
+
+    assert {"review-3", {:revision_requested, "split less"}} =
+             PermissionControl.parse_decision!(
+               ~s({"type":"planner_review_decision","request_id":"review-3","decision":"revise","feedback":"split less"})
+             )
+  end
+
+  test "planner review revise requires feedback" do
+    assert_raise ArgumentError, ~r/feedback must be a non-empty binary/, fn ->
+      PermissionControl.parse_decision!(
+        ~s({"type":"planner_review_decision","request_id":"review-1","decision":"revise"})
+      )
+    end
+  end
+
   test "routes concurrent decisions by request id" do
     {:ok, control} = PermissionControl.start_link(input: false)
 

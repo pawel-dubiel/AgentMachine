@@ -11,6 +11,7 @@ defmodule AgentMachine.RunServer do
     AgentRunner,
     ContextBudget,
     ContextCompactor,
+    JSON,
     ProgressObserver
   }
 
@@ -26,6 +27,8 @@ defmodule AgentMachine.RunServer do
                            :provider_request_failed,
                            :assistant_delta,
                            :assistant_done,
+                           :planner_review_requested,
+                           :planner_review_decided,
                            :permission_requested,
                            :permission_decided,
                            :permission_cancelled,
@@ -69,6 +72,7 @@ defmodule AgentMachine.RunServer do
   @impl true
   def init({run_id, agents, finalizer, opts}) do
     validate_goal_review_opts!(opts)
+    validate_planner_review_opts!(opts)
     agent_graph = initial_agent_graph(agents)
     goal_reviewer = goal_reviewer_from_opts(opts)
     run_context = empty_run_context(agent_graph)
@@ -85,6 +89,7 @@ defmodule AgentMachine.RunServer do
       agent_order: Enum.map(ready_agents, & &1.id),
       pending_agents: pending_agents,
       tasks: tasks,
+      review_tasks: %{},
       results: %{},
       artifacts: %{},
       artifact_sources: %{},
@@ -98,6 +103,7 @@ defmodule AgentMachine.RunServer do
       goal_review_count: 0,
       goal_review_continue_count: 0,
       goal_review_completed: false,
+      planner_review_revision_count: 0,
       agent_graph: agent_graph,
       usage: nil,
       opts: opts,
@@ -150,6 +156,17 @@ defmodule AgentMachine.RunServer do
     end
   end
 
+  def handle_info({ref, {:planner_review_decision, request_id, decision}}, run)
+      when is_reference(ref) and is_binary(request_id) do
+    Process.demonitor(ref, [:flush])
+
+    if Map.has_key?(run.review_tasks, ref) do
+      {:noreply, continue_after_planner_review_decision(run, ref, decision)}
+    else
+      {:noreply, run}
+    end
+  end
+
   def handle_info(:agent_heartbeat, run) do
     run =
       if run.status == :running and map_size(run.tasks) > 0 do
@@ -164,22 +181,36 @@ defmodule AgentMachine.RunServer do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, run) do
-    if Map.has_key?(run.tasks, ref) do
-      task = Map.fetch!(run.tasks, ref)
+    cond do
+      Map.has_key?(run.tasks, ref) ->
+        task = Map.fetch!(run.tasks, ref)
 
-      result = %AgentResult{
-        run_id: run.id,
-        agent_id: task.agent_id,
-        status: :error,
-        attempt: task.attempt,
-        error: "agent task exited before returning a result: #{inspect(reason)}",
-        started_at: nil,
-        finished_at: DateTime.utc_now()
-      }
+        result = %AgentResult{
+          run_id: run.id,
+          agent_id: task.agent_id,
+          status: :error,
+          attempt: task.attempt,
+          error: "agent task exited before returning a result: #{inspect(reason)}",
+          started_at: nil,
+          finished_at: DateTime.utc_now()
+        }
 
-      {:noreply, put_result(run, ref, result)}
-    else
-      {:noreply, run}
+        {:noreply, put_result(run, ref, result)}
+
+      Map.has_key?(run.review_tasks, ref) ->
+        review = Map.fetch!(run.review_tasks, ref)
+
+        run =
+          run
+          |> Map.update!(:review_tasks, &Map.delete(&1, ref))
+          |> fail_run(
+            "planner review request #{inspect(review.request_id)} exited before returning a decision: #{inspect(reason)}"
+          )
+
+        {:noreply, run}
+
+      true ->
+        {:noreply, run}
     end
   end
 
@@ -211,6 +242,50 @@ defmodule AgentMachine.RunServer do
       {:error, {:ok, _reviewer}} ->
         raise ArgumentError, ":goal_reviewer requires :agentic_persistence_rounds"
     end
+  end
+
+  defp validate_planner_review_opts!(opts) do
+    mode = Keyword.get(opts, :planner_review_mode)
+    max_revisions = Keyword.get(opts, :planner_review_max_revisions)
+    callback = Keyword.get(opts, :planner_review_callback)
+
+    validate_planner_review_presence!(mode, max_revisions, callback)
+
+    if not is_nil(mode) do
+      require_planner_review_mode!(mode)
+      require_positive_integer!(max_revisions, :planner_review_max_revisions)
+      require_planner_review_callback!(callback)
+    end
+  end
+
+  defp validate_planner_review_presence!(nil, nil, nil), do: :ok
+
+  defp validate_planner_review_presence!(nil, _max_revisions, nil),
+    do: raise(ArgumentError, ":planner_review_max_revisions requires :planner_review_mode")
+
+  defp validate_planner_review_presence!(nil, _max_revisions, _callback),
+    do: raise(ArgumentError, ":planner_review_callback requires :planner_review_mode")
+
+  defp validate_planner_review_presence!(_mode, nil, _callback),
+    do: raise(ArgumentError, ":planner_review_mode requires :planner_review_max_revisions")
+
+  defp validate_planner_review_presence!(_mode, _max_revisions, nil),
+    do: raise(ArgumentError, ":planner_review_mode requires :planner_review_callback")
+
+  defp validate_planner_review_presence!(_mode, _max_revisions, _callback), do: :ok
+
+  defp require_planner_review_mode!(mode) when mode in [:prompt, :jsonl_stdio], do: :ok
+
+  defp require_planner_review_mode!(mode) do
+    raise ArgumentError,
+          ":planner_review_mode must be :prompt or :jsonl_stdio, got: #{inspect(mode)}"
+  end
+
+  defp require_planner_review_callback!(callback) when is_function(callback, 1), do: :ok
+
+  defp require_planner_review_callback!(callback) do
+    raise ArgumentError,
+          ":planner_review_callback must be a function of arity 1, got: #{inspect(callback)}"
   end
 
   defp dependencies_satisfied?(agent, results) do
@@ -394,6 +469,9 @@ defmodule AgentMachine.RunServer do
 
       finalizer_result?(run, result) and has_next_agents?(result) ->
         fail_run(run, "finalizer must not delegate follow-up agents")
+
+      planner_review_required?(run, agent, result) ->
+        request_planner_review(run, agent, result)
 
       result.status == :ok and has_next_agents?(result) ->
         schedule_next_agents(run, result)
@@ -744,6 +822,9 @@ defmodule AgentMachine.RunServer do
       map_size(run.tasks) > 0 ->
         mark_running(run)
 
+      map_size(run.review_tasks) > 0 ->
+        mark_running(run)
+
       run.pending_agents != [] ->
         mark_running(run)
 
@@ -883,6 +964,7 @@ defmodule AgentMachine.RunServer do
     %{
       run
       | tasks: %{},
+        review_tasks: %{},
         status: :failed,
         usage: aggregate_usage(run),
         error: reason,
@@ -901,6 +983,7 @@ defmodule AgentMachine.RunServer do
     %{
       run
       | tasks: %{},
+        review_tasks: %{},
         status: :timeout,
         usage: aggregate_usage(run),
         error: reason,
@@ -911,6 +994,193 @@ defmodule AgentMachine.RunServer do
 
   defp has_next_agents?(%AgentResult{next_agents: agents}) when is_list(agents), do: agents != []
   defp has_next_agents?(_result), do: false
+
+  defp planner_review_required?(run, %Agent{id: "planner"}, %{status: :ok} = result) do
+    planner_review_enabled?(run) and has_next_agents?(result)
+  end
+
+  defp planner_review_required?(_run, _agent, _result), do: false
+
+  defp planner_review_enabled?(run) do
+    Keyword.get(run.opts, :planner_review_mode) in [:prompt, :jsonl_stdio]
+  end
+
+  defp request_planner_review(run, agent, result) do
+    callback = Keyword.fetch!(run.opts, :planner_review_callback)
+    request_id = planner_review_request_id(run, result)
+    event = planner_review_requested_event(run, request_id, result)
+    context = planner_review_context(event)
+    task_supervisor = Keyword.fetch!(run.opts, :task_supervisor)
+
+    task =
+      Task.Supervisor.async_nolink(task_supervisor, fn ->
+        {:planner_review_decision, request_id, callback.(context)}
+      end)
+
+    review = %{
+      request_id: request_id,
+      planner: agent,
+      result: result,
+      task_pid: task.pid
+    }
+
+    run
+    |> Map.update!(:review_tasks, &Map.put(&1, task.ref, review))
+    |> append_event(event)
+    |> finish_if_idle()
+  end
+
+  defp planner_review_context(event) do
+    Map.take(event, [
+      :run_id,
+      :request_id,
+      :planner_id,
+      :planner_output,
+      :reason,
+      :revision_count,
+      :max_revisions,
+      :delegated_agent_ids,
+      :proposed_agents
+    ])
+  end
+
+  defp continue_after_planner_review_decision(run, ref, decision) do
+    {review, review_tasks} = Map.pop(run.review_tasks, ref)
+    run = %{run | review_tasks: review_tasks}
+    decision = normalize_planner_review_decision(decision)
+
+    case decision do
+      {:approved, reason} ->
+        run
+        |> append_event(planner_review_decided_event(run, review, "approve", reason))
+        |> schedule_reviewed_next_agents(review)
+
+      {:denied, reason} ->
+        run
+        |> append_event(planner_review_decided_event(run, review, "decline", reason))
+        |> fail_run("planner plan declined by user")
+
+      {:revision_requested, feedback} ->
+        continue_after_planner_revision_request(run, review, feedback)
+
+      {:cancelled, reason} ->
+        run
+        |> append_event(planner_review_decided_event(run, review, "cancelled", reason))
+        |> fail_run("planner review cancelled: #{reason}")
+
+      {:error, reason} ->
+        fail_run(run, reason)
+    end
+  end
+
+  defp schedule_reviewed_next_agents(run, review) do
+    schedule_next_agents(run, review.result)
+    |> finish_or_fail(run)
+    |> start_ready_pending_agents()
+  end
+
+  defp continue_after_planner_revision_request(run, review, feedback) do
+    run = append_event(run, planner_review_decided_event(run, review, "revise", feedback))
+
+    if run.planner_review_revision_count >= planner_review_max_revisions!(run) do
+      fail_run(
+        run,
+        "planner review revision limit exceeded after #{planner_review_max_revisions!(run)} revision(s)"
+      )
+    else
+      rerun_planner_for_review(run, review, feedback)
+    end
+  end
+
+  defp rerun_planner_for_review(run, review, feedback) do
+    revision_count = run.planner_review_revision_count + 1
+    planner = revised_planner(review.planner, review.result, feedback, revision_count)
+    run = %{run | planner_review_revision_count: revision_count}
+    run = %{run | results: Map.delete(run.results, review.result.agent_id)}
+    run_context = run_context(run)
+
+    {tasks, events} =
+      spawn_agents([planner], run.opts, run_context, run.agent_graph, review.result.attempt + 1)
+
+    run
+    |> Map.update!(:tasks, &Map.merge(&1, tasks))
+    |> append_events(events)
+    |> mark_running()
+  end
+
+  defp revised_planner(planner, result, feedback, revision_count) do
+    original_input = original_planner_input(planner)
+
+    metadata =
+      planner.metadata
+      |> Kernel.||(%{})
+      |> Map.put(:agent_machine_planner_review_original_input, original_input)
+
+    %{
+      planner
+      | input: revised_planner_input(original_input, result, feedback, revision_count),
+        metadata: metadata
+    }
+  end
+
+  defp original_planner_input(%Agent{metadata: metadata, input: input}) when is_map(metadata) do
+    metadata_value(metadata, :agent_machine_planner_review_original_input) || input
+  end
+
+  defp original_planner_input(%Agent{input: input}), do: input
+
+  defp revised_planner_input(original_input, result, feedback, revision_count) do
+    """
+    Original user task:
+    #{original_input}
+
+    Previous planner output:
+    #{result.output}
+
+    Previous planner decision:
+    #{JSON.encode!(result.decision || %{})}
+
+    Previous proposed workers:
+    #{JSON.encode!(proposed_agent_summaries(result.next_agents || []))}
+
+    User feedback for revision #{revision_count}:
+    #{feedback}
+
+    Revise the delegation plan. Return the same structured planner JSON shape as before. Do not claim worker execution happened; only return a revised plan or a direct answer if the feedback makes delegation unnecessary.
+    """
+    |> String.trim()
+  end
+
+  defp normalize_planner_review_decision(:approved), do: {:approved, ""}
+  defp normalize_planner_review_decision(:denied), do: {:denied, ""}
+
+  defp normalize_planner_review_decision({:approved, reason}),
+    do: {:approved, review_reason(reason)}
+
+  defp normalize_planner_review_decision({:denied, reason}), do: {:denied, review_reason(reason)}
+
+  defp normalize_planner_review_decision({:revision_requested, feedback}) do
+    case feedback do
+      value when is_binary(value) and byte_size(value) > 0 ->
+        {:revision_requested, value}
+
+      value ->
+        {:error,
+         "planner review revision feedback must be a non-empty binary, got: #{inspect(value)}"}
+    end
+  end
+
+  defp normalize_planner_review_decision({:cancelled, reason}),
+    do: {:cancelled, review_reason(reason)}
+
+  defp normalize_planner_review_decision(other) do
+    {:error,
+     "planner review callback must return :approved, :denied, {:approved, reason}, {:denied, reason}, {:revision_requested, feedback}, or {:cancelled, reason}, got: #{inspect(other)}"}
+  end
+
+  defp review_reason(reason) when is_binary(reason), do: reason
+  defp review_reason(nil), do: ""
+  defp review_reason(reason), do: inspect(reason)
 
   defp merge_result_artifacts(run, %{status: :ok, artifacts: artifacts} = result)
        when is_map(artifacts) and map_size(artifacts) > 0 do
@@ -1317,8 +1587,12 @@ defmodule AgentMachine.RunServer do
     Map.update(run, :permission_waiting_count, 1, &(&1 + 1))
   end
 
+  defp record_permission_wait(run, %{type: :planner_review_requested}) do
+    Map.update(run, :permission_waiting_count, 1, &(&1 + 1))
+  end
+
   defp record_permission_wait(run, %{type: type})
-       when type in [:permission_decided, :permission_cancelled] do
+       when type in [:permission_decided, :permission_cancelled, :planner_review_decided] do
     Map.update(run, :permission_waiting_count, 0, &max(&1 - 1, 0))
   end
 
@@ -1387,6 +1661,10 @@ defmodule AgentMachine.RunServer do
   defp kill_active_work(run) do
     Enum.each(run.tasks, fn {_ref, task} ->
       Process.exit(task.pid, :kill)
+    end)
+
+    Enum.each(Map.get(run, :review_tasks, %{}), fn {_ref, review} ->
+      Process.exit(review.task_pid, :kill)
     end)
 
     stop_tool_sessions(run.opts)
@@ -1500,6 +1778,67 @@ defmodule AgentMachine.RunServer do
       delegated_agents: Enum.map(next_agents, &Map.fetch!(run.agent_graph, &1.id)),
       at: DateTime.utc_now()
     }
+  end
+
+  defp planner_review_request_id(run, result) do
+    "#{run.id}:planner-review:#{result.agent_id}:#{run.planner_review_revision_count + 1}"
+  end
+
+  defp planner_review_requested_event(run, request_id, result) do
+    proposed_agents = proposed_agent_summaries(result.next_agents || [])
+
+    %{
+      type: :planner_review_requested,
+      run_id: run.id,
+      request_id: request_id,
+      planner_id: result.agent_id,
+      agent_id: result.agent_id,
+      planner_output: result.output,
+      reason: planner_decision_reason(result.decision),
+      revision_count: run.planner_review_revision_count,
+      max_revisions: planner_review_max_revisions!(run),
+      count: length(proposed_agents),
+      delegated_agent_ids: Enum.map(proposed_agents, & &1.id),
+      proposed_agents: proposed_agents,
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp planner_review_decided_event(run, review, decision, reason) do
+    %{
+      type: :planner_review_decided,
+      run_id: run.id,
+      request_id: review.request_id,
+      planner_id: review.result.agent_id,
+      agent_id: review.result.agent_id,
+      decision: decision,
+      reason: reason,
+      revision_count: run.planner_review_revision_count,
+      max_revisions: planner_review_max_revisions!(run),
+      delegated_agent_ids: Enum.map(review.result.next_agents || [], & &1.id),
+      at: DateTime.utc_now()
+    }
+  end
+
+  defp proposed_agent_summaries(agents) do
+    Enum.map(agents, fn agent ->
+      %{
+        id: agent.id,
+        input: agent.input,
+        instructions: agent.instructions,
+        depends_on: agent.depends_on,
+        metadata: agent.metadata || %{}
+      }
+      |> reject_nil_values()
+    end)
+  end
+
+  defp planner_decision_reason(%{reason: reason}) when is_binary(reason), do: reason
+  defp planner_decision_reason(%{"reason" => reason}) when is_binary(reason), do: reason
+  defp planner_decision_reason(_decision), do: nil
+
+  defp planner_review_max_revisions!(run) do
+    Keyword.fetch!(run.opts, :planner_review_max_revisions)
   end
 
   defp event_agent_metadata(graph_entry) when is_map(graph_entry) do

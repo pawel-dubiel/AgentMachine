@@ -362,6 +362,7 @@ func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
 	overlayString(&base.AgenticPersistenceRounds, override.AgenticPersistenceRounds)
 	overlayString(&base.AgenticPersistenceMaxSteps, override.AgenticPersistenceMaxSteps)
 	overlayString(&base.AgenticPersistenceTimeout, override.AgenticPersistenceTimeout)
+	overlayString(&base.PlannerReviewMaxRevisions, override.PlannerReviewMaxRevisions)
 	overlayString(&base.RouterMode, override.RouterMode)
 	overlayString(&base.RouterModelDir, override.RouterModelDir)
 	overlayString(&base.RouterTimeout, override.RouterTimeout)

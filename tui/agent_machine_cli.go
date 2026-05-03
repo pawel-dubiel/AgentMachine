@@ -239,7 +239,7 @@ func startAgentMachineStream(config runConfig) (*streamSession, error) {
 		return nil, fmt.Errorf("failed to open AgentMachine stdout: %w", err)
 	}
 	var stdin io.WriteCloser
-	if usesPermissionControl(config) {
+	if usesRuntimeControl(config) {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
 			return nil, fmt.Errorf("failed to open AgentMachine stdin: %w", err)
@@ -415,6 +415,14 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 			return nil, err
 		}
 		run["agentic_persistence_rounds"] = rounds
+	}
+	if strings.TrimSpace(config.PlannerReviewMaxRevisions) != "" {
+		revisions, err := positiveIntValue(config.PlannerReviewMaxRevisions, "planner review max revisions")
+		if err != nil {
+			return nil, err
+		}
+		run["planner_review_mode"] = "jsonl-stdio"
+		run["planner_review_max_revisions"] = revisions
 	}
 	return run, nil
 }
@@ -697,8 +705,18 @@ func buildRunArgs(config runConfig) []string {
 	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
 		args = append(args, "--agentic-persistence-rounds", config.AgenticPersistenceRounds)
 	}
+	if strings.TrimSpace(config.PlannerReviewMaxRevisions) != "" {
+		args = append(args,
+			"--planner-review", "jsonl-stdio",
+			"--planner-review-max-revisions", config.PlannerReviewMaxRevisions,
+		)
+	}
 
 	return append(args, config.Task)
+}
+
+func usesRuntimeControl(config runConfig) bool {
+	return usesPermissionControl(config) || strings.TrimSpace(config.PlannerReviewMaxRevisions) != ""
 }
 
 func usesPermissionControl(config runConfig) bool {
@@ -729,6 +747,35 @@ func sendPermissionDecisionCommand(session *streamSession, requestID string, dec
 			return permissionDecisionMsg{RequestID: requestID, Decision: decision, Err: err}
 		}
 		return permissionDecisionMsg{RequestID: requestID, Decision: decision}
+	}
+}
+
+func sendPlannerReviewDecisionCommand(session *streamSession, requestID string, decision string, feedback string, reason string) tea.Cmd {
+	return func() tea.Msg {
+		if session == nil || session.stdin == nil {
+			return plannerReviewDecisionMsg{RequestID: requestID, Decision: decision, Err: errors.New("planner review stdin is not available")}
+		}
+
+		payload := map[string]string{
+			"type":       "planner_review_decision",
+			"request_id": requestID,
+			"decision":   decision,
+			"reason":     reason,
+		}
+		if strings.TrimSpace(feedback) != "" {
+			payload["feedback"] = feedback
+		}
+		line, err := json.Marshal(payload)
+		if err != nil {
+			return plannerReviewDecisionMsg{RequestID: requestID, Decision: decision, Err: err}
+		}
+
+		session.stdinMu.Lock()
+		defer session.stdinMu.Unlock()
+		if _, err := session.stdin.Write(append(line, '\n')); err != nil {
+			return plannerReviewDecisionMsg{RequestID: requestID, Decision: decision, Err: err}
+		}
+		return plannerReviewDecisionMsg{RequestID: requestID, Decision: decision}
 	}
 }
 

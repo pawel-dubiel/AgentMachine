@@ -15,6 +15,8 @@ defmodule AgentMachine.SessionProtocol do
     "max_steps" => :max_steps,
     "max_attempts" => :max_attempts,
     "agentic_persistence_rounds" => :agentic_persistence_rounds,
+    "planner_review_mode" => :planner_review_mode,
+    "planner_review_max_revisions" => :planner_review_max_revisions,
     "http_timeout_ms" => :http_timeout_ms,
     "pricing" => :pricing,
     "tool_harness" => :tool_harness,
@@ -74,6 +76,7 @@ defmodule AgentMachine.SessionProtocol do
   @skills_mode_values %{"off" => :off, "auto" => :auto}
   @compaction_values %{"off" => :off, "on" => :on}
   @router_values %{"deterministic" => :deterministic, "llm" => :llm, "local" => :local}
+  @planner_review_values %{"prompt" => :prompt, "jsonl-stdio" => :jsonl_stdio}
 
   def parse_command!(line) when is_binary(line) do
     payload = JSON.decode!(line)
@@ -93,6 +96,9 @@ defmodule AgentMachine.SessionProtocol do
 
       "permission_decision" ->
         %{type: :permission_decision, line: line}
+
+      "planner_review_decision" ->
+        %{type: :planner_review_decision, line: line}
 
       "send_agent_message" ->
         %{
@@ -178,6 +184,7 @@ defmodule AgentMachine.SessionProtocol do
     |> normalize_optional_atom_value!(:skills_mode, @skills_mode_values)
     |> normalize_optional_atom_value!(:run_context_compaction, @compaction_values)
     |> normalize_optional_atom_value!(:router_mode, @router_values)
+    |> normalize_optional_atom_value!(:planner_review_mode, @planner_review_values)
     |> normalize_pricing!()
   end
 

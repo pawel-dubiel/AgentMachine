@@ -15,6 +15,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
     max_steps: :integer,
     max_attempts: :integer,
     agentic_persistence_rounds: :integer,
+    planner_review: :string,
+    planner_review_max_revisions: :integer,
     http_timeout_ms: :integer,
     tool_harness: :keep,
     tool_timeout_ms: :integer,
@@ -63,6 +65,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     validate_output_mode!(opts)
     validate_event_log_opts!(opts)
     validate_permission_control_opts!(opts)
+    validate_planner_review_opts!(opts)
 
     attrs = attrs_from_opts(opts, positional)
 
@@ -77,20 +80,20 @@ defmodule Mix.Tasks.AgentMachine.Run do
         output = Process.group_leader()
         event_sink = jsonl_event_sink(output, log_io)
 
-        summary = with_permission_control(opts, attrs, event_sink)
+        summary = with_runtime_control(opts, attrs, event_sink)
 
         summary_line = AgentMachine.ClientRunner.jsonl_summary!(summary)
         IO.puts(output, summary_line)
         write_log_line!(log_io, summary_line)
 
       Keyword.get(opts, :json, false) ->
-        summary = run_with_log_sink(attrs, log_io)
+        summary = run_with_log_sink(attrs, log_io, opts)
 
         write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
         Mix.shell().info(AgentMachine.ClientRunner.json!(summary))
 
       true ->
-        summary = run_with_log_sink(attrs, log_io)
+        summary = run_with_log_sink(attrs, log_io, opts)
 
         write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_summary!(summary))
         print_text_summary(summary)
@@ -105,34 +108,80 @@ defmodule Mix.Tasks.AgentMachine.Run do
     end
   end
 
-  defp with_permission_control(opts, attrs, event_sink) do
-    case Keyword.fetch(opts, :permission_control) do
-      {:ok, "jsonl-stdio"} ->
-        {:ok, control} = AgentMachine.PermissionControl.start_link(input: :stdio)
+  defp with_runtime_control(opts, attrs, event_sink) do
+    if jsonl_runtime_control?(opts) do
+      {:ok, control} = AgentMachine.PermissionControl.start_link(input: :stdio)
 
-        try do
-          AgentMachine.ClientRunner.run!(attrs,
-            event_sink: event_sink,
-            permission_control: control,
-            tool_approval_callback: fn context ->
-              AgentMachine.PermissionControl.request(control, context)
-            end
-          )
-        after
-          AgentMachine.PermissionControl.cancel_all(control, "run ended")
-        end
-
-      :error ->
-        AgentMachine.ClientRunner.run!(attrs, event_sink: event_sink)
+      try do
+        AgentMachine.ClientRunner.run!(
+          attrs,
+          runtime_control_opts(opts, event_sink, control)
+        )
+      after
+        AgentMachine.PermissionControl.cancel_all(control, "run ended")
+      end
+    else
+      AgentMachine.ClientRunner.run!(attrs, prompt_runtime_opts(opts, event_sink))
     end
   end
 
-  defp run_with_log_sink(attrs, log_io) do
-    AgentMachine.ClientRunner.run!(attrs,
-      event_sink: fn event ->
-        write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
-      end
-    )
+  defp run_with_log_sink(attrs, log_io, opts) do
+    event_sink = fn event ->
+      write_log_line!(log_io, AgentMachine.ClientRunner.jsonl_event!(event))
+    end
+
+    AgentMachine.ClientRunner.run!(attrs, prompt_runtime_opts(opts, event_sink))
+  end
+
+  defp runtime_control_opts(opts, event_sink, control) do
+    [event_sink: event_sink, permission_control: control]
+    |> maybe_put_tool_control_callback(opts, control)
+    |> maybe_put_jsonl_planner_review_callback(opts, control)
+    |> maybe_put_prompt_planner_review_callback(opts)
+  end
+
+  defp prompt_runtime_opts(opts, event_sink) do
+    [event_sink: event_sink]
+    |> maybe_put_prompt_planner_review_callback(opts)
+  end
+
+  defp maybe_put_tool_control_callback(callback_opts, opts, control) do
+    case Keyword.fetch(opts, :permission_control) do
+      {:ok, "jsonl-stdio"} ->
+        Keyword.put(callback_opts, :tool_approval_callback, fn context ->
+          AgentMachine.PermissionControl.request(control, context)
+        end)
+
+      :error ->
+        callback_opts
+    end
+  end
+
+  defp maybe_put_jsonl_planner_review_callback(callback_opts, opts, control) do
+    case Keyword.fetch(opts, :planner_review) do
+      {:ok, "jsonl-stdio"} ->
+        Keyword.put(callback_opts, :planner_review_callback, fn context ->
+          AgentMachine.PermissionControl.request(control, context)
+        end)
+
+      _other ->
+        callback_opts
+    end
+  end
+
+  defp maybe_put_prompt_planner_review_callback(callback_opts, opts) do
+    case Keyword.fetch(opts, :planner_review) do
+      {:ok, "prompt"} ->
+        Keyword.put(callback_opts, :planner_review_callback, &prompt_planner_review/1)
+
+      _other ->
+        callback_opts
+    end
+  end
+
+  defp jsonl_runtime_control?(opts) do
+    Keyword.get(opts, :permission_control) == "jsonl-stdio" or
+      Keyword.get(opts, :planner_review) == "jsonl-stdio"
   end
 
   defp validate_output_mode!(opts) do
@@ -213,6 +262,39 @@ defmodule Mix.Tasks.AgentMachine.Run do
     end
   end
 
+  defp validate_planner_review_opts!(opts) do
+    case {Keyword.fetch(opts, :planner_review),
+          Keyword.fetch(opts, :planner_review_max_revisions)} do
+      {:error, :error} ->
+        :ok
+
+      {:error, {:ok, _revisions}} ->
+        Mix.raise("--planner-review-max-revisions requires --planner-review")
+
+      {{:ok, mode}, :error} when mode in ["prompt", "jsonl-stdio"] ->
+        Mix.raise("--planner-review #{mode} requires --planner-review-max-revisions")
+
+      {{:ok, "jsonl-stdio"}, {:ok, revisions}} ->
+        require_positive_revision_limit!(revisions)
+
+        unless Keyword.get(opts, :jsonl, false) do
+          Mix.raise("--planner-review jsonl-stdio requires --jsonl")
+        end
+
+      {{:ok, "prompt"}, {:ok, revisions}} ->
+        require_positive_revision_limit!(revisions)
+
+      {{:ok, mode}, _revisions} ->
+        Mix.raise("--planner-review must be prompt or jsonl-stdio, got: #{inspect(mode)}")
+    end
+  end
+
+  defp require_positive_revision_limit!(value) when is_integer(value) and value > 0, do: :ok
+
+  defp require_positive_revision_limit!(value) do
+    Mix.raise("--planner-review-max-revisions must be a positive integer, got: #{inspect(value)}")
+  end
+
   defp require_non_empty_path!(path, _flag) when is_binary(path) and byte_size(path) > 0, do: path
 
   defp require_non_empty_path!(path, flag) do
@@ -238,6 +320,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
       max_steps: fetch_required_option!(opts, :max_steps),
       max_attempts: fetch_required_option!(opts, :max_attempts),
       agentic_persistence_rounds: Keyword.get(opts, :agentic_persistence_rounds),
+      planner_review_mode: planner_review_mode_from_opts!(opts),
+      planner_review_max_revisions: Keyword.get(opts, :planner_review_max_revisions),
       http_timeout_ms: Keyword.get(opts, :http_timeout_ms),
       pricing: pricing_from_opts(opts),
       tool_harnesses: tool_harnesses_from_opts!(opts),
@@ -284,6 +368,14 @@ defmodule Mix.Tasks.AgentMachine.Run do
       Mix.raise(
         "--agentic-persistence-rounds requires --workflow agentic, got: #{inspect(workflow)}"
       )
+    end
+  end
+
+  defp planner_review_mode_from_opts!(opts) do
+    case Keyword.fetch(opts, :planner_review) do
+      {:ok, "prompt"} -> :prompt
+      {:ok, "jsonl-stdio"} -> :jsonl_stdio
+      :error -> nil
     end
   end
 
@@ -493,5 +585,73 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.shell().info("  classifier model: #{Map.get(route, :classifier_model) || "(none)"}")
     Mix.shell().info("  classified intent: #{Map.get(route, :classified_intent) || "(none)"}")
     Mix.shell().info("  confidence: #{Map.get(route, :confidence) || "(none)"}")
+  end
+
+  defp prompt_planner_review(context) do
+    IO.puts(:stderr, "")
+    IO.puts(:stderr, "Planner review requested: #{Map.fetch!(context, :request_id)}")
+    IO.puts(:stderr, "Planner: #{Map.fetch!(context, :planner_id)}")
+    IO.puts(:stderr, "Reason: #{Map.get(context, :reason) || "(none)"}")
+    IO.puts(:stderr, "Proposed workers:")
+
+    context
+    |> Map.get(:proposed_agents, [])
+    |> Enum.each(fn agent ->
+      depends_on = Map.get(agent, :depends_on, [])
+      input = Map.get(agent, :input, "")
+      suffix = if depends_on == [], do: "", else: " depends_on=#{Enum.join(depends_on, ",")}"
+      IO.puts(:stderr, "  - #{Map.fetch!(agent, :id)}#{suffix}: #{input}")
+    end)
+
+    prompt_planner_review_decision()
+  end
+
+  defp prompt_planner_review_decision do
+    IO.write(:stderr, "Approve, decline, or revise? [a/d/r] ")
+
+    case read_prompt_line() do
+      "a" ->
+        {:approved, "approved from terminal prompt"}
+
+      "approve" ->
+        {:approved, "approved from terminal prompt"}
+
+      "d" ->
+        {:denied, "declined from terminal prompt"}
+
+      "decline" ->
+        {:denied, "declined from terminal prompt"}
+
+      "r" ->
+        prompt_planner_review_feedback()
+
+      "revise" ->
+        prompt_planner_review_feedback()
+
+      other ->
+        IO.puts(:stderr, "Expected a, d, or r; got #{inspect(other)}")
+        prompt_planner_review_decision()
+    end
+  end
+
+  defp prompt_planner_review_feedback do
+    IO.write(:stderr, "Revision feedback: ")
+
+    case read_prompt_line() do
+      "" ->
+        IO.puts(:stderr, "Revision feedback must be non-empty")
+        prompt_planner_review_feedback()
+
+      feedback ->
+        {:revision_requested, feedback}
+    end
+  end
+
+  defp read_prompt_line do
+    case IO.read(:stdio, :line) do
+      data when is_binary(data) -> data |> String.trim()
+      :eof -> raise "planner review prompt input reached EOF"
+      {:error, reason} -> raise "planner review prompt input failed: #{inspect(reason)}"
+    end
   end
 end

@@ -17,6 +17,8 @@ defmodule AgentMachine.SessionProtocolTest do
           max_steps: 6,
           max_attempts: 1,
           agentic_persistence_rounds: 2,
+          planner_review_mode: "jsonl-stdio",
+          planner_review_max_revisions: 2,
           router_mode: "llm",
           stream_response: true,
           progress_observer: true,
@@ -36,6 +38,8 @@ defmodule AgentMachine.SessionProtocolTest do
                max_steps: 6,
                max_attempts: 1,
                agentic_persistence_rounds: 2,
+               planner_review_mode: :jsonl_stdio,
+               planner_review_max_revisions: 2,
                router_mode: :llm,
                stream_response: true,
                progress_observer: true
@@ -63,5 +67,14 @@ defmodule AgentMachine.SessionProtocolTest do
              )
 
     assert line =~ "permission_decision"
+  end
+
+  test "parses planner review decisions without consuming them" do
+    assert %{type: :planner_review_decision, line: line} =
+             SessionProtocol.parse_command!(
+               ~s({"type":"planner_review_decision","request_id":"req-1","decision":"approve"})
+             )
+
+    assert line =~ "planner_review_decision"
   end
 end

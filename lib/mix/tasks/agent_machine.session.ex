@@ -79,7 +79,7 @@ defmodule Mix.Tasks.AgentMachine.Session do
 
   defp handle_line(line, session, writer, permission_control) do
     case SessionProtocol.parse_command!(line) do
-      %{type: :permission_decision, line: raw} ->
+      %{type: type, line: raw} when type in [:permission_decision, :planner_review_decision] ->
         PermissionControl.decide(permission_control, raw)
 
       %{type: :user_message} = command ->

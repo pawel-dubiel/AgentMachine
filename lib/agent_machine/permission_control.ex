@@ -1,6 +1,6 @@
 defmodule AgentMachine.PermissionControl do
   @moduledoc """
-  Routes interactive permission decisions for a running CLI/TUI session.
+  Routes interactive runtime decisions for a running CLI/TUI session.
 
   The runtime remains responsible for deciding what a request means and for
   emitting audit events. This process only owns pending request correlation and
@@ -11,7 +11,11 @@ defmodule AgentMachine.PermissionControl do
 
   alias AgentMachine.JSON
 
-  @type decision :: {:approved, binary()} | {:denied, binary()} | {:cancelled, binary()}
+  @type decision ::
+          {:approved, binary()}
+          | {:denied, binary()}
+          | {:revision_requested, binary()}
+          | {:cancelled, binary()}
 
   def start_link(opts) when is_list(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -155,9 +159,36 @@ defmodule AgentMachine.PermissionControl do
     {request_id, decision}
   end
 
+  defp decision_from_payload!(%{"type" => "planner_review_decision"} = payload) do
+    request_id = require_non_empty_binary!(Map.get(payload, "request_id"), "request_id")
+    reason = Map.get(payload, "reason", "")
+
+    decision =
+      case Map.get(payload, "decision") do
+        "approve" ->
+          {:approved, reason}
+
+        "decline" ->
+          {:denied, reason}
+
+        "deny" ->
+          {:denied, reason}
+
+        "revise" ->
+          feedback = require_non_empty_binary!(Map.get(payload, "feedback"), "feedback")
+          {:revision_requested, feedback}
+
+        other ->
+          raise ArgumentError,
+                "planner review decision must be approve, decline, or revise, got: #{inspect(other)}"
+      end
+
+    {request_id, decision}
+  end
+
   defp decision_from_payload!(payload) do
     raise ArgumentError,
-          "permission control input must be a permission_decision object, got: #{inspect(payload)}"
+          "permission control input must be a permission_decision or planner_review_decision object, got: #{inspect(payload)}"
   end
 
   defp reply_all(state, decision) do

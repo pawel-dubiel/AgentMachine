@@ -28,6 +28,7 @@ defmodule AgentMachine.ClientRunner do
 
     case route_workflow(spec, opts) do
       {:ok, workflow_route} ->
+        validate_planner_review_route!(spec, workflow_route)
         spec = maybe_put_auto_time_harness(spec, workflow_route)
         write_workflow_route_event(spec, workflow_route)
         skill_selection = Selector.select!(spec)
@@ -40,6 +41,7 @@ defmodule AgentMachine.ClientRunner do
         run_opts = put_event_sink(run_opts, opts)
         run_opts = put_progress_observer_opts(run_opts, spec)
         run_opts = put_tool_approval_callback(run_opts, opts)
+        run_opts = put_planner_review_callback(run_opts, opts)
 
         case Orchestrator.run(agents, run_opts) do
           {:ok, run} -> summarize_and_log(run)
@@ -67,6 +69,15 @@ defmodule AgentMachine.ClientRunner do
   defp build_workflow(spec, %{selected: "tool"} = route), do: Tool.build!(spec, route)
   defp build_workflow(spec, %{selected: "agentic"} = route), do: Agentic.build!(spec, route)
   defp build_workflow(spec, route), do: workflow_module(route).build!(spec)
+
+  defp validate_planner_review_route!(%RunSpec{planner_review_mode: nil}, _route), do: :ok
+
+  defp validate_planner_review_route!(%RunSpec{} = spec, %{selected: "agentic"}), do: spec
+
+  defp validate_planner_review_route!(%RunSpec{}, %{selected: selected}) do
+    raise ArgumentError,
+          "planner review requires an agentic workflow route, got selected route #{inspect(selected)}"
+  end
 
   defp maybe_put_auto_time_harness(
          %RunSpec{tool_harnesses: harnesses} = spec,
@@ -153,7 +164,13 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp validate_opts!(opts) do
-    allowed_keys = [:event_sink, :permission_control, :tool_approval_callback]
+    allowed_keys = [
+      :event_sink,
+      :permission_control,
+      :tool_approval_callback,
+      :planner_review_callback
+    ]
+
     unknown_keys = opts |> Keyword.keys() |> Enum.reject(&(&1 in allowed_keys))
 
     if unknown_keys != [] do
@@ -162,6 +179,7 @@ defmodule AgentMachine.ClientRunner do
 
     validate_optional_callback!(opts, :event_sink)
     validate_optional_callback!(opts, :tool_approval_callback)
+    validate_optional_callback!(opts, :planner_review_callback)
   end
 
   defp put_permission_control(run_opts, opts) do
@@ -215,6 +233,12 @@ defmodule AgentMachine.ClientRunner do
       raise ArgumentError,
             ":tool_approval_callback is required when :tool_approval_mode :ask_before_write exposes write, delete, command, or network tools"
     end
+
+    if Keyword.has_key?(run_opts, :planner_review_mode) and
+         not Keyword.has_key?(opts, :planner_review_callback) do
+      raise ArgumentError,
+            ":planner_review_callback is required when planner review is enabled"
+    end
   end
 
   defp approval_callback_required?(run_opts) do
@@ -227,6 +251,17 @@ defmodule AgentMachine.ClientRunner do
     case Keyword.fetch(opts, :tool_approval_callback) do
       :error -> run_opts
       {:ok, callback} -> Keyword.put(run_opts, :tool_approval_callback, callback)
+    end
+  end
+
+  defp put_planner_review_callback(run_opts, opts) do
+    if Keyword.has_key?(run_opts, :planner_review_mode) do
+      case Keyword.fetch(opts, :planner_review_callback) do
+        :error -> run_opts
+        {:ok, callback} -> Keyword.put(run_opts, :planner_review_callback, callback)
+      end
+    else
+      run_opts
     end
   end
 

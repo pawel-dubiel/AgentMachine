@@ -112,8 +112,10 @@ type eventSummary struct {
 	Type                  string         `json:"type"`
 	RunID                 string         `json:"run_id"`
 	AgentID               string         `json:"agent_id"`
+	PlannerID             string         `json:"planner_id"`
 	ParentAgentID         string         `json:"parent_agent_id"`
 	DelegatedAgentIDs     []string       `json:"delegated_agent_ids"`
+	ProposedAgents        []plannerAgent `json:"proposed_agents"`
 	RequestID             string         `json:"request_id"`
 	Kind                  string         `json:"kind"`
 	Status                string         `json:"status"`
@@ -124,6 +126,8 @@ type eventSummary struct {
 	ContinueCount         int            `json:"continue_count"`
 	Mode                  string         `json:"mode"`
 	ReviewerID            string         `json:"reviewer_id"`
+	RevisionCount         int            `json:"revision_count"`
+	MaxRevisions          int            `json:"max_revisions"`
 	ToolCallID            string         `json:"tool_call_id"`
 	Tool                  string         `json:"tool"`
 	Permission            string         `json:"permission"`
@@ -140,6 +144,7 @@ type eventSummary struct {
 	RequestedCommand      string         `json:"requested_command"`
 	DurationMS            *int           `json:"duration_ms"`
 	Reason                string         `json:"reason"`
+	PlannerOutput         string         `json:"planner_output"`
 	Summary               string         `json:"summary"`
 	Commentary            string         `json:"commentary"`
 	Source                string         `json:"source"`
@@ -160,6 +165,13 @@ type eventSummary struct {
 	ResultSummary         map[string]any `json:"result_summary"`
 	Details               map[string]any `json:"details"`
 	At                    string         `json:"at"`
+}
+
+type plannerAgent struct {
+	ID           string   `json:"id"`
+	Input        string   `json:"input"`
+	Instructions string   `json:"instructions"`
+	DependsOn    []string `json:"depends_on"`
 }
 
 type workItem struct {
@@ -195,6 +207,12 @@ type streamLineMsg struct {
 }
 
 type permissionDecisionMsg struct {
+	RequestID string
+	Decision  string
+	Err       error
+}
+
+type plannerReviewDecisionMsg struct {
 	RequestID string
 	Decision  string
 	Err       error
@@ -286,43 +304,44 @@ const (
 )
 
 type runConfig struct {
-	Task                     string
-	Workflow                 runWorkflow
-	Provider                 provider
-	APIKey                   string
-	Model                    string
-	InputPrice               string
-	OutputPrice              string
-	HTTPTimeout              string
-	RunTimeout               string
-	MaxSteps                 string
-	AgenticPersistenceRounds string
-	ToolHarness              string
-	ToolRoot                 string
-	ToolTimeout              string
-	ToolMaxRounds            string
-	ToolApproval             string
-	TestCommands             []string
-	MCPConfig                string
-	RouterMode               string
-	RouterModelDir           string
-	RouterTimeout            string
-	RouterConfidence         string
-	SkillsMode               string
-	SkillsDir                string
-	SkillNames               []string
-	AllowSkillScripts        bool
-	ContextWindow            string
-	ContextWarning           string
-	ContextTokenizer         string
-	ReservedOutput           string
-	RunContextCompact        string
-	ContextCompactPct        string
-	MaxContextCompact        string
-	LogFile                  string
-	EventLogFile             string
-	EventSessionID           string
-	ProgressObserver         bool
+	Task                      string
+	Workflow                  runWorkflow
+	Provider                  provider
+	APIKey                    string
+	Model                     string
+	InputPrice                string
+	OutputPrice               string
+	HTTPTimeout               string
+	RunTimeout                string
+	MaxSteps                  string
+	AgenticPersistenceRounds  string
+	PlannerReviewMaxRevisions string
+	ToolHarness               string
+	ToolRoot                  string
+	ToolTimeout               string
+	ToolMaxRounds             string
+	ToolApproval              string
+	TestCommands              []string
+	MCPConfig                 string
+	RouterMode                string
+	RouterModelDir            string
+	RouterTimeout             string
+	RouterConfidence          string
+	SkillsMode                string
+	SkillsDir                 string
+	SkillNames                []string
+	AllowSkillScripts         bool
+	ContextWindow             string
+	ContextWarning            string
+	ContextTokenizer          string
+	ReservedOutput            string
+	RunContextCompact         string
+	ContextCompactPct         string
+	MaxContextCompact         string
+	LogFile                   string
+	EventLogFile              string
+	EventSessionID            string
+	ProgressObserver          bool
 }
 
 type savedConfig struct {
@@ -343,6 +362,7 @@ type savedConfig struct {
 	AgenticPersistenceRounds   string   `json:"agentic_persistence_rounds,omitempty"`
 	AgenticPersistenceMaxSteps string   `json:"agentic_persistence_max_steps,omitempty"`
 	AgenticPersistenceTimeout  string   `json:"agentic_persistence_timeout_ms,omitempty"`
+	PlannerReviewMaxRevisions  string   `json:"planner_review_max_revisions,omitempty"`
 	RouterMode                 string   `json:"router_mode,omitempty"`
 	RouterModelDir             string   `json:"router_model_dir,omitempty"`
 	RouterTimeout              string   `json:"router_timeout_ms,omitempty"`
@@ -395,68 +415,71 @@ const (
 )
 
 type model struct {
-	input                   textinput.Model
-	workflow                runWorkflow
-	workflowSet             bool
-	provider                provider
-	providerSet             bool
-	theme                   tuiTheme
-	savedConfig             savedConfig
-	configPath              string
-	workingDir              string
-	modelOptions            []modelOption
-	modelIndex              int
-	selectedModel           string
-	modelStatus             string
-	modelPickerOpen         bool
-	modelPickerIndex        int
-	modelPickerPending      bool
-	modelPickerQuery        string
-	skillOptions            []skillCatalogEntry
-	skillPickerOpen         bool
-	skillPickerIndex        int
-	skillPickerQuery        string
-	skillStatus             string
-	messages                []chatMessage
-	inputHistory            []string
-	historyIndex            int
-	historyDraft            string
-	queuedMessages          []queuedMessage
-	nextQueueID             int
-	view                    viewMode
-	selectedAgent           string
-	selectedAgentIndex      int
-	running                 bool
-	activeConfig            runConfig
-	lastSummary             summary
-	sessionUsage            usageSummary
-	countedSummaryRunIDs    map[string]struct{}
-	liveUsageByRunID        map[string]usageSummary
-	gitBranchStatus         string
-	agents                  map[string]agentState
-	agentOrder              []string
-	workItems               map[string]workItem
-	workOrder               []string
-	eventLog                []eventSummary
-	progressComments        []eventSummary
-	latestContextBudget     *eventSummary
-	eventScroll             int
-	eventAutoScroll         bool
-	streamFrame             int
-	liveAssistant           string
-	raw                     string
-	stream                  *streamSession
-	pendingToolTask         string
-	pendingToolRoot         string
-	pendingToolHarness      string
-	pendingToolChoice       int
-	pendingPermissions      map[string]eventSummary
-	pendingPermissionID     []string
-	pendingPermissionChoice int
-	eventSessionID          string
-	eventLogFile            string
-	width                   int
-	height                  int
+	input                      textinput.Model
+	workflow                   runWorkflow
+	workflowSet                bool
+	provider                   provider
+	providerSet                bool
+	theme                      tuiTheme
+	savedConfig                savedConfig
+	configPath                 string
+	workingDir                 string
+	modelOptions               []modelOption
+	modelIndex                 int
+	selectedModel              string
+	modelStatus                string
+	modelPickerOpen            bool
+	modelPickerIndex           int
+	modelPickerPending         bool
+	modelPickerQuery           string
+	skillOptions               []skillCatalogEntry
+	skillPickerOpen            bool
+	skillPickerIndex           int
+	skillPickerQuery           string
+	skillStatus                string
+	messages                   []chatMessage
+	inputHistory               []string
+	historyIndex               int
+	historyDraft               string
+	queuedMessages             []queuedMessage
+	nextQueueID                int
+	view                       viewMode
+	selectedAgent              string
+	selectedAgentIndex         int
+	running                    bool
+	activeConfig               runConfig
+	lastSummary                summary
+	sessionUsage               usageSummary
+	countedSummaryRunIDs       map[string]struct{}
+	liveUsageByRunID           map[string]usageSummary
+	gitBranchStatus            string
+	agents                     map[string]agentState
+	agentOrder                 []string
+	workItems                  map[string]workItem
+	workOrder                  []string
+	eventLog                   []eventSummary
+	progressComments           []eventSummary
+	latestContextBudget        *eventSummary
+	eventScroll                int
+	eventAutoScroll            bool
+	streamFrame                int
+	liveAssistant              string
+	raw                        string
+	stream                     *streamSession
+	pendingToolTask            string
+	pendingToolRoot            string
+	pendingToolHarness         string
+	pendingToolChoice          int
+	pendingPermissions         map[string]eventSummary
+	pendingPermissionID        []string
+	pendingPermissionChoice    int
+	pendingPlannerReviews      map[string]eventSummary
+	pendingPlannerReviewID     []string
+	pendingPlannerReviewChoice int
+	eventSessionID             string
+	eventLogFile               string
+	width                      int
+	height                     int
 }
 
 func initialModel() (model, error) {
@@ -685,6 +708,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if request, ok := m.currentPendingPlannerReview(); ok && m.view == viewChat {
+			if strings.TrimSpace(m.input.Value()) == "" {
+				switch msg.String() {
+				case "up", "k":
+					m.movePendingPlannerReviewChoice(-1)
+					return m, nil
+				case "down", "j":
+					m.movePendingPlannerReviewChoice(1)
+					return m, nil
+				case "enter":
+					return m.applyPendingPlannerReviewChoice(request)
+				case "a":
+					m.pendingPlannerReviewChoice = 0
+					return m.applyPendingPlannerReviewChoice(request)
+				case "d", "esc":
+					m.pendingPlannerReviewChoice = pendingPlannerReviewDeclineChoice()
+					return m.applyPendingPlannerReviewChoice(request)
+				}
+			}
+		}
+
 		if request, ok := m.currentPendingPermission(); ok && m.view == viewChat {
 			if strings.TrimSpace(m.input.Value()) == "" {
 				switch msg.String() {
@@ -799,6 +843,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runResultMsg:
 		m.running = false
+		m.pendingPlannerReviews = nil
+		m.pendingPlannerReviewID = nil
+		m.pendingPlannerReviewChoice = 0
+		m.pendingPermissions = nil
+		m.pendingPermissionID = nil
+		m.pendingPermissionChoice = 0
 		m.lastSummary = msg.Summary
 		m.recordSummaryUsage(msg.Summary)
 		m.refreshGitBranchStatus()
@@ -858,6 +908,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPermissions = nil
 		m.pendingPermissionID = nil
 		m.pendingPermissionChoice = 0
+		m.pendingPlannerReviews = nil
+		m.pendingPlannerReviewID = nil
+		m.pendingPlannerReviewChoice = 0
 		m.view = viewChat
 		if msg.Session != nil && msg.Session.persistent && msg.Err == nil {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine session ended"})
@@ -880,6 +933,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case permissionDecisionMsg:
 		if msg.Err != nil {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "permission decision failed: " + msg.Err.Error()})
+		}
+		return m, nil
+
+	case plannerReviewDecisionMsg:
+		if msg.Err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "planner review decision failed: " + msg.Err.Error()})
 		}
 		return m, nil
 
@@ -966,6 +1025,14 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return m, nil
+	}
+
+	if request, ok := m.currentPendingPlannerReview(); ok && m.view == viewChat {
+		m.input.SetValue("")
+		if decision, ok := plannerReviewDecisionFromInput(text); ok {
+			return m.answerPendingPlannerReview(request, decision, "")
+		}
+		return m.answerPendingPlannerReview(request, "revise", text)
 	}
 
 	if request, ok := m.currentPendingPermission(); ok && m.view == viewChat {
@@ -1398,6 +1465,8 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleContextCommand(args)
 	case "progress":
 		return m.handleProgressCommand(args)
+	case "planner-review":
+		return m.handlePlannerReviewCommand(args)
 	case "agentic-persistence":
 		return m.handleAgenticPersistenceCommand(args)
 	case "tools":
@@ -1675,6 +1744,44 @@ func (m model) handleProgressCommand(args []string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handlePlannerReviewCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) == 0 || (len(args) == 1 && args[0] == "status") {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.plannerReviewStatus()})
+		return m, nil
+	}
+
+	if len(args) == 1 && args[0] == "off" {
+		m.savedConfig.PlannerReviewMaxRevisions = ""
+		if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+			return m, nil
+		}
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.plannerReviewStatus()})
+		return m, nil
+	}
+
+	if len(args) != 2 || args[0] != "on" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /planner-review on <max-revisions>|off"})
+		return m, nil
+	}
+	if err := validatePositiveInt(args[1], "planner review max revisions"); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+
+	m.savedConfig.PlannerReviewMaxRevisions = args[1]
+	if err := validateSavedPlannerReviewConfig(m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: m.plannerReviewStatus()})
+	return m, nil
+}
+
 func (m model) handleAgenticPersistenceCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.agenticPersistenceStatus()})
@@ -1750,6 +1857,20 @@ func (m model) agenticPersistenceStatus() string {
 	return "agentic persistence: rounds=" + m.savedConfig.AgenticPersistenceRounds +
 		" max_steps=" + m.savedConfig.AgenticPersistenceMaxSteps +
 		" timeout_ms=" + m.savedConfig.AgenticPersistenceTimeout
+}
+
+func validateSavedPlannerReviewConfig(config savedConfig) error {
+	if strings.TrimSpace(config.PlannerReviewMaxRevisions) == "" {
+		return nil
+	}
+	return validatePositiveInt(config.PlannerReviewMaxRevisions, "planner review max revisions")
+}
+
+func (m model) plannerReviewStatus() string {
+	if strings.TrimSpace(m.savedConfig.PlannerReviewMaxRevisions) == "" {
+		return "planner review: off"
+	}
+	return "planner review: jsonl-stdio max_revisions=" + m.savedConfig.PlannerReviewMaxRevisions
 }
 
 func (m model) handleQueueCommand(args []string) (tea.Model, tea.Cmd) {
@@ -2109,6 +2230,126 @@ func (m model) answerPendingPermission(request eventSummary, decision string) (t
 	}
 	m.removePendingPermission(request.RequestID)
 	return m, sendPermissionDecisionCommand(m.stream, request.RequestID, decision, "TUI "+decision)
+}
+
+func (m *model) addPendingPlannerReview(event eventSummary) {
+	if strings.TrimSpace(event.RequestID) == "" {
+		return
+	}
+	if m.pendingPlannerReviews == nil {
+		m.pendingPlannerReviews = map[string]eventSummary{}
+		m.pendingPlannerReviewChoice = 0
+	}
+	if _, exists := m.pendingPlannerReviews[event.RequestID]; !exists {
+		m.pendingPlannerReviewID = append(m.pendingPlannerReviewID, event.RequestID)
+	}
+	m.pendingPlannerReviews[event.RequestID] = event
+}
+
+func (m *model) removePendingPlannerReview(requestID string) {
+	if strings.TrimSpace(requestID) == "" || m.pendingPlannerReviews == nil {
+		return
+	}
+	delete(m.pendingPlannerReviews, requestID)
+	next := m.pendingPlannerReviewID[:0]
+	for _, id := range m.pendingPlannerReviewID {
+		if id != requestID {
+			next = append(next, id)
+		}
+	}
+	m.pendingPlannerReviewID = next
+	if len(m.pendingPlannerReviewID) == 0 {
+		m.pendingPlannerReviewID = nil
+		m.pendingPlannerReviews = nil
+		m.pendingPlannerReviewChoice = 0
+	}
+}
+
+func (m model) currentPendingPlannerReview() (eventSummary, bool) {
+	for _, id := range m.pendingPlannerReviewID {
+		if request, ok := m.pendingPlannerReviews[id]; ok {
+			return request, true
+		}
+	}
+	return eventSummary{}, false
+}
+
+type pendingPlannerReviewOption struct {
+	Label       string
+	Description string
+	Decision    string
+}
+
+func pendingPlannerReviewOptions() []pendingPlannerReviewOption {
+	return []pendingPlannerReviewOption{
+		{
+			Label:       "Approve plan",
+			Description: "Start the proposed workers.",
+			Decision:    "approve",
+		},
+		{
+			Label:       "Request revision",
+			Description: "Type feedback, then press Enter.",
+			Decision:    "revise",
+		},
+		{
+			Label:       "Decline plan",
+			Description: "Stop this run before workers start.",
+			Decision:    "decline",
+		},
+	}
+}
+
+func pendingPlannerReviewDeclineChoice() int {
+	options := pendingPlannerReviewOptions()
+	for index, option := range options {
+		if option.Decision == "decline" {
+			return index
+		}
+	}
+	return len(options) - 1
+}
+
+func (m *model) movePendingPlannerReviewChoice(delta int) {
+	options := pendingPlannerReviewOptions()
+	m.pendingPlannerReviewChoice = (m.pendingPlannerReviewChoice + delta + len(options)) % len(options)
+}
+
+func (m model) applyPendingPlannerReviewChoice(request eventSummary) (tea.Model, tea.Cmd) {
+	options := pendingPlannerReviewOptions()
+	if m.pendingPlannerReviewChoice < 0 || m.pendingPlannerReviewChoice >= len(options) {
+		m.pendingPlannerReviewChoice = 0
+	}
+	option := options[m.pendingPlannerReviewChoice]
+	if option.Decision == "revise" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "type revision feedback, then press Enter"})
+		return m, nil
+	}
+	return m.answerPendingPlannerReview(request, option.Decision, "")
+}
+
+func (m model) answerPendingPlannerReview(request eventSummary, decision string, feedback string) (tea.Model, tea.Cmd) {
+	if decision != "approve" && decision != "decline" && decision != "revise" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unsupported planner review decision: " + decision})
+		return m, nil
+	}
+	if decision == "revise" && strings.TrimSpace(feedback) == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "planner review revision feedback must not be empty"})
+		return m, nil
+	}
+	m.removePendingPlannerReview(request.RequestID)
+	return m, sendPlannerReviewDecisionCommand(m.stream, request.RequestID, decision, feedback, "TUI "+decision)
+}
+
+func plannerReviewDecisionFromInput(text string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "a", "/a", "approve", "/approve":
+		return "approve", true
+	case "d", "/d", "decline", "/decline", "deny", "/deny":
+		return "decline", true
+	default:
+		return "", false
+	}
 }
 
 type pendingRuntimePermissionOption struct {
@@ -3026,6 +3267,9 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 			m.pendingPermissions = nil
 			m.pendingPermissionID = nil
 			m.pendingPermissionChoice = 0
+			m.pendingPlannerReviews = nil
+			m.pendingPlannerReviewID = nil
+			m.pendingPlannerReviewChoice = 0
 			if envelope.Summary.Status == "failed" {
 				errorText := summaryError(envelope.Summary)
 				if updated, handled := m.withCapabilityRequired(envelope.Summary.CapabilityRequired); handled {
@@ -3082,6 +3326,12 @@ func (m *model) applyEvent(event eventSummary) {
 	}
 	if event.Type == "permission_decided" || event.Type == "permission_cancelled" {
 		m.removePendingPermission(event.RequestID)
+	}
+	if event.Type == "planner_review_requested" {
+		m.addPendingPlannerReview(event)
+	}
+	if event.Type == "planner_review_decided" {
+		m.removePendingPlannerReview(event.RequestID)
 	}
 	if event.Type == "context_budget" {
 		budget := event
@@ -3561,37 +3811,38 @@ func (m *model) refreshGitBranchStatus() {
 
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
-		Task:                     task,
-		Workflow:                 workflowAuto,
-		Provider:                 m.provider,
-		APIKey:                   m.apiKey(),
-		Model:                    m.modelID(),
-		ToolHarness:              m.savedConfig.ToolHarness,
-		ToolRoot:                 m.savedConfig.ToolRoot,
-		ToolTimeout:              m.savedConfig.ToolTimeout,
-		ToolMaxRounds:            m.savedConfig.ToolMaxRounds,
-		ToolApproval:             m.savedConfig.ToolApproval,
-		TestCommands:             append([]string(nil), m.savedConfig.TestCommands...),
-		MCPConfig:                m.savedConfig.MCPConfig,
-		MaxSteps:                 m.savedConfig.AgenticPersistenceMaxSteps,
-		AgenticPersistenceRounds: m.savedConfig.AgenticPersistenceRounds,
-		RouterMode:               m.savedConfig.RouterMode,
-		RouterModelDir:           m.savedConfig.RouterModelDir,
-		RouterTimeout:            m.savedConfig.RouterTimeout,
-		RouterConfidence:         m.savedConfig.RouterConfidence,
-		SkillsMode:               m.savedConfig.SkillsMode,
-		SkillsDir:                m.savedConfig.SkillsDir,
-		SkillNames:               append([]string(nil), m.savedConfig.SkillNames...),
-		AllowSkillScripts:        m.savedConfig.AllowSkillScripts,
-		ContextWarning:           m.savedConfig.ContextWarning,
-		ContextTokenizer:         m.savedConfig.ContextTokenizer,
-		ReservedOutput:           m.savedConfig.ReservedOutput,
-		RunContextCompact:        m.savedConfig.RunContextCompact,
-		ContextCompactPct:        m.savedConfig.ContextCompactPct,
-		MaxContextCompact:        m.savedConfig.MaxContextCompact,
-		EventLogFile:             m.eventLogFile,
-		EventSessionID:           m.eventSessionID,
-		ProgressObserver:         m.savedConfig.ProgressObserver,
+		Task:                      task,
+		Workflow:                  workflowAuto,
+		Provider:                  m.provider,
+		APIKey:                    m.apiKey(),
+		Model:                     m.modelID(),
+		ToolHarness:               m.savedConfig.ToolHarness,
+		ToolRoot:                  m.savedConfig.ToolRoot,
+		ToolTimeout:               m.savedConfig.ToolTimeout,
+		ToolMaxRounds:             m.savedConfig.ToolMaxRounds,
+		ToolApproval:              m.savedConfig.ToolApproval,
+		TestCommands:              append([]string(nil), m.savedConfig.TestCommands...),
+		MCPConfig:                 m.savedConfig.MCPConfig,
+		MaxSteps:                  m.savedConfig.AgenticPersistenceMaxSteps,
+		AgenticPersistenceRounds:  m.savedConfig.AgenticPersistenceRounds,
+		PlannerReviewMaxRevisions: m.savedConfig.PlannerReviewMaxRevisions,
+		RouterMode:                m.savedConfig.RouterMode,
+		RouterModelDir:            m.savedConfig.RouterModelDir,
+		RouterTimeout:             m.savedConfig.RouterTimeout,
+		RouterConfidence:          m.savedConfig.RouterConfidence,
+		SkillsMode:                m.savedConfig.SkillsMode,
+		SkillsDir:                 m.savedConfig.SkillsDir,
+		SkillNames:                append([]string(nil), m.savedConfig.SkillNames...),
+		AllowSkillScripts:         m.savedConfig.AllowSkillScripts,
+		ContextWarning:            m.savedConfig.ContextWarning,
+		ContextTokenizer:          m.savedConfig.ContextTokenizer,
+		ReservedOutput:            m.savedConfig.ReservedOutput,
+		RunContextCompact:         m.savedConfig.RunContextCompact,
+		ContextCompactPct:         m.savedConfig.ContextCompactPct,
+		MaxContextCompact:         m.savedConfig.MaxContextCompact,
+		EventLogFile:              m.eventLogFile,
+		EventSessionID:            m.eventSessionID,
+		ProgressObserver:          m.savedConfig.ProgressObserver,
 	}
 	if strings.TrimSpace(m.savedConfig.AgenticPersistenceRounds) != "" {
 		config.Workflow = workflowAgentic
@@ -3835,6 +4086,9 @@ func validateConfig(config runConfig) error {
 	if err := validateAgenticPersistenceConfig(config); err != nil {
 		return err
 	}
+	if err := validatePlannerReviewConfig(config); err != nil {
+		return err
+	}
 	if err := validateToolConfig(config); err != nil {
 		return err
 	}
@@ -3880,6 +4134,16 @@ func validateConfig(config runConfig) error {
 	default:
 		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+func validatePlannerReviewConfig(config runConfig) error {
+	if strings.TrimSpace(config.PlannerReviewMaxRevisions) == "" {
+		return nil
+	}
+	if config.Workflow != workflowAgentic && config.Workflow != workflowAuto {
+		return errors.New("planner review requires agentic or auto workflow")
+	}
+	return validatePositiveInt(config.PlannerReviewMaxRevisions, "planner review max revisions")
 }
 
 func validateAgenticPersistenceConfig(config runConfig) error {
@@ -4483,7 +4747,7 @@ func (m model) progressStatus() string {
 
 func runningStatus(config runConfig) string {
 	idleTimeout := runTimeoutMS(config)
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runRouterStatus(config) + " / " + runProgressStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runPlannerReviewStatus(config) + " / " + runRouterStatus(config) + " / " + runProgressStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func hardCapTimeoutMS(idleTimeout string) string {
@@ -4510,6 +4774,13 @@ func runAgenticPersistenceStatus(config runConfig) string {
 		return "persistence off"
 	}
 	return "persistence rounds=" + config.AgenticPersistenceRounds + " max_steps=" + runMaxSteps(config)
+}
+
+func runPlannerReviewStatus(config runConfig) string {
+	if strings.TrimSpace(config.PlannerReviewMaxRevisions) == "" {
+		return "planner review off"
+	}
+	return "planner review max_revisions=" + config.PlannerReviewMaxRevisions
 }
 
 func runProgressStatus(config runConfig) string {
@@ -4697,6 +4968,10 @@ func (m *model) applySavedSettings() error {
 
 	if err := validateSavedAgenticPersistenceConfig(m.savedConfig); err != nil {
 		return fmt.Errorf("invalid saved agentic persistence in TUI config: %w", err)
+	}
+
+	if err := validateSavedPlannerReviewConfig(m.savedConfig); err != nil {
+		return fmt.Errorf("invalid saved planner review in TUI config: %w", err)
 	}
 
 	if m.providerSet {

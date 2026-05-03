@@ -42,6 +42,8 @@ defmodule AgentMachine.RunSpec do
     :run_context_compact_percent,
     :max_context_compactions,
     :agentic_persistence_rounds,
+    :planner_review_mode,
+    :planner_review_max_revisions,
     :router_mode,
     :router_model_dir,
     :router_timeout_ms,
@@ -82,6 +84,8 @@ defmodule AgentMachine.RunSpec do
           run_context_compact_percent: pos_integer() | nil,
           max_context_compactions: pos_integer() | nil,
           agentic_persistence_rounds: pos_integer() | nil,
+          planner_review_mode: :prompt | :jsonl_stdio | nil,
+          planner_review_max_revisions: pos_integer() | nil,
           router_mode: :deterministic | :local | :llm,
           router_model_dir: binary() | nil,
           router_timeout_ms: pos_integer() | nil,
@@ -121,6 +125,7 @@ defmodule AgentMachine.RunSpec do
     validate_tool_options!(spec)
     validate_context_options!(spec)
     validate_agentic_persistence_options!(spec)
+    validate_planner_review_options!(spec)
     validate_router_options!(spec)
     spec
   end
@@ -284,6 +289,41 @@ defmodule AgentMachine.RunSpec do
 
     raise ArgumentError,
           "run spec :agentic_persistence_rounds requires :workflow :agentic, got: #{inspect(workflow)}"
+  end
+
+  defp validate_planner_review_options!(%__MODULE__{
+         planner_review_mode: nil,
+         planner_review_max_revisions: nil
+       }),
+       do: :ok
+
+  defp validate_planner_review_options!(%__MODULE__{
+         planner_review_mode: nil,
+         planner_review_max_revisions: revisions
+       }) do
+    require_positive_integer!(revisions, :planner_review_max_revisions)
+
+    raise ArgumentError,
+          "run spec :planner_review_max_revisions requires :planner_review_mode"
+  end
+
+  defp validate_planner_review_options!(%__MODULE__{
+         workflow: workflow,
+         planner_review_mode: mode,
+         planner_review_max_revisions: revisions
+       })
+       when mode in [:prompt, :jsonl_stdio] do
+    if workflow not in [:agentic, :auto] do
+      raise ArgumentError,
+            "run spec :planner_review_mode requires :workflow :agentic or :auto, got: #{inspect(workflow)}"
+    end
+
+    require_positive_integer!(revisions, :planner_review_max_revisions)
+  end
+
+  defp validate_planner_review_options!(%__MODULE__{planner_review_mode: mode}) do
+    raise ArgumentError,
+          "run spec :planner_review_mode must be :prompt, :jsonl_stdio, or nil, got: #{inspect(mode)}"
   end
 
   defp require_run_context_compaction!(value) when value in [:off, :on], do: :ok

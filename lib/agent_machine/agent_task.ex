@@ -62,7 +62,8 @@ defmodule AgentMachine.AgentTask do
     [
       event_sink: event_sink(context),
       permission_control: control,
-      tool_approval_callback: approval_callback(context)
+      tool_approval_callback: approval_callback(context),
+      planner_review_callback: runtime_control_callback(context)
     ]
   end
 
@@ -74,6 +75,10 @@ defmodule AgentMachine.AgentTask do
 
   defp approval_callback(_context),
     do: fn _request -> {:cancelled, "permission control unavailable"} end
+
+  defp runtime_control_callback(%{permission_control: control}) when is_pid(control) do
+    fn request -> PermissionControl.request(control, request) end
+  end
 
   defp maybe_append_tool_record(context, %{type: :tool_call_started} = event) do
     append_agent(context, %{type: "tool_call", event: event})

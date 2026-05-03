@@ -44,6 +44,18 @@ defmodule AgentMachine.EventSummary do
     "#{reviewer_id} decided agentic review #{mode}"
   end
 
+  defp summary(%{type: :planner_review_requested, planner_id: planner_id, count: count}) do
+    "#{planner_id} requested review for #{count} delegated agent(s)"
+  end
+
+  defp summary(%{type: :planner_review_requested, planner_id: planner_id}) do
+    "#{planner_id} requested planner review"
+  end
+
+  defp summary(%{type: :planner_review_decided, planner_id: planner_id, decision: decision}) do
+    "#{planner_id} planner review #{decision}"
+  end
+
   defp summary(%{type: :provider_request_started, agent_id: agent_id}) do
     "#{agent_id} sent provider request"
   end
@@ -123,11 +135,14 @@ defmodule AgentMachine.EventSummary do
     |> Map.take([
       :agent_id,
       :reviewer_id,
+      :planner_id,
       :parent_agent_id,
       :attempt,
       :next_attempt,
       :round,
       :continue_count,
+      :revision_count,
+      :max_revisions,
       :mode,
       :completion_evidence_count,
       :completion_evidence,
@@ -154,6 +169,8 @@ defmodule AgentMachine.EventSummary do
       :input_summary,
       :result_summary,
       :delegated_agent_ids,
+      :proposed_agents,
+      :planner_output,
       :provider,
       :count,
       :requested,
