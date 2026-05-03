@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed the TUI so legacy low-budget `code-edit` shell settings do not block
+  plain auto-routed chat turns such as `hi`; explicit agentic/tool retries still
+  fail fast with the `/tools code-edit ... 120000 16 ...` repair command.
+- Rewrote the README into a polished GitHub-style guide with clearer quick
   start, workflow, tool, provider, safety, and architecture sections.
 - Fixed failed agentic runs so unresolved worker errors suppress misleading
   finalizer output in client summaries and keep progress observer commentary

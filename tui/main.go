@@ -4498,6 +4498,9 @@ func validateCodeEditShellBudget(config runConfig) error {
 	if config.ToolHarness != "code-edit" || (config.ToolApproval != "ask-before-write" && config.ToolApproval != "full-access") {
 		return nil
 	}
+	if config.Workflow == workflowAuto {
+		return nil
+	}
 
 	timeout, err := positiveIntValue(config.ToolTimeout, "tool timeout ms")
 	if err != nil {

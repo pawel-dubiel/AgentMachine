@@ -1522,7 +1522,7 @@ func TestValidateRunnableConfigRejectsCommandCapableCodeEditWithLegacyToolBudget
 	}
 }
 
-func TestStartRunRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+func TestStartRunAllowsAutoChatWithLegacyCodeEditShellBudget(t *testing.T) {
 	m := model{
 		workflow:    workflowBasic,
 		workflowSet: true,
@@ -1537,7 +1537,36 @@ func TestStartRunRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T)
 		},
 	}
 
-	updated, cmd := m.startRun("in dir /Users/pawel/priv/java create me bootstrap project")
+	updated, cmd := m.startRun("hi")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected auto chat run to start despite legacy code-edit shell budget")
+	}
+	if !result.running {
+		t.Fatal("expected run to start")
+	}
+	if len(result.messages) < 2 || result.messages[len(result.messages)-2].Text != "hi" {
+		t.Fatalf("expected user message to be recorded, got %#v", result.messages)
+	}
+}
+
+func TestStartRunWithAgenticWorkflowRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "code-edit",
+			ToolRoot:      "/Users/pawel/priv/java",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "full-access",
+		},
+	}
+
+	updated, cmd := m.startRunWithWorkflow("in dir /Users/pawel/priv/java create me bootstrap project", workflowAgentic)
 	result := updated.(model)
 
 	if cmd != nil {
