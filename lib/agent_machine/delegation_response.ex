@@ -1,11 +1,15 @@
 defmodule AgentMachine.DelegationResponse do
   @moduledoc false
 
-  alias AgentMachine.{Agent, DelegatedAgentSpec, JSON}
+  alias AgentMachine.{Agent, DelegatedAgentSpec, ModelOutputJSON}
 
   def normalize_payload!(%Agent{} = agent, payload) do
     if structured_delegation_response?(agent) do
-      parsed = payload.output |> delegation_json_text!() |> JSON.decode!()
+      parsed =
+        payload.output
+        |> delegation_json_text!()
+        |> ModelOutputJSON.decode_object!("agent_machine delegation response")
+
       require_object!(parsed)
       reject_unknown_keys!(parsed, ["decision", "output", "next_agents"], "delegation response")
 

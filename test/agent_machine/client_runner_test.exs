@@ -790,6 +790,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert finalizer.metadata == %{agent_machine_disable_tools: true}
     assert finalizer.instructions =~ "what completed"
     assert finalizer.instructions =~ "what was not verified"
+    assert finalizer.instructions =~ "status \"error\""
   end
 
   test "agentic workflow carries explicit planner review runtime options" do
@@ -1241,6 +1242,38 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.error == "assistant: provider rejected request"
     assert summary.final_output == nil
     assert summary.results["assistant"].status == "error"
+  end
+
+  test "omits finalizer output when unresolved failed agent results remain" do
+    summary =
+      ClientRunner.summarize_for_test!(%{
+        id: "run-1",
+        status: :completed,
+        results: %{
+          "worker" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "worker",
+            status: :error,
+            attempt: 1,
+            error: "provider exceeded :tool_max_rounds 6"
+          },
+          "finalizer" => %AgentResult{
+            run_id: "run-1",
+            agent_id: "finalizer",
+            status: :ok,
+            attempt: 1,
+            output: "The project is ready."
+          }
+        },
+        artifacts: %{},
+        usage: nil,
+        events: [],
+        error: nil
+      })
+
+    assert summary.status == "failed"
+    assert summary.error == "worker: provider exceeded :tool_max_rounds 6"
+    assert summary.final_output == nil
   end
 
   test "agentic persistence completion can resolve earlier worker failures in the client summary" do

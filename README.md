@@ -1,159 +1,102 @@
 # AgentMachine
 
-AgentMachine is a terminal-first AI workbench for running useful AI tasks on
-local projects with explicit permissions, visible progress, and auditable logs.
+AgentMachine is a terminal-first agent runtime for local project work. It gives
+models narrowly scoped capabilities, runs them through explicit workflows, and
+records enough structured evidence that you can audit what happened afterward.
 
-It is built for people who want more than a chat box, but still want the system
-to stay understandable. You can ask a normal question, inspect files, edit code,
-run allowlisted checks, use MCP tools such as Playwright, and review what
-happened afterward from structured logs.
+The project is intentionally small. The runtime lives in Elixir, the terminal UI
+is a thin Go client, and every meaningful permission, budget, root path, model,
+and provider value is explicit.
 
-The product goal is simple: make AI-assisted project work feel practical and
-controlled. The model should only receive the capabilities the current request
-needs, and the user should always be able to see what was selected, what tools
-were available, which agents ran, and what changed.
+> Build agent workflows that can read, edit, browse, run checks, and explain
+> what happened without giving the model ambient authority.
+
+## Contents
+
+- [Why AgentMachine](#why-agentmachine)
+- [What It Can Do](#what-it-can-do)
+- [Core Concepts](#core-concepts)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Terminal UI](#terminal-ui)
+- [CLI Usage](#cli-usage)
+- [Required Values](#required-values)
+- [Workflows](#workflows)
+- [Tools](#tools)
+- [MCP And Browser Work](#mcp-and-browser-work)
+- [Skills](#skills)
+- [Providers](#providers)
+- [Context And Long Runs](#context-and-long-runs)
+- [Observability](#observability)
+- [Architecture](#architecture)
+- [Safety Model](#safety-model)
+- [Common Commands](#common-commands)
+- [Development](#development)
+- [Further Reading](#further-reading)
+- [Project Status](#project-status)
+
+## Why AgentMachine
+
+Most AI coding tools make the easy path powerful by default. AgentMachine takes
+the opposite stance: the useful path should still be explicit.
+
+- **No hidden authority.** Tools are denied until a run is configured with a
+  harness, root, timeout, round limit, and approval mode.
+- **Visible workflow routing.** Auto mode can choose chat, read-only tool use,
+  or agentic planner/worker execution, and the selected route is emitted as a
+  runtime event.
+- **Provider boundaries stay clean.** Providers translate runtime requests into
+  OpenAI/OpenRouter calls. They do not own orchestration, tools, retries, or UI
+  behavior.
+- **Local project work is scoped.** File and code tools operate under an
+  explicit root. Root escapes fail instead of being rewritten into relative
+  paths.
+- **Logs are first-class.** CLI and TUI runs can emit JSONL events, summaries,
+  per-run logs, session logs, and redacted tool evidence.
+- **The TUI is a client, not a second runtime.** The Go app persists local
+  setup, displays progress, and talks to the Elixir CLI/session boundary.
 
 ## What It Can Do
 
-- Answer normal questions without exposing tools.
-- Inspect local folders and files under an explicit root.
-- Create and edit files when write tools are approved.
-- Apply code patches and keep rollback checkpoints for code-edit operations.
-- Run exact allowlisted test commands when full access is enabled.
-- Use MCP servers, including a managed Playwright preset for browser work.
-- Load reusable skills that add task-specific instructions and references.
-- Route simple requests through a fast path and larger tasks through agentic
-  planner/worker flows, using a local zero-shot intent model when installed.
-- Pause agentic planner delegation for explicit approve, decline, or revision
-  feedback when planner review is enabled.
-- Run opt-in bounded agentic persistence, where the runtime reviews worker
-  outcomes, delegates concrete follow-up work, and only finalizes after an
-  explicit completion decision.
-- Create controlled swarm runs for explicit multiple-variant requests, with
-  isolated variant workspaces and evaluator comparison.
-- Compact long conversations manually and compact run context automatically
-  when explicit context limits are configured.
-- Write JSONL logs for runs and TUI sessions so behavior can be debugged later.
-- Redact sensitive-looking values from logs, summaries, and tool results.
-
-## How It Feels To Use
-
-In the TUI you type a request such as:
-
-```text
-Explain what this project does.
-```
-
-or:
-
-```text
-Read README.md and tell me what is missing.
-```
-
-or:
-
-```text
-Fix the typo in docs/intro.md.
-```
-
-AgentMachine chooses the smallest execution path that fits the request. A plain
-conversation stays as chat. Read-only work can use read-only tools. Write or
-test work requires an approved write-capable harness. Larger delegated work can
-use planner and worker agents.
-
-That routing is intentionally visible. The TUI shows the requested mode, the
-selected route, the active tools, a compact work checklist, and the log path
-for the run. Tool activity is summarized in plain language so read/search/write
-steps are easier to follow without exposing full file contents in the activity
-feed.
+| Area | Capabilities |
+| --- | --- |
+| Chat | Answer normal questions without exposing tools. |
+| Local files | List, inspect, read, search, create, write, append, and replace files under an explicit root. |
+| Code editing | Apply structured edits and unified patches, create checkpoints, roll back changes, and run allowlisted checks. |
+| Agentic work | Route larger tasks through planner, worker, evaluator, and finalizer agents. |
+| Swarms | Run explicit multi-variant agentic work in isolated variant workspaces, then evaluate the results. |
+| Browser work | Use explicitly configured MCP tools such as Playwright for browser navigation and snapshots. |
+| Skills | Load reusable instruction bundles, references, assets, and optional scripts. |
+| Context | Track context budgets, compact conversations manually, and compact run context when configured. |
+| Observability | Emit redacted JSON/JSONL output, telemetry events, run logs, session logs, and progress commentary. |
 
 ## Core Concepts
 
-**Smart auto mode**
+AgentMachine has a few rules that shape the whole project:
 
-Normal TUI messages use smart automatic routing. The app chooses a small,
-practical path for each request:
-
-- plain chat for normal conversation.
-- fast read-only tool use for inspection and lookup.
-- agentic planner/worker execution for broad project/codebase analysis,
-  delegated work, write, code-edit, test, or browser work.
-
-By default, auto mode asks the selected provider/model to classify the request
-through a strict JSON router prompt before any workflow starts. The LLM router
-returns an intent, work shape, and advisory route hint; Elixir still validates
-capabilities, permissions, and the final route. Deterministic rules still guard
-obvious tool intents, and `/router deterministic` or `/router local <model-dir>`
-can select the older explicit router modes.
-Local router model installs are pinned to an immutable Hugging Face revision and
-verify SHA-256 hashes for every downloaded artifact before use.
-
-**Tools are capabilities, not defaults**
-
-Configured tools are not automatically exposed to every prompt. Tool access is
-selected per run and constrained by intent, root path, approval mode, and tool
-risk. Missing required configuration fails fast with an explicit error.
-
-**Agentic work is visible**
-
-When a task needs delegation, the runtime can create a planner and worker
-agents. The TUI shows each agent's status, parent, elapsed time, recent events,
-tool activity, streamed provider text, and final output when available. Planner
-delegation responses are strict JSON and fail fast when the provider returns
-malformed JSON. Assistant responses and agent final output render basic
-Markdown formatting such as bold text, headings, inline code, links, lists, and
-blockquotes.
-
-Agentic persistence is explicit and bounded. When
-`agentic_persistence_rounds` is set for an `agentic` run, the runtime starts a
-goal reviewer after the planner and workers go idle. The reviewer must return
-strict JSON saying either `complete` with no follow-up agents or `continue`
-with concrete worker specs. A `complete` decision must also include structured
-`completion_evidence` entries that cite prior agent output, tool results,
-artifacts, or decisions; unknown evidence sources fail the run before the
-finalizer starts. Each `continue` consumes one configured round and all
-reviewers/follow-up workers count against `max_steps`; exhaustion fails the run
-instead of summarizing success. Persistence is rejected for non-agentic
-workflows and for the swarm strategy in this version.
-
-Planner review is a separate opt-in gate for delegation plans. When enabled for
-an agentic run, the runtime emits a `planner_review_requested` event after the
-planner proposes workers and before any worker starts. A user or TUI can
-approve the plan, decline it and fail the run before worker execution, or send
-feedback that reruns the planner. Revision loops are bounded by an explicit
-maximum revision count. Planner approval does not approve tool execution;
-write, command, and MCP permissions still use the normal runtime permission
-control path.
-
-**Swarm strategy**
-
-When the request explicitly asks for a swarm, variants, competing solutions, or
-several approaches, auto routing selects the agentic workflow with a visible
-`swarm` strategy. The planner creates isolated variant workers, normally
-`minimal`, `robust`, and `experimental`, followed by an evaluator that compares
-the variants. Variants use separate workspaces such as
-`.agent-machine/swarm/<run_id>/<variant_id>` under the configured tool root.
-For swarm variants, filesystem and code-edit tools are rooted at the variant
-workspace, not the original project root. The planner can propose workers and
-metadata, but tool permissions still come only from runtime options and
-approval callbacks. The runtime validates the graph, enforces step/depth
-limits, records variant metadata on events, and does not auto-merge a winning
-variant back into the original project.
-
-**Everything important is logged**
-
-Runs can produce JSON or JSONL output. The TUI runs one long-lived Elixir
-session daemon per conversation, writes a session-level JSONL log for daemon
-activity, and writes an explicit per-turn run log containing the runtime events
-and final summary shown in the TUI status line.
+- **Runs are explicit specs.** A run is not started until the task, workflow,
+  provider, timeout, step limit, attempt limit, and provider-specific values
+  validate.
+- **Routing is advice plus enforcement.** Classifiers can identify intent and
+  suggest a route, but Elixir still checks harnesses, roots, approvals, MCP
+  config, and exact test-command allowlists.
+- **Tools are per-run capabilities.** A saved TUI setup does not give the model
+  blanket access. Each run exposes only the tools selected by the route and
+  runtime policy.
+- **Agentic work is structured.** Planners return strict JSON, workers do the
+  delegated work, evaluators compare swarm variants, and finalizers synthesize
+  the user-facing result from recorded evidence.
+- **Logs are part of the product.** Events, summaries, tool results, progress
+  commentary, and session transcripts are designed to explain the run after it
+  finishes.
 
 ## Requirements
 
-- Elixir `1.19.5`
-- Erlang/OTP `28`
-- Go `1.24.2` for the terminal UI
+- Elixir `1.15+` as declared by `mix.exs`
+- Erlang/OTP compatible with the installed Elixir version
+- Go `1.24.2` for the Bubble Tea terminal UI
 - `rg` (`ripgrep`) for local file search tools
-- Node.js 20 or newer only when using Playwright MCP
+- Node.js `20+` only when using Playwright MCP through `npx`
 
 On macOS with Homebrew:
 
@@ -161,13 +104,13 @@ On macOS with Homebrew:
 brew install elixir ripgrep
 ```
 
-Check local versions:
+Check the local toolchain:
 
 ```sh
 elixir --version
 mix --version
-erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell
 go version
+rg --version
 ```
 
 ## Quick Start
@@ -178,7 +121,7 @@ Install dependencies:
 make deps
 ```
 
-Run a local smoke test without any external model provider:
+Run a local smoke test with the built-in Echo provider:
 
 ```sh
 make run-echo TASK="Summarize what AgentMachine can do"
@@ -190,37 +133,38 @@ Start the terminal UI:
 make run
 ```
 
-Install the TUI launcher for use from any directory:
+Install launchers into `~/.local/bin`:
 
 ```sh
 make install
 agent-machine
 ```
 
-The installer writes `agent-machine` and `agent-machine-tui` launchers to
-`~/.local/bin` by default. Override the destination with
-`INSTALL_BIN_DIR=/absolute/path`. Both launchers set `AGENT_MACHINE_ROOT` to
-this checkout and still require `mix` on `PATH`.
+Override the install destination with an absolute path:
 
-Run the quality gate:
+```sh
+make install INSTALL_BIN_DIR=/absolute/bin/path
+```
+
+Run the full local quality gate:
 
 ```sh
 make quality
 ```
 
-For a deeper feature checklist, see [FEATURES.md](FEATURES.md). For runtime
-flow documentation, see [docs/runtime-flow.md](docs/runtime-flow.md) and the
-standalone [PlantUML diagram](docs/agent-runtime-flow.puml).
-
 ## Terminal UI
 
-Start the TUI:
+The TUI is the primary interactive experience. It keeps provider setup, model
+selection, tool configuration, MCP setup, skills, logs, context budgets, and
+agent detail views in one terminal session.
+
+Start it from the repository root:
 
 ```sh
 make tui
 ```
 
-or:
+or from the Go package:
 
 ```sh
 cd tui
@@ -232,138 +176,66 @@ Useful first commands:
 ```text
 /setup
 /provider echo|openai|openrouter
-/theme classic|matrix
 /key <api-key>
 /models reload
 /model
 /router llm
-/router deterministic
-/router local <model-dir>
-/compact
-/context status
-/context window <tokens> [warning-percent]
-/context tokenizer <path>
-/context reserve <tokens>
-/context run-compaction on <compact-percent> <max-compactions>
-/progress observer on|off
-/planner-review on <max-revisions>
-/planner-review off
-/agentic-persistence <rounds> <max-steps> <timeout-ms>
-/agentic-persistence off
-/tools off
-/tools local-files <root> <timeout-ms> <max-rounds> <approval-mode>
-/tools code-edit <root> <timeout-ms> <max-rounds> <approval-mode>
+/tools local-files . 120000 16 ask-before-write
+/tools code-edit . 120000 16 ask-before-write
 /mcp add playwright npx @playwright/mcp@latest
-/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>
+/skills list
 /agents
-/agent <id>
-/send-agent <agent-id> <message>
-/read-agent <agent-id>
 ```
 
-Agent detail views show streamed provider text separately from the final
-normalized output, decision, errors, and compacted event history. The TUI also
-supports `classic` and Matrix-inspired `matrix` themes through `/theme`.
-When `/progress observer on` is enabled, a separate runtime observer model emits
-short `progress_commentary` updates under the live thinking area. These updates
-are UI-only activity for the current run; they are not appended to conversation
-messages, not sent to the next run prompt, and not included by `/compact`.
+The TUI supports:
 
-The TUI keeps saved user settings in `~/.agent-machine/tui-config.json` with
-`0600` permissions. Override the exact config path with
-`AGENT_MACHINE_TUI_CONFIG`.
+- provider-specific model selection for OpenAI and OpenRouter;
+- saved API keys in the local user config;
+- automatic route display for chat, tool, basic, and agentic runs;
+- interactive permission prompts for write, command, delete, and network risk;
+- planner review with approve, decline, and revise decisions;
+- sidechain session agents with `/agents`, `/agent <id>`,
+  `/send-agent <id> <message>`, and `/read-agent <id>`;
+- classic and Matrix-inspired themes with `/theme classic|matrix`;
+- conversation compaction through `/compact`;
+- context controls through `/context ...`;
+- progress commentary through `/progress observer on|off`.
 
-When no skills directory is configured, the TUI initializes and persists
-`~/.agent-machine/skills` so `/skills list` has an explicit local catalog path.
-In the TUI, `/skills list` opens an installed-skill picker. Use Up/Down to
-move, type to filter, and Enter to select or unselect an explicit skill.
+User config is stored at:
 
-The TUI status lines include cumulative token usage for the current TUI session,
-the launch working directory, and the current git branch. The same context is
-also shown next to the input hint, including while idle, queued, or waiting on
-permission. Token totals update when provider requests finish, with the final
-run summary used as a fallback for any remaining usage.
+```text
+~/.agent-machine/tui-config.json
+```
+
+Set `AGENT_MACHINE_TUI_CONFIG` to use a specific config file. Project config is
+read from the nearest `.agent-machine/tui-config.json`, but project config may
+only override non-secret settings and path settings must stay inside the project
+root.
 
 Naming convention:
 
-- Use `agent-machine` for user-facing launchers, config directories, logs, and
-  examples, as well as hidden runtime directories under a tool root.
-- Keep `agent_machine` only for Elixir/Mix task names, Elixir file paths, and
-  internal metadata keys where underscore naming is the actual API.
-
-Config precedence:
-
-```text
-AGENT_MACHINE_TUI_CONFIG
-nearest ./.agent-machine/tui-config.json
-~/.agent-machine/tui-config.json
-legacy OS config dir fallback, such as ~/Library/Application Support/agent-machine/tui-config.json
-```
-
-Project config files may override non-secret settings. Provider API keys must
-stay in the user config, project `full-access` tool approval is rejected, and
-project path settings must stay inside the project root. Session logs and TUI
-per-run logs are written under the user config area in `logs/*.jsonl`.
-Sidechain agent transcripts are stored under `logs/sessions/<session-id>/`.
-
-The TUI talks to the runtime through:
-
-```sh
-mix agent_machine.session --jsonl-stdio --session-id <id> --session-dir <path>
-```
-
-That daemon accepts JSONL commands such as `user_message`,
-`send_agent_message`, `read_agent_output`, `cancel_agent`, `shutdown`, and
-`permission_decision` or `planner_review_decision`. `user_message` may include
-an explicit `log_file` path for the per-turn run log, `progress_observer: true`
-to enable the same background observer for that run, and planner review options
-for agentic runs. Normal one-shot CLI usage remains
-`mix agent_machine.run`.
-
-## Providers
-
-AgentMachine currently supports:
-
-- `echo`: local provider for smoke tests and examples.
-- `openai`: OpenAI Responses API.
-- `openrouter`: OpenRouter Chat Completions API.
-
-Remote provider runs require an API key, model id, HTTP timeout, and explicit
-pricing values. Pricing is not guessed because cost reporting should be
-intentional.
-
-OpenAI:
-
-```sh
-export OPENAI_API_KEY="sk-..."
-```
-
-OpenRouter:
-
-```sh
-export OPENROUTER_API_KEY="..."
-```
-
-The TUI can save provider keys locally so you do not need to export them for
-every run.
+- Use `agent-machine` for launchers, user config directories, logs, and hidden
+  runtime folders.
+- Use `agent_machine` for Mix tasks, Elixir modules, file paths, and internal
+  metadata keys where underscore naming is the actual API.
 
 ## CLI Usage
 
-Use the CLI when you want scriptable runs or exact control over flags:
+Use `mix agent_machine.run` for scriptable runs and exact flag control.
+
+Basic local run:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
+  --workflow basic \
   --provider echo \
-  --router-mode deterministic \
   --timeout-ms 30000 \
-  --max-steps 6 \
+  --max-steps 2 \
   --max-attempts 1 \
-  --json \
-  "Review this project and summarize the next step"
+  "Summarize this project"
 ```
 
-Use JSONL for live progress and machine-readable event streams:
+Auto-routed JSONL run with deterministic routing:
 
 ```sh
 mix agent_machine.run \
@@ -374,37 +246,28 @@ mix agent_machine.run \
   --max-steps 6 \
   --max-attempts 1 \
   --jsonl \
-  --stream-response \
-  "Explain the current README"
+  "Explain README.md"
 ```
 
-Enable model-written progress commentary with an explicit observer opt-in:
+Remote provider run:
 
 ```sh
 mix agent_machine.run \
   --workflow auto \
   --provider openrouter \
-  --model moonshotai/kimi-k2.6 \
+  --model <model-id> \
   --http-timeout-ms 30000 \
-  --input-price-per-million 0.15 \
-  --output-price-per-million 2.50 \
-  --timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
   --max-steps 6 \
   --max-attempts 1 \
   --jsonl \
-  --progress-observer \
-  "Inspect the project and report the likely next change"
+  --stream-response \
+  "Review this project and suggest the next small change"
 ```
 
-The observer is a background sidecar in the Elixir runtime. It receives only a
-bounded, redacted evidence pack derived from runtime events, has no tool access,
-does not change run state, and emits `progress_commentary` JSONL events with
-`run_id`, `commentary`, `source`, `evidence_count`, `agent_ids`,
-`tool_call_ids`, and `at`. The flag requires `--jsonl` and a real remote
-provider/model; the echo provider fails fast because it cannot produce observer
-commentary.
-
-Write a run log:
+Write an explicit JSONL run log:
 
 ```sh
 mix agent_machine.run \
@@ -418,205 +281,189 @@ mix agent_machine.run \
   "Review this project"
 ```
 
-Compact the current conversation history through the selected provider/model:
+Compact a conversation:
 
 ```sh
 mix agent_machine.compact \
-  --provider echo \
-  --model echo \
+  --provider openrouter \
+  --model <model-id> \
   --http-timeout-ms 30000 \
-  --input-price-per-million 0 \
-  --output-price-per-million 0 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
   --input-file ./conversation.json \
   --json
 ```
 
-The input file must contain:
+The compact input must be:
 
 ```json
 {"type":"conversation","messages":[{"role":"user","text":"..."}]}
 ```
 
-The compact command requires strict JSON output from the model and fails on
-missing provider/model/pricing/timeout options, invalid input, invalid provider
-JSON, or an empty summary.
+## Required Values
 
-Context budget and run-context compaction options are explicit:
+AgentMachine fails fast when required runtime input is missing.
 
-```sh
-mix agent_machine.run \
-  --workflow agentic \
-  --provider echo \
-  --timeout-ms 30000 \
-  --max-steps 6 \
-  --max-attempts 1 \
-  --context-window-tokens 128000 \
-  --context-warning-percent 80 \
-  --context-tokenizer-path ./tokenizer.json \
-  --reserved-output-tokens 4096 \
-  --run-context-compaction on \
-  --run-context-compact-percent 90 \
-  --max-context-compactions 2 \
-  --json \
-  "Plan and execute the task"
-```
+Every run requires:
 
-Context budgets are separate from cumulative run usage. The runtime emits
-`context_budget` events before provider requests by measuring the exact request
-body with `--context-tokenizer-path`. Unknown model context windows and missing
-tokenizers are not guessed; the event reports `status: "unknown"` with an
-explicit reason. If `--reserved-output-tokens` is omitted, available-token math
-stays unknown instead of assuming zero. Automatic run-context compaction only
-runs when enabled with a context window, compact threshold, maximum compaction
-count, and a known budget measurement; otherwise it emits a skipped event.
-The TUI mirrors the latest budget event in the status line.
+- exactly one non-empty task;
+- `--workflow chat|basic|agentic|auto`;
+- `--provider echo|openai|openrouter`;
+- `--timeout-ms <positive-int>`;
+- `--max-steps <positive-int>`;
+- `--max-attempts <positive-int>`.
 
-Bounded agentic persistence is also explicit:
+Remote providers also require:
 
-```sh
-mix agent_machine.run \
-  --workflow agentic \
-  --provider echo \
-  --timeout-ms 300000 \
-  --max-steps 9 \
-  --max-attempts 1 \
-  --agentic-persistence-rounds 2 \
-  --jsonl \
-  --stream-response \
-  "Finish this task and verify the outcome"
-```
+- `--model <id>`;
+- `--http-timeout-ms <positive-int>`;
+- `--input-price-per-million <number>`;
+- `--output-price-per-million <number>`;
+- the provider API key in the environment or saved TUI config.
 
-The same setting is available in the TUI with
-`/agentic-persistence <rounds> <max-steps> <timeout-ms>`. Enabling it forces
-the next runs to send `workflow=agentic` plus those exact budgets;
-`/agentic-persistence off` clears all persistence fields.
+Tool-enabled runs require the full tool budget:
 
-Planner review can be enabled for agentic or auto-routed agentic runs:
+- one or more `--tool-harness ...` values;
+- `--tool-timeout-ms <positive-int>`;
+- `--tool-max-rounds <positive-int>`;
+- `--tool-approval-mode read-only|ask-before-write|auto-approved-safe|full-access`;
+- `--tool-root <path>` when using `local-files` or `code-edit`;
+- `--mcp-config <path>` when using `mcp`.
 
-```sh
-mix agent_machine.run \
-  --workflow agentic \
-  --provider echo \
-  --timeout-ms 300000 \
-  --max-steps 6 \
-  --max-attempts 1 \
-  --planner-review jsonl-stdio \
-  --planner-review-max-revisions 2 \
-  --jsonl \
-  "Plan this task before doing it"
-```
+## Workflows
 
-Interactive terminal review uses `--planner-review prompt` with the same
-explicit revision limit. The TUI command is
-`/planner-review on <max-revisions>`; it sends JSONL review decisions over the
-session stdin channel and shows the proposed worker ids, dependencies, goals,
-and planner reason. `/planner-review off` clears the setting.
-
-TUI filesystem tool roots are resolved from the directory where the TUI was
-started. For example, `/tools local-files . 120000 16 ask-before-write` stores
-the launch directory as the explicit root before calling the Elixir runtime.
-Older user configs that point filesystem tools at the home directory are
-migrated to the launch directory on startup so project runs stay scoped to the
-current working tree.
-
-Common Make targets:
-
-```sh
-make help
-make deps
-make install
-make test
-make quality
-make run
-make tui
-make tui-test
-make tui-build
-```
-
-## Tools And Permissions
-
-Tools are off until you enable a harness and provide the required limits. The
-most common harnesses are:
-
-| Harness | What it is for |
+| Workflow | Purpose |
 | --- | --- |
-| `time` | Safe current time/date lookup. |
-| `local-files` | Local file and folder reading plus simple file writes under an explicit root. |
-| `code-edit` | Code-focused patch/edit operations with checkpoints and optional allowlisted tests. |
-| `mcp` | Explicitly configured Model Context Protocol tools. |
-| `skills` | Selected skill references and assets. |
+| `chat` | One no-tool assistant for plain conversation. Rejects tool options. |
+| `basic` | One assistant plus a no-tool finalizer. Useful for simple provider runs. |
+| `agentic` | Planner, delegated workers, optional evaluator/reviewer work, then finalizer. |
+| `auto` | Runtime-selected route: chat, internal read-only tool path, basic, or agentic. |
 
-Local file and code tools require `--tool-root`. Paths outside that root fail.
-Tool permissions have two layers:
+The internal `tool` route is selected by `auto` for narrow read-only tool work.
+It is not accepted as a public `--workflow` value.
 
-- Capability grants decide which narrow tools are visible to the current agent
-  attempt, such as `code-edit` under one root, selected MCP tools from the
-  already loaded MCP config, or exact allowlisted test commands.
-- Execution approvals decide whether one concrete risky tool call may run, such
-  as one write, delete, command, or network call.
+Auto routing supports three router modes:
 
-The runtime enforces both layers. The TUI only displays permission requests and
-sends approve/deny decisions back to the CLI.
-When auto routing detects that a request needs a missing harness, broader
-approval, allowlisted test command, or MCP browser capability, the Elixir
-runtime returns a structured `capability_required` summary/event. The TUI
-renders that runtime-owned requirement; it does not classify filesystem,
-code-edit, test, or browser intent itself.
+```sh
+--router-mode llm
+--router-mode deterministic
+--router-mode local --router-model-dir <dir> --router-timeout-ms <ms> --router-confidence-threshold <float>
+```
 
-Session-control tools are a separate internal layer in TUI daemon runs. The
-coordinator may use `spawn_agent`, `send_agent_message`, `read_agent_output`,
-and `list_session_agents` to manage session sidechain agents. These tools do not
-grant filesystem, MCP, command, or network capability; worker agents still need
-the normal tool harness, root, MCP config, exact command allowlist, and
-permission approvals.
+LLM routing asks the selected provider/model for strict JSON classification,
+then Elixir validates capabilities before any workflow starts. Deterministic
+guards still protect obvious tool, file, test, browser, and mutation intents.
+
+Agentic extras are opt-in:
+
+```sh
+--planner-review prompt --planner-review-max-revisions 2
+--agentic-persistence-rounds 2
+```
+
+Planner review pauses worker scheduling until a plan is approved, declined, or
+sent back for revision. Agentic persistence adds bounded reviewer rounds that
+must either prove completion with structured evidence or delegate concrete
+follow-up work.
+
+Swarm strategy is selected when the task explicitly asks for variants,
+competing solutions, a swarm, or several approaches. Variant workers run in
+isolated workspaces under `.agent-machine/swarm/<run-id>/<variant-id>` and are
+not merged back automatically.
+
+## Tools
+
+Tools are capabilities, not defaults. A model only sees the tools exposed for
+the current route, harness, and approval mode.
+
+| Harness | What it exposes |
+| --- | --- |
+| `demo` | The same safe current-time demo tool used by early smoke tests. |
+| `time` | Current time/date lookup. |
+| `local-files` | Directory creation, metadata, listing, reading, search, write, append, and exact replacement under `--tool-root`. |
+| `code-edit` | File inspection, search, structured edits, patch application, checkpoints, rollback, optional test commands, and optional shell commands. |
+| `mcp` | Namespaced tools from an explicitly validated MCP config. |
+| `skills` | Selected skill resources and optional skill scripts. |
 
 Approval modes:
 
-- `read-only`
-- `ask-before-write`
-- `auto-approved-safe`
-- `full-access`
+| Mode | Meaning |
+| --- | --- |
+| `read-only` | Exposes read-risk tools only. |
+| `ask-before-write` | Requires an approval callback for write, delete, command, or network risk. |
+| `auto-approved-safe` | Allows safe configured actions without interactive approval. |
+| `full-access` | Skips approval prompts for already allowed risk classes, but still obeys allowlists, roots, MCP config, and path guards. |
 
-Interactive permission control is available only for JSONL runs:
+Read files under the current project root:
 
 ```sh
 mix agent_machine.run \
-  --jsonl \
-  --permission-control jsonl-stdio \
-  --tool-harness code-edit \
-  --tool-root /path/to/project \
+  --workflow auto \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 6 \
+  --max-attempts 1 \
+  --tool-harness local-files \
+  --tool-root "$PWD" \
   --tool-timeout-ms 30000 \
   --tool-max-rounds 6 \
-  --tool-approval-mode ask-before-write \
-  "fix the failing tests"
+  --tool-approval-mode read-only \
+  --jsonl \
+  "Read README.md and summarize the public API"
 ```
 
-In interactive runs, `ask-before-write` exposes a safe `request_capability`
-negotiation tool so a worker can ask for a current-attempt grant mid-run. Grants
-are run-local, are not inherited by sibling workers, and are not persisted.
-`full-access` bypasses approval prompts for already allowed risk classes, but it
-does not bypass tool allowlists, MCP config allowlists, or path guards.
+Run an interactive code-edit session with JSONL permission control:
 
-Test commands are intentionally narrow. A model can run tests only through
-`code-edit` and only when the exact command was allowlisted with
-`--test-command` when using the dedicated `run_test_command` tool.
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 8 \
+  --max-attempts 1 \
+  --tool-harness code-edit \
+  --tool-root "$PWD" \
+  --tool-timeout-ms 120000 \
+  --tool-max-rounds 16 \
+  --tool-approval-mode ask-before-write \
+  --permission-control jsonl-stdio \
+  --jsonl \
+  "Fix the failing tests"
+```
 
-When `code-edit` runs with `ask-before-write` or `full-access`, it also exposes
-foreground and background shell-command tools for project work. Shell commands
-must provide an explicit `cwd` under `--tool-root` and an explicit `timeout_ms`
-no greater than `--tool-timeout-ms`. They run through a POSIX shell, do not
-support interactive stdin, return bounded redacted combined output, and create
-code-edit rollback checkpoints for tracked text-file changes under the tool
-root.
-Background commands can be started, read, listed, and stopped within the owning
-run. This is a broad command capability; commands may still access the host
-environment according to the operating system account that runs AgentMachine.
+Allow one exact test command:
 
-`ask-before-write` requires an approval callback, or
-`--permission-control jsonl-stdio` in a JSONL CLI/TUI run, whenever exposed tools
-include write, delete, command, or network risk.
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 8 \
+  --max-attempts 1 \
+  --tool-harness code-edit \
+  --tool-root "$PWD" \
+  --tool-timeout-ms 120000 \
+  --tool-max-rounds 16 \
+  --tool-approval-mode ask-before-write \
+  --test-command "mix test" \
+  --permission-control jsonl-stdio \
+  --jsonl \
+  "Run the allowlisted tests and fix failures"
+```
 
-Rollback for code-edit checkpoints:
+Restore a code-edit checkpoint:
 
 ```sh
 mix agent_machine.rollback \
@@ -626,56 +473,71 @@ mix agent_machine.rollback \
 
 ## MCP And Browser Work
 
-MCP support lets AgentMachine use external tool servers through explicit config.
-The TUI includes a convenient Playwright preset:
+MCP support is explicit and allowlist-based. A config must name each server,
+transport, tool, permission, risk, and `inputSchema`.
+
+Use the TUI Playwright preset:
 
 ```text
 /mcp add playwright npx @playwright/mcp@latest
 ```
 
-That writes a managed MCP config, allowlists browser navigation and page
-snapshot tools, and keeps the setup visible in `/setup` and run banners.
-When using a standalone MCP config, pass an explicit tool budget with
-`/mcp-config <path> <timeout-ms> <max-rounds> <approval-mode>`.
-MCP tool entries must include an explicit `inputSchema` object. AgentMachine
-exposes that schema under the provider-visible `arguments` property and
-validates arguments before any MCP transport call. Repeated identical malformed
-MCP calls fail early instead of consuming every configured tool round.
-Streamable HTTP MCP servers must use HTTPS unless they target loopback, and
-environment-sourced HTTP headers are rejected on plain HTTP.
-
-Browser navigation is a network-capable action, so it requires either
-interactive `ask-before-write` permission control or explicit `full-access`. A
-prompt should clearly request browser/MCP work, for example:
+Use a standalone MCP config:
 
 ```text
-Use agents and Playwright MCP to open https://example.com and report the page title.
+/mcp-config /path/to/mcp.json 120000 16 ask-before-write
 ```
 
-Auto mode also treats Google/search/news-style research prompts as browser work
-when the Playwright MCP browser tools are configured.
-If browser work is detected while approval is too narrow, the runtime returns a
-structured `capability_required` response and the TUI can prompt for interactive
-approval or full-access before retrying as an MCP-only run.
+Or pass MCP to the CLI:
 
-For a standalone example config, see [examples/playwright.mcp.json](examples/playwright.mcp.json).
+```sh
+mix agent_machine.run \
+  --workflow auto \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 8 \
+  --max-attempts 1 \
+  --tool-harness mcp \
+  --mcp-config examples/playwright.mcp.json \
+  --tool-timeout-ms 120000 \
+  --tool-max-rounds 16 \
+  --tool-approval-mode ask-before-write \
+  --permission-control jsonl-stdio \
+  --jsonl \
+  "Use Playwright MCP to open https://example.com and report the page title"
+```
+
+MCP security rules:
+
+- stdio commands must be executable names or paths, not shell snippets;
+- environment values must use `env:NAME` references;
+- Streamable HTTP must use HTTPS unless the host is loopback;
+- environment-sourced HTTP headers are rejected over plain HTTP;
+- provider-visible tool names are namespaced as `mcp_<server>_<tool>`.
+
+See [examples/playwright.mcp.json](examples/playwright.mcp.json).
 
 ## Skills
 
-Skills are reusable instruction bundles. They are useful when you want the same
-style, policy, or reference material applied across runs.
+Skills are reusable instruction bundles installed under an explicit skills
+directory. A skill is a folder with a required `SKILL.md` file and optional
+`references/`, `assets/`, `scripts/`, and agent hint files.
 
-A skill lives in a folder with a `SKILL.md` file. Optional references, assets,
-scripts, and agent hints can be included, but script execution is off unless you
-explicitly enable it.
-
-Common commands:
+Create a local skill:
 
 ```sh
 mix agent_machine.skills create docs-helper \
   --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation"
+```
 
+Generate a skill through a provider:
+
+```sh
 mix agent_machine.skills generate docs-helper \
   --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation" \
@@ -684,51 +546,216 @@ mix agent_machine.skills generate docs-helper \
   --http-timeout-ms 120000 \
   --input-price-per-million <input-price> \
   --output-price-per-million <output-price>
-
-mix agent_machine.skills list --skills-dir ~/.agent-machine/skills
-mix agent_machine.skills install docs-helper --skills-dir ~/.agent-machine/skills
 ```
 
-In the TUI, use `/skills list` to open the installed-skill picker for the
-configured skills directory.
+Manage installed skills:
+
+```sh
+mix agent_machine.skills list --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills search docs --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills show docs-helper --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills install docs-helper --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills remove docs-helper --skills-dir ~/.agent-machine/skills
+```
+
+Use skills in a run:
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 8 \
+  --max-attempts 1 \
+  --skills auto \
+  --skills-dir ~/.agent-machine/skills \
+  "Update the README"
+```
 
 More detail is in [docs/skills.md](docs/skills.md).
 
-## Reliability And Observability
+## Providers
 
-AgentMachine is built on OTP supervision. Each run has isolated runtime
-processes for orchestration, agent tasks, event collection, and tool sessions.
-From a user perspective this means long runs can be tracked, timed out, and
-cleaned up without leaving hidden background work.
+AgentMachine currently supports:
 
-High-level CLI/TUI timeouts use an idle lease. Runtime activity such as provider
-events, tool calls, stream deltas, and agent heartbeats keeps the run alive, but
-only up to a hard cap. Timeout events are logged.
+| Provider | Runtime module | API key |
+| --- | --- | --- |
+| `echo` | `AgentMachine.Providers.Echo` | None |
+| `openai` | `AgentMachine.Providers.OpenAIResponses` | `OPENAI_API_KEY` |
+| `openrouter` | `AgentMachine.Providers.OpenRouterChat` | `OPENROUTER_API_KEY` |
 
-Logs and summaries are redacted before output. The redactor masks common API
-keys, bearer tokens, authorization headers, GitHub tokens, AWS access key IDs,
-private key blocks, and secret-looking fields.
+### OpenAI
+
+```sh
+export OPENAI_API_KEY="sk-..."
+```
+
+OpenAI runs use the Responses API and require an explicit model, HTTP timeout,
+and input/output pricing when called from the CLI.
+
+### OpenRouter
+
+```sh
+export OPENROUTER_API_KEY="..."
+```
+
+OpenRouter runs use Chat Completions and require an explicit model, HTTP
+timeout, and input/output pricing when called from the CLI.
+
+The TUI can load model lists and pricing for OpenAI/OpenRouter, save selected
+models provider-by-provider, and inject saved API keys into the Mix child
+process.
+
+## Context And Long Runs
+
+Context budget monitoring is opt-in and measured against the actual provider
+request body when a tokenizer path is configured.
+
+```sh
+mix agent_machine.run \
+  --workflow agentic \
+  --provider openrouter \
+  --model <model-id> \
+  --http-timeout-ms 30000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 8 \
+  --max-attempts 1 \
+  --context-window-tokens 128000 \
+  --context-warning-percent 80 \
+  --context-tokenizer-path ./tokenizer.json \
+  --reserved-output-tokens 4096 \
+  --run-context-compaction on \
+  --run-context-compact-percent 90 \
+  --max-context-compactions 2 \
+  --jsonl \
+  "Plan and execute the task"
+```
+
+If the tokenizer or context window is missing, AgentMachine reports the budget
+as unknown instead of guessing. Automatic run-context compaction only runs when
+all required values are present.
+
+High-level timeouts use an idle lease derived from `--timeout-ms` and a hard cap
+of three times that lease. Runtime activity can keep a run alive until the hard
+cap, and timeout events are logged.
+
+## Observability
+
+AgentMachine exposes several levels of runtime evidence:
+
+- text summaries for humans;
+- JSON summaries for scripts;
+- JSONL events for live progress;
+- explicit `--log-file` and `--event-log-file` outputs;
+- TUI session logs under the user config directory;
+- telemetry events for run, agent, tool, MCP call, and routing activity;
+- redacted summaries, logs, and read-style tool results.
+
+The optional progress observer is a background sidecar. It receives bounded,
+redacted runtime evidence, has no tool access, cannot change run state, and
+emits `progress_commentary` events only for UI/log display.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  User["User"] --> TUI["Go TUI"]
+  User --> CLI["mix agent_machine.run"]
+  TUI --> Session["mix agent_machine.session"]
+  Session --> ClientRunner["ClientRunner"]
+  CLI --> ClientRunner
+  ClientRunner --> Router["WorkflowRouter"]
+  Router --> Workflows["Workflow builders"]
+  Workflows --> Orchestrator["Orchestrator"]
+  Orchestrator --> RunServer["RunServer"]
+  RunServer --> AgentRunner["AgentRunner"]
+  AgentRunner --> Provider["Provider"]
+  AgentRunner --> Tools["ToolHarness + ToolPolicy"]
+  Tools --> Files["Local files"]
+  Tools --> MCP["MCP servers"]
+  RunServer --> Logs["Events + JSONL logs"]
+```
+
+Ownership boundaries:
+
+- `AgentMachine.Orchestrator` and `AgentMachine.RunServer` own run state,
+  scheduling, retries, delegation, finalizers, artifacts, and usage totals.
+- `AgentMachine.AgentRunner` executes one validated agent through one provider
+  and handles provider-native tool continuation.
+- `AgentMachine.ToolHarness` and `AgentMachine.ToolPolicy` expose tools and
+  enforce permission metadata.
+- `AgentMachine.MCP.*` owns MCP config parsing, protocol transport, namespacing,
+  permissions, and result normalization.
+- `AgentMachine.Workflows.*` chooses the initial agent graph for high-level
+  workflow shapes.
+- `tui/` is a Bubble Tea client over the CLI/session boundary.
+
+For a deeper sequence view, read [docs/runtime-flow.md](docs/runtime-flow.md)
+or open [docs/agent-runtime-flow.puml](docs/agent-runtime-flow.puml).
 
 ## Safety Model
 
-AgentMachine prefers explicit errors over hidden defaults:
+AgentMachine is built around explicit failure instead of fallback behavior.
 
-- Required inputs are not guessed.
+- Missing required input fails before model execution.
+- Missing provider keys fail through environment lookup.
+- Missing pricing is an error for remote provider runs.
+- Missing tool budgets fail instead of using guessed limits.
 - Tools are denied by default.
-- Roots, budgets, and approval modes must be explicit.
-- MCP secrets must come from environment references, not inline config values.
-- MCP HTTP configs do not send environment-sourced headers over plain HTTP.
-- Tool errors are returned to the model as tool results when safe, so it can try
-  another approach within the configured round limit.
-- The runtime stops before model execution when auto routing needs a missing
-  capability and returns a structured `capability_required` response.
+- File and code tools require an explicit root.
+- Paths outside the root fail.
+- Test commands must match an exact allowlist entry.
+- MCP configs must be explicit and schema-bearing.
+- `ask-before-write` requires a runtime approval callback for risky tools.
+- Logs and summaries pass through `AgentMachine.Secrets.Redactor`.
+
+The model can request a tool call. The runtime decides whether the call exists,
+whether it is allowed, whether it needs approval, how long it may run, and how
+the result is bounded and redacted.
+
+## Common Commands
+
+```sh
+make help
+make deps
+make test
+make quality
+make run
+make tui
+make tui-test
+make tui-build
+make install
+make run-echo TASK="Summarize this project"
+make run-echo-json TASK="Summarize this project"
+make run-echo-jsonl TASK="Summarize this project"
+```
+
+Paid OpenRouter checks are excluded from the normal quality gate:
+
+```sh
+OPENROUTER_API_KEY="..." make test-openrouter-paid
+OPENROUTER_API_KEY="..." make test-openrouter-playwright-mcp
+OPENROUTER_API_KEY="..." make test-openrouter-swarm-e2e
+```
 
 ## Development
 
-Run focused tests while working:
+Run focused Elixir tests:
 
 ```sh
 mix test
+```
+
+Run Go TUI tests:
+
+```sh
+make tui-test
 ```
 
 Run the full local quality gate:
@@ -737,33 +764,27 @@ Run the full local quality gate:
 mix quality
 ```
 
-That checks formatting, compiles with warnings as errors, runs Credo in strict
-mode, and runs tests.
+`mix quality` checks formatting, compiles with warnings as errors, runs Credo in
+strict mode, and runs the Elixir test suite.
 
-Run TUI tests:
-
-```sh
-make tui-test
-```
-
-Paid OpenRouter integration tests are excluded from normal local gates. They
-require `OPENROUTER_API_KEY`:
+Format code:
 
 ```sh
-OPENROUTER_API_KEY="..." make test-openrouter-paid
+make format
 ```
 
-The Playwright MCP paid test additionally requires `npx` and Node.js 20 or
-newer:
+## Further Reading
 
-```sh
-OPENROUTER_API_KEY="..." make test-openrouter-playwright-mcp
-```
+- [FEATURES.md](FEATURES.md) maps implemented features to docs and modules.
+- [docs/runtime-flow.md](docs/runtime-flow.md) explains routing, session agents,
+  planner delegation, observers, and tool permission flow.
+- [docs/skills.md](docs/skills.md) documents skill creation, installation,
+  validation, runtime use, and registry format.
+- [plan.md](plan.md) tracks deferred work.
+- [CHANGELOG.md](CHANGELOG.md) records completed changes.
 
-The paid swarm end-to-end eval is intentionally separate from normal paid
-regression tests. It runs a three-model OpenRouter matrix through planner,
-variant workers, tool calls, evaluator, and finalizer:
+## Project Status
 
-```sh
-OPENROUTER_API_KEY="..." make test-openrouter-swarm-e2e
-```
+AgentMachine is version `0.1.0` and evolving quickly. Public behavior is kept
+explicit and tested, but the project is still moving one small runtime iteration
+at a time.

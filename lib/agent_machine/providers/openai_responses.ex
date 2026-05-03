@@ -133,7 +133,22 @@ defmodule AgentMachine.Providers.OpenAIResponses do
     |> base_request_body(opts)
     |> put_optional("instructions", agent.instructions)
     |> put_optional("metadata", agent.metadata)
+    |> put_response_format(opts)
     |> ToolHarness.put_openai_tools!(opts)
+  end
+
+  defp put_response_format(body, opts) do
+    case Keyword.fetch(opts, :response_format) do
+      {:ok, response_format} when is_map(response_format) ->
+        Map.put(body, "response_format", response_format)
+
+      {:ok, response_format} ->
+        raise ArgumentError,
+              "OpenAI response_format must be a map, got: #{inspect(response_format)}"
+
+      :error ->
+        body
+    end
   end
 
   defp budget_request_body(%Agent{} = agent, opts) do

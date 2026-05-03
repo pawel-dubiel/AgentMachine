@@ -3,7 +3,7 @@ defmodule AgentMachine.LLMRouter do
 
   use GenServer
 
-  alias AgentMachine.{Agent, Intent, RouterAdvice}
+  alias AgentMachine.{Agent, Intent, ModelOutputJSON, RouterAdvice}
 
   @valid_intents Intent.intents()
   @intent_lookup Map.new(@valid_intents, &{Atom.to_string(&1), &1})
@@ -141,21 +141,24 @@ defmodule AgentMachine.LLMRouter do
   defp provider_opts(http_timeout_ms) do
     [
       http_timeout_ms: http_timeout_ms,
+      response_format: router_response_format(),
       run_context: %{agent_graph: %{}, results: %{}, artifacts: %{}}
     ]
   end
 
+  defp router_response_format, do: %{"type" => "json_object"}
+
   defp decode_response!(output) when is_binary(output) do
-    decoded =
-      case output |> String.trim() |> Jason.decode() do
-        {:ok, value} ->
-          value
+    if not String.contains?(output, "{") do
+      raise ArgumentError,
+            "llm router invalid JSON response: provider returned no JSON object; expected keys intent, work_shape, route_hint, confidence, and reason"
+    end
 
-        {:error, error} ->
-          raise ArgumentError, "llm router invalid JSON response: #{Exception.message(error)}"
-      end
-
-    decoded
+    output
+    |> ModelOutputJSON.decode_object!(
+      "llm router response",
+      "llm router invalid JSON response"
+    )
     |> require_response_object!()
     |> reject_unknown_response_keys!()
   end
@@ -303,8 +306,12 @@ defmodule AgentMachine.LLMRouter do
     #{route_hints}
 
     Rules:
-    - Return only one JSON object.
+    - You are only a router classifier. Do not answer the user's request.
+    - Return only one JSON object whose first non-whitespace character is "{".
     - Do not include Markdown, prose, or code fences.
+    - Include exactly these keys: intent, work_shape, route_hint, confidence, reason.
+    - intent, work_shape, route_hint, and reason must be strings.
+    - confidence must be a number from 0.0 to 1.0.
     - route_hint is advisory only; the Elixir runtime validates capabilities, permissions, and the final route.
     - Use file_mutation for requests to create, write, edit, delete, rename, or modify local files or folders.
     - Use code_mutation for requests to create, edit, fix, patch, or generate code, apps, scripts, websites, tests, or project files.
@@ -315,6 +322,9 @@ defmodule AgentMachine.LLMRouter do
 
     Required JSON shape:
     {"intent":"file_read","work_shape":"broad_project_analysis","route_hint":"agentic","confidence":0.91,"reason":"short reason"}
+
+    Example for a greeting such as "hi":
+    {"intent":"none","work_shape":"conversation","route_hint":"chat","confidence":0.99,"reason":"The user sent a greeting that needs no tools."}
     """
   end
 

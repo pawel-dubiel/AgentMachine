@@ -140,7 +140,22 @@ defmodule AgentMachine.Providers.OpenRouterChat do
       "model" => agent.model,
       "messages" => messages(agent, opts)
     }
+    |> put_response_format(opts)
     |> ToolHarness.put_openrouter_tools!(opts)
+  end
+
+  defp put_response_format(body, opts) do
+    case Keyword.fetch(opts, :response_format) do
+      {:ok, response_format} when is_map(response_format) ->
+        Map.put(body, "response_format", response_format)
+
+      {:ok, response_format} ->
+        raise ArgumentError,
+              "OpenRouter response_format must be a map, got: #{inspect(response_format)}"
+
+      :error ->
+        body
+    end
   end
 
   defp budget_request_body(%Agent{} = agent, opts) do

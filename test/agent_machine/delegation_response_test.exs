@@ -43,6 +43,24 @@ defmodule AgentMachine.DelegationResponseTest do
            }
   end
 
+  test "accepts markdown-wrapped planner JSON" do
+    body =
+      JSON.encode!(%{
+        "decision" => %{"mode" => "direct", "reason" => "No worker is needed."},
+        "output" => "Short summary.",
+        "next_agents" => []
+      })
+
+    payload =
+      DelegationResponse.normalize_payload!(agent(%{}), %{
+        output: "**Plan**\n\n```json\n#{body}\n```"
+      })
+
+    assert payload.output == "Short summary."
+    assert payload.next_agents == []
+    assert payload.decision.mode == "direct"
+  end
+
   test "prepends runtime worker instructions while preserving planner instructions" do
     payload =
       normalize(

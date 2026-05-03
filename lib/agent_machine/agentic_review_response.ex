@@ -1,7 +1,7 @@
 defmodule AgentMachine.AgenticReviewResponse do
   @moduledoc false
 
-  alias AgentMachine.{Agent, DelegatedAgentSpec, JSON}
+  alias AgentMachine.{Agent, DelegatedAgentSpec, ModelOutputJSON}
 
   @evidence_kinds ["agent_output", "tool_result", "artifact", "decision"]
 
@@ -13,7 +13,11 @@ defmodule AgentMachine.AgenticReviewResponse do
   def applies?(_agent), do: false
 
   def normalize_payload!(%Agent{} = agent, payload) do
-    parsed = payload.output |> review_json_text!() |> JSON.decode!()
+    parsed =
+      payload.output
+      |> review_json_text!()
+      |> ModelOutputJSON.decode_object!("agent_machine agentic review response")
+
     require_object!(parsed)
 
     reject_unknown_keys!(

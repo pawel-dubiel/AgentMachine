@@ -356,7 +356,7 @@ defmodule AgentMachine.ClientRunner do
       run_id: run.id,
       status: summary_status(run, unresolved_failed_results),
       error: summary_error(run, unresolved_failed_results),
-      final_output: final_output(run),
+      final_output: final_output(run, unresolved_failed_results),
       workflow_route: workflow_route(run),
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
@@ -433,7 +433,9 @@ defmodule AgentMachine.ClientRunner do
     %{enabled: false, rounds: nil, continue_count: 0, completed: false}
   end
 
-  defp final_output(run) do
+  defp final_output(_run, [_failed_result | _rest]), do: nil
+
+  defp final_output(run, []) do
     case Map.fetch(run.results, "finalizer") do
       {:ok, %{status: :ok, output: output}} ->
         output

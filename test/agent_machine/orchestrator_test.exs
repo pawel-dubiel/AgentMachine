@@ -1720,6 +1720,41 @@ defmodule AgentMachine.OrchestratorTest do
     refute File.exists?(Path.join(root, "super"))
   end
 
+  test "full-access outside-root read failures return a clean agent error" do
+    root = tmp_root("agent-machine-full-access-outside-root")
+
+    outside_path =
+      Path.join(System.tmp_dir!(), "agent-machine-outside-#{System.unique_integer()}")
+
+    File.mkdir_p!(outside_path)
+    on_exit(fn -> File.rm_rf(outside_path) end)
+
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.OutsideRootListFiles,
+        model: "test",
+        input: outside_path,
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.ListFiles],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:local_files_list]),
+               tool_root: root,
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2,
+               tool_approval_mode: :full_access
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "outside tool root"
+    assert Enum.any?(run.events, &(&1.type == :tool_call_failed and &1.tool == "list_files"))
+  end
+
   test "rejects a tool call outside allowed_tools" do
     agents = [
       %{
@@ -4361,6 +4396,34 @@ defmodule AgentMachine.TestProviders.OutsideRootThenFallback do
     text
     |> String.split(~r/\s+/, trim: true)
     |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.OutsideRootListFiles do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        output = "requested list_files"
+
+        {:ok,
+         %{
+           output: output,
+           tool_calls: [
+             %{
+               id: "outside-root-list",
+               tool: AgentMachine.Tools.ListFiles,
+               input: %{path: agent.input, max_entries: 50}
+             }
+           ],
+           tool_state: %{round: 1},
+           usage: %{input_tokens: 1, output_tokens: 2, total_tokens: 3}
+         }}
+    end
   end
 end
 

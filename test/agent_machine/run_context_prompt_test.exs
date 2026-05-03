@@ -118,7 +118,9 @@ defmodule AgentMachine.RunContextPromptTest do
         allowed_tools: [AgentMachine.Tools.CreateDir, AgentMachine.Tools.WriteFile],
         tool_policy: AgentMachine.ToolHarness.builtin_policy!(:local_files),
         tool_root: "/tmp/agent-machine-home",
-        tool_approval_mode: :auto_approved_safe
+        tool_approval_mode: :auto_approved_safe,
+        tool_timeout_ms: 120_000,
+        tool_max_rounds: 16
       )
 
     assert %{
@@ -126,6 +128,8 @@ defmodule AgentMachine.RunContextPromptTest do
                "harness" => "local_files",
                "root" => "/tmp/agent-machine-home",
                "approval_mode" => "auto_approved_safe",
+               "tool_timeout_ms" => 120_000,
+               "tool_max_rounds" => 16,
                "available_tools" => tools,
                "instruction" => instruction
              }
@@ -135,6 +139,7 @@ defmodule AgentMachine.RunContextPromptTest do
     assert "write_file" in tools
     assert instruction =~ "inspect that exact relative path"
     assert instruction =~ "Use search_files only for content search under a narrow path"
+    assert instruction =~ "less than or equal to tool_timeout_ms"
     assert instruction =~ "Use MCP browser tools for web browsing"
 
     assert instruction =~
@@ -152,6 +157,8 @@ defmodule AgentMachine.RunContextPromptTest do
           ),
         tool_root: "/tmp/agent-machine-project",
         tool_approval_mode: :full_access,
+        tool_timeout_ms: 120_000,
+        tool_max_rounds: 16,
         test_commands: ["mix test"]
       )
 

@@ -1487,13 +1487,149 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
-		ToolTimeout:   "1000",
-		ToolMaxRounds: "2",
+		ToolTimeout:   defaultFilesystemToolTimeout,
+		ToolMaxRounds: defaultFilesystemToolMaxRounds,
 		ToolApproval:  "full-access",
 	})
 
 	if err != nil {
 		t.Fatalf("expected valid code-edit config, got %v", err)
+	}
+}
+
+func TestValidateRunnableConfigRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+	err := validateRunnableConfig(runConfig{
+		Task:          "edit code",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/priv/java",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "6",
+		ToolApproval:  "full-access",
+	})
+
+	if err == nil {
+		t.Fatal("expected low code-edit shell budget error")
+	}
+	for _, expected := range []string{
+		"code-edit shell access requires tool timeout ms >= " + defaultFilesystemToolTimeout,
+		"/tools code-edit /Users/pawel/priv/java " + defaultFilesystemToolTimeout + " " + defaultFilesystemToolMaxRounds + " full-access",
+	} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("expected error to contain %q, got %v", expected, err)
+		}
+	}
+}
+
+func TestStartRunRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+	m := model{
+		workflow:    workflowBasic,
+		workflowSet: true,
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "code-edit",
+			ToolRoot:      "/Users/pawel/priv/java",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "6",
+			ToolApproval:  "full-access",
+		},
+	}
+
+	updated, cmd := m.startRun("in dir /Users/pawel/priv/java create me bootstrap project")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no run command for legacy code-edit shell budget")
+	}
+	if result.running {
+		t.Fatal("expected run to stay idle after validation error")
+	}
+	last := result.messages[len(result.messages)-1].Text
+	for _, expected := range []string{
+		"code-edit shell access requires tool timeout ms >= " + defaultFilesystemToolTimeout,
+		"/tools code-edit /Users/pawel/priv/java " + defaultFilesystemToolTimeout + " " + defaultFilesystemToolMaxRounds + " full-access",
+	} {
+		if !strings.Contains(last, expected) {
+			t.Fatalf("expected message to contain %q, got %q", expected, last)
+		}
+	}
+}
+
+func TestValidateConfigAllowsSafeCodeEditWithSmallToolBudget(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "edit code",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/tmp/agent-machine-project",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "6",
+		ToolApproval:  "auto-approved-safe",
+	})
+
+	if err != nil {
+		t.Fatalf("expected safe code-edit config without shell access, got %v", err)
+	}
+}
+
+func TestValidateConfigRejectsTaskPathOutsideToolRoot(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "setup me /Users/pawel/priv/java bootstrap project",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/priv/elixir",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "6",
+		ToolApproval:  "full-access",
+	})
+
+	if err == nil {
+		t.Fatal("expected task path outside tool root error")
+	}
+	for _, expected := range []string{
+		"tool root /Users/pawel/priv/elixir does not cover requested path /Users/pawel/priv/java",
+		"/tools code-edit /Users/pawel/priv/java 1000 6 full-access",
+	} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("expected error to contain %q, got %v", expected, err)
+		}
+	}
+}
+
+func TestValidateConfigAcceptsTaskPathInsideToolRoot(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "setup me /Users/pawel/priv/java bootstrap project",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/priv",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "6",
+		ToolApproval:  "full-access",
+	})
+
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+}
+
+func TestValidateConfigIgnoresSlashCommandsAsTaskPaths(t *testing.T) {
+	err := validateConfig(runConfig{
+		Task:          "explain the /setup command",
+		Workflow:      workflowBasic,
+		Provider:      providerEcho,
+		ToolHarness:   "code-edit",
+		ToolRoot:      "/Users/pawel/priv/elixir",
+		ToolTimeout:   "1000",
+		ToolMaxRounds: "6",
+		ToolApproval:  "full-access",
+	})
+
+	if err != nil {
+		t.Fatalf("expected slash command text to be ignored as a path, got %v", err)
 	}
 }
 
@@ -3855,7 +3991,9 @@ func TestRouterMutationCapabilityErrorShowsPermissionSelector(t *testing.T) {
 	last := updated.messages[len(updated.messages)-1].Text
 	if !strings.Contains(last, "filesystem permission required") ||
 		!strings.Contains(last, "required harness: code-edit") ||
-		!strings.Contains(last, "missing_code_edit_harness") {
+		!strings.Contains(last, "missing_code_edit_harness") ||
+		!strings.Contains(last, "timeout_ms="+defaultFilesystemToolTimeout) ||
+		!strings.Contains(last, "max_rounds="+defaultFilesystemToolMaxRounds) {
 		t.Fatalf("expected permission prompt, got %q", last)
 	}
 }
@@ -4081,7 +4219,11 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	if !result.running {
 		t.Fatal("expected run to start after allowing tools")
 	}
-	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "ask-before-write" {
+	if result.savedConfig.ToolHarness != "local-files" ||
+		result.savedConfig.ToolRoot != home ||
+		result.savedConfig.ToolTimeout != defaultFilesystemToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultFilesystemToolMaxRounds ||
+		result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.activeConfig.Workflow != workflowAgentic {
@@ -4159,7 +4301,11 @@ func TestAllowToolsApprovesPendingCodeEditRun(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command after allowing code-edit tools")
 	}
-	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolRoot != "/tmp/agent-machine-home" || result.savedConfig.ToolApproval != "ask-before-write" {
+	if result.savedConfig.ToolHarness != "code-edit" ||
+		result.savedConfig.ToolRoot != "/tmp/agent-machine-home" ||
+		result.savedConfig.ToolTimeout != defaultFilesystemToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultFilesystemToolMaxRounds ||
+		result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.activeConfig.Workflow != workflowAgentic {
@@ -4194,7 +4340,9 @@ func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command after yolo tools")
 	}
-	if result.savedConfig.ToolApproval != "full-access" {
+	if result.savedConfig.ToolTimeout != defaultFilesystemToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultFilesystemToolMaxRounds ||
+		result.savedConfig.ToolApproval != "full-access" {
 		t.Fatalf("expected full-access, got %#v", result.savedConfig)
 	}
 }
@@ -4228,7 +4376,11 @@ func TestPendingToolSelectorApprovesWithKeyboard(t *testing.T) {
 	if !result.running {
 		t.Fatal("expected run to start after selector approval")
 	}
-	if result.savedConfig.ToolHarness != "local-files" || result.savedConfig.ToolRoot != home || result.savedConfig.ToolApproval != "ask-before-write" {
+	if result.savedConfig.ToolHarness != "local-files" ||
+		result.savedConfig.ToolRoot != home ||
+		result.savedConfig.ToolTimeout != defaultFilesystemToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultFilesystemToolMaxRounds ||
+		result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 	if result.pendingToolTask != "" {
@@ -4257,7 +4409,10 @@ func TestPendingToolSelectorCanChooseFullAccessAndDeny(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command after full-access selector approval")
 	}
-	if result.savedConfig.ToolHarness != "code-edit" || result.savedConfig.ToolApproval != "full-access" {
+	if result.savedConfig.ToolHarness != "code-edit" ||
+		result.savedConfig.ToolTimeout != defaultFilesystemToolTimeout ||
+		result.savedConfig.ToolMaxRounds != defaultFilesystemToolMaxRounds ||
+		result.savedConfig.ToolApproval != "full-access" {
 		t.Fatalf("unexpected tool config: %#v", result.savedConfig)
 	}
 

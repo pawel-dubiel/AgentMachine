@@ -25,26 +25,53 @@ defmodule AgentMachine.LLMRouterTest do
 
   defmodule ProviderContractProvider do
     def complete(agent, opts) do
-      OpenRouterChat.request_body_for_test!(agent, opts)
+      body = OpenRouterChat.request_body_for_test!(agent, opts)
 
-      {:ok,
-       %{
-         output:
-           JSON.encode!(%{
-             intent: "file_mutation",
-             work_shape: "mutation",
-             route_hint: "agentic",
-             confidence: 0.82,
-             reason: "provider contract satisfied"
-           }),
-         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
-       }}
+      if Keyword.fetch!(opts, :response_format) == %{"type" => "json_object"} and
+           body["response_format"] == %{"type" => "json_object"} do
+        {:ok,
+         %{
+           output:
+             JSON.encode!(%{
+               intent: "file_mutation",
+               work_shape: "mutation",
+               route_hint: "agentic",
+               confidence: 0.82,
+               reason: "provider contract satisfied"
+             }),
+           usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+         }}
+      else
+        {:error, :missing_router_response_format}
+      end
     end
   end
 
   defmodule MalformedJSONProvider do
     def complete(_agent, _opts) do
       {:ok, %{output: "not json", usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}}}
+    end
+  end
+
+  defmodule MarkdownWrappedProvider do
+    def complete(_agent, _opts) do
+      {:ok,
+       %{
+         output: """
+         **Router decision**
+
+         ```json
+         {
+             "intent": "none",
+             "work_shape": "conversation",
+           "route_hint": "chat",
+           "confidence": 0.91,
+           "reason": "The user asked for a short summary of existing context."
+         }
+         ```
+         """,
+         usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+       }}
     end
   end
 
@@ -192,10 +219,19 @@ defmodule AgentMachine.LLMRouterTest do
     assert result.reason == "provider contract satisfied"
   end
 
-  test "fails fast on malformed provider JSON" do
-    assert_raise ArgumentError, ~r/llm router invalid JSON response/, fn ->
+  test "fails fast on provider output without a JSON object" do
+    assert_raise ArgumentError, ~r/provider returned no JSON object/, fn ->
       LLMRouter.classify!(input(MalformedJSONProvider))
     end
+  end
+
+  test "classifies markdown-wrapped provider JSON" do
+    result = LLMRouter.classify!(input(MarkdownWrappedProvider))
+
+    assert result.intent == :none
+    assert result.work_shape == :conversation
+    assert result.route_hint == :chat
+    assert result.reason == "The user asked for a short summary of existing context."
   end
 
   test "fails fast on invalid intent" do

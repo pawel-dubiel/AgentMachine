@@ -106,7 +106,8 @@ defmodule AgentMachine.ProgressObserver do
        in_flight?: false,
        pending_flush?: false,
        final_flush?: false,
-       last_commentary_at_ms: nil
+       last_commentary_at_ms: nil,
+       terminal_failure_seen?: false
      }}
   end
 
@@ -119,6 +120,7 @@ defmodule AgentMachine.ProgressObserver do
       evidence ->
         state =
           state
+          |> remember_terminal_failure(evidence)
           |> append_evidence(evidence)
           |> maybe_schedule_flush(event)
 
@@ -335,6 +337,14 @@ defmodule AgentMachine.ProgressObserver do
     %{state | buffer: buffer}
   end
 
+  defp remember_terminal_failure(state, evidence) do
+    if terminal_failure_evidence?([evidence]) do
+      %{state | terminal_failure_seen?: true}
+    else
+      state
+    end
+  end
+
   defp maybe_schedule_flush(state, event) do
     cond do
       final_flush_trigger?(event) ->
@@ -411,7 +421,16 @@ defmodule AgentMachine.ProgressObserver do
     evidence = state.buffer
     owner = self()
 
-    task_state = Map.take(state, [:run_id, :provider, :model, :pricing, :provider_opts, :task])
+    task_state =
+      Map.take(state, [
+        :run_id,
+        :provider,
+        :model,
+        :pricing,
+        :provider_opts,
+        :task,
+        :terminal_failure_seen?
+      ])
 
     {:ok, _pid} =
       Task.start(fn ->
@@ -432,8 +451,17 @@ defmodule AgentMachine.ProgressObserver do
     case state.provider.complete(agent, opts) do
       {:ok, %{output: output}} when is_binary(output) ->
         case compact_commentary(output) do
-          "" -> {:skip, :empty_commentary}
-          commentary -> {:ok, commentary_event(state.run_id, commentary, evidence)}
+          "" ->
+            {:skip, :empty_commentary}
+
+          commentary ->
+            {:ok,
+             commentary_event(
+               state.run_id,
+               commentary,
+               evidence,
+               Map.fetch!(state, :terminal_failure_seen?)
+             )}
         end
 
       {:ok, other} ->
@@ -459,7 +487,8 @@ defmodule AgentMachine.ProgressObserver do
       input:
         JSON.encode!(%{
           task: state.task,
-          evidence: Enum.map(evidence, &json_safe/1)
+          evidence: Enum.map(evidence, &json_safe/1),
+          observed_terminal_failure: state.terminal_failure_seen?
         }),
       metadata: %{agent_machine_role: "progress_observer"}
     })
@@ -488,6 +517,7 @@ defmodule AgentMachine.ProgressObserver do
     - Do not summarize the whole task unless the evidence supports it.
     - A run_completed event means the runtime finished processing, not that the user's task succeeded.
     - If evidence includes agent_finished with status error, do not describe the run, research, or task as successful.
+    - If observed_terminal_failure is true, do not describe the run, research, or task as successful.
     - Do not use markdown tables, headings, JSON, or bullet lists.
     - Do not mention uncertainty unless the evidence is actually unclear.
 
@@ -511,8 +541,8 @@ defmodule AgentMachine.ProgressObserver do
     %{run_id: run_id, results: %{}, artifacts: %{}, agent_graph: %{}}
   end
 
-  defp commentary_event(run_id, commentary, evidence) do
-    commentary = guard_terminal_failure_commentary(commentary, evidence)
+  defp commentary_event(run_id, commentary, evidence, terminal_failure_seen?) do
+    commentary = guard_terminal_failure_commentary(commentary, evidence, terminal_failure_seen?)
 
     %{
       type: :progress_commentary,
@@ -529,8 +559,9 @@ defmodule AgentMachine.ProgressObserver do
     }
   end
 
-  defp guard_terminal_failure_commentary(commentary, evidence) do
-    if terminal_failure_evidence?(evidence) and success_claim?(commentary) do
+  defp guard_terminal_failure_commentary(commentary, evidence, terminal_failure_seen?) do
+    if (terminal_failure_seen? or terminal_failure_evidence?(evidence)) and
+         success_claim?(commentary) do
       "The run reached its finalizer, but recent evidence includes failed agent work, so the task should be treated as incomplete until that failure is resolved."
     else
       commentary
@@ -559,7 +590,12 @@ defmodule AgentMachine.ProgressObserver do
         "successfully completed",
         "finished successfully",
         "run succeeded",
-        "research succeeded"
+        "succeeded",
+        "research succeeded",
+        "completed the run",
+        "run completed",
+        "is ready",
+        "ready."
       ],
       &String.contains?(commentary, &1)
     )

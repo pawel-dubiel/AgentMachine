@@ -24,6 +24,16 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     }
   end
 
+  defp time_tool_budget_opts do
+    [
+      allowed_tools: [AgentMachine.Tools.Now],
+      tool_policy: AgentMachine.ToolHarness.builtin_policy!(:time),
+      tool_approval_mode: :read_only,
+      tool_timeout_ms: 1_000,
+      tool_max_rounds: 2
+    ]
+  end
+
   test "OpenRouter continuation appends tool result messages and resends tools" do
     state = %{
       messages: [
@@ -51,6 +61,22 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     assert [%{"type" => "function", "function" => %{"name" => "now"}}] = body["tools"]
   end
 
+  test "OpenRouter request includes explicit response format when provided" do
+    body =
+      OpenRouterChat.request_body_for_test!(
+        agent(),
+        provider_opts(response_format: %{"type" => "json_object"})
+      )
+
+    assert body["response_format"] == %{"type" => "json_object"}
+  end
+
+  test "OpenRouter request rejects invalid response format option" do
+    assert_raise ArgumentError, ~r/OpenRouter response_format must be a map/, fn ->
+      OpenRouterChat.request_body_for_test!(agent(), provider_opts(response_format: "json"))
+    end
+  end
+
   test "OpenAI continuation sends function_call_output with previous response id and resends tools" do
     body =
       OpenAIResponses.request_body_for_test!(%{agent() | provider: OpenAIResponses},
@@ -75,14 +101,31 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     assert body["instructions"] == "Use tools when needed."
   end
 
+  test "OpenAI request includes explicit response format when provided" do
+    body =
+      OpenAIResponses.request_body_for_test!(
+        %{agent() | provider: OpenAIResponses},
+        provider_opts(response_format: %{"type" => "json_object"})
+      )
+
+    assert body["response_format"] == %{"type" => "json_object"}
+  end
+
+  test "OpenAI request rejects invalid response format option" do
+    assert_raise ArgumentError, ~r/OpenAI response_format must be a map/, fn ->
+      OpenAIResponses.request_body_for_test!(
+        %{agent() | provider: OpenAIResponses},
+        provider_opts(response_format: "json")
+      )
+    end
+  end
+
   test "OpenRouter budget request uses the provider request body and separates components" do
-    opts = [
-      run_context: run_context(),
-      runtime_facts: false,
-      allowed_tools: [AgentMachine.Tools.Now],
-      tool_policy: AgentMachine.ToolHarness.builtin_policy!(:time),
-      tool_approval_mode: :read_only
-    ]
+    opts =
+      [
+        run_context: run_context(),
+        runtime_facts: false
+      ] ++ time_tool_budget_opts()
 
     assert {:ok, budget} = OpenRouterChat.context_budget_request_for_test!(agent(), opts)
     assert budget.provider == :openrouter_chat
@@ -97,13 +140,11 @@ defmodule AgentMachine.ProviderToolContinuationTest do
   test "OpenAI budget request uses the provider request body and separates components" do
     agent = %{agent() | provider: OpenAIResponses}
 
-    opts = [
-      run_context: run_context(),
-      runtime_facts: false,
-      allowed_tools: [AgentMachine.Tools.Now],
-      tool_policy: AgentMachine.ToolHarness.builtin_policy!(:time),
-      tool_approval_mode: :read_only
-    ]
+    opts =
+      [
+        run_context: run_context(),
+        runtime_facts: false
+      ] ++ time_tool_budget_opts()
 
     assert {:ok, budget} = OpenAIResponses.context_budget_request_for_test!(agent, opts)
     assert budget.provider == :openai_responses
@@ -180,5 +221,9 @@ defmodule AgentMachine.ProviderToolContinuationTest do
       stream_context: %{run_id: "run-provider-budget", agent_id: "assistant", attempt: 1},
       stream_event_sink: fn event -> send(parent, event) end
     ]
+  end
+
+  defp provider_opts(extra) do
+    Keyword.merge([run_context: run_context(), runtime_facts: false], extra)
   end
 end

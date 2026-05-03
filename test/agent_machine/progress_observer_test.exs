@@ -204,6 +204,55 @@ defmodule AgentMachine.ProgressObserverTest do
     assert event.commentary =~ "failed agent work"
     refute String.contains?(String.downcase(event.commentary), "completed successfully")
   end
+
+  test "guards final commentary when failed agent evidence was flushed earlier" do
+    observer = %{
+      provider: AgentMachine.ProgressObserverTest.ReadyObserverProvider,
+      model: "test-observer",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+      provider_opts: [],
+      task: "create bootstrap project",
+      debounce_ms: 0,
+      cooldown_ms: 0
+    }
+
+    parent = self()
+    name = :"progress-observer-#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      ProgressObserver.start_link(
+        {"run-1", observer, fn event -> send(parent, {:event, event}) end, name: name}
+      )
+
+    at = DateTime.utc_now()
+
+    ProgressObserver.observe(pid, %{
+      type: :agent_finished,
+      run_id: "run-1",
+      agent_id: "java-bootstrap",
+      status: :error,
+      attempt: 1,
+      at: at
+    })
+
+    assert_receive {:event, %{type: :progress_commentary} = first_event}, 500
+    assert first_event.commentary =~ "failed agent work"
+
+    ProgressObserver.observe(pid, %{
+      type: :agent_finished,
+      run_id: "run-1",
+      agent_id: "finalizer",
+      status: :ok,
+      attempt: 1,
+      at: at
+    })
+
+    ProgressObserver.observe(pid, %{type: :run_completed, run_id: "run-1", at: at})
+
+    assert_receive {:event, %{type: :progress_commentary} = final_event}, 500
+    assert final_event.commentary =~ "failed agent work"
+    refute String.contains?(String.downcase(final_event.commentary), "ready")
+  end
 end
 
 defmodule AgentMachine.ProgressObserverTest.EchoTool do
@@ -339,6 +388,21 @@ defmodule AgentMachine.ProgressObserverTest.MisleadingObserverProvider do
        output:
          "The research run completed successfully; the finalizer finished analyzing recent AI news.",
        usage: %{input_tokens: 1, output_tokens: 10, total_tokens: 11}
+     }}
+  end
+end
+
+defmodule AgentMachine.ProgressObserverTest.ReadyObserverProvider do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{}, _opts) do
+    {:ok,
+     %{
+       output: "Ran finalizer and completed the run. Bootstrap project is ready.",
+       usage: %{input_tokens: 1, output_tokens: 9, total_tokens: 10}
      }}
   end
 end

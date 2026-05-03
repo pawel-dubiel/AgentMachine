@@ -269,6 +269,7 @@ defmodule AgentMachine.Workflows.Agentic do
     #{reviewer_finalizer_instruction(persistence?)}
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
+    If any worker or delegated agent has status "error", do not say the task completed or is ready unless later run context explicitly proves recovery.
     Say what completed, what failed or remained partial, which side effects are confirmed by tool_results, and what was not verified.
     Do not call tools. Summarize only the run context.
     """

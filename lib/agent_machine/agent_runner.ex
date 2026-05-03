@@ -1113,25 +1113,28 @@ defmodule AgentMachine.AgentRunner do
   defp run_approved_tool_call(context, approval_events) do
     execution_started_at = DateTime.utc_now()
 
-    {:ok, result, events} =
-      do_run_tool_call(
-        context.tool,
-        context.id,
-        context.input,
-        context.opts,
-        context.tool_timeout_ms,
-        context.event_context,
-        execution_started_at
-      )
+    case do_run_tool_call(
+           context.tool,
+           context.id,
+           context.input,
+           context.opts,
+           context.tool_timeout_ms,
+           context.event_context,
+           execution_started_at
+         ) do
+      {:ok, result, events} ->
+        failed_fingerprints =
+          maybe_cache_failed_tool_fingerprint(
+            result,
+            context.approval_fingerprint,
+            context.failed_fingerprints
+          )
 
-    failed_fingerprints =
-      maybe_cache_failed_tool_fingerprint(
-        result,
-        context.approval_fingerprint,
-        context.failed_fingerprints
-      )
+        {:ok, result, approval_events ++ events, context.denied_fingerprints, failed_fingerprints}
 
-    {:ok, result, approval_events ++ events, context.denied_fingerprints, failed_fingerprints}
+      {:error, reason, events} ->
+        {:error, reason, approval_events ++ events}
+    end
   end
 
   defp run_denied_tool_call(context, reason, approval_events) do

@@ -4,6 +4,28 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+  start, workflow, tool, provider, safety, and architecture sections.
+- Fixed failed agentic runs so unresolved worker errors suppress misleading
+  finalizer output in client summaries and keep progress observer commentary
+  from reporting completion after prior agent failures.
+- Raised the TUI pending filesystem-tool approval budget to 120s/16 rounds and
+  exposed tool timeout/max-round limits in run context so command tools do not
+  fail from hidden 1s approvals or guessed per-call timeouts.
+- Added TUI fail-fast validation for command-capable code-edit configs that
+  still have the legacy 1s/6-round budget, with an explicit `/tools` command to
+  fix the saved setup before starting another run.
+- Strengthened LLM router JSON classification by passing provider response
+  format JSON mode for OpenRouter/OpenAI router calls, clarifying the router
+  prompt contract, and reporting non-JSON router output explicitly.
+- Added TUI validation that fails fast when a task names an absolute filesystem
+  path outside the selected local-files or code-edit tool root, with an explicit
+  `/tools` command to correct the root before the run reaches the router.
+- Fixed approved terminal tool failures, such as full-access reads outside the
+  configured tool root, to return clean agent errors with tool failure events
+  instead of crashing the agent task.
+- Added a narrow model-output JSON adapter for LLM routing, planner delegation,
+  and agentic review responses so markdown-wrapped JSON is accepted while
+  normal JSON parsing remains a thin Jason wrapper.
 - Changed the TUI live-events panel to show only the most recent runtime event
   instead of a scrollable compacted event history.
 - Fixed MCP no-argument tool calls so empty provider input is treated as empty

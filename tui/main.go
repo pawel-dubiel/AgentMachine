@@ -290,17 +290,19 @@ const (
 )
 
 const (
-	defaultRunTimeoutMS         = "120000"
-	defaultAgenticRunTimeoutMS  = "240000"
-	defaultChatSteps            = "1"
-	defaultBasicSteps           = "2"
-	defaultAgenticSteps         = "6"
-	defaultHTTPTimeoutMS        = "120000"
-	defaultRouterTimeoutMS      = "5000"
-	defaultRouterConfidence     = "0.75"
-	defaultRouterModelDirName   = "mdeberta-v3-base-xnli-multilingual-nli-2mil7"
-	defaultSessionToolMaxRounds = "16"
-	liveEventWindowSize         = 8
+	defaultRunTimeoutMS            = "120000"
+	defaultAgenticRunTimeoutMS     = "240000"
+	defaultChatSteps               = "1"
+	defaultBasicSteps              = "2"
+	defaultAgenticSteps            = "6"
+	defaultHTTPTimeoutMS           = "120000"
+	defaultRouterTimeoutMS         = "5000"
+	defaultRouterConfidence        = "0.75"
+	defaultRouterModelDirName      = "mdeberta-v3-base-xnli-multilingual-nli-2mil7"
+	defaultSessionToolMaxRounds    = "16"
+	defaultFilesystemToolTimeout   = "120000"
+	defaultFilesystemToolMaxRounds = "16"
+	liveEventWindowSize            = 8
 )
 
 type runConfig struct {
@@ -1110,6 +1112,9 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
+		return m.withRunPreparationError(err), nil
+	}
+	if err := validateRunnableConfig(config); err != nil {
 		return m.withRunPreparationError(err), nil
 	}
 
@@ -2032,8 +2037,8 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 
 	m.savedConfig.ToolHarness = harness
 	m.savedConfig.ToolRoot = root
-	m.savedConfig.ToolTimeout = "1000"
-	m.savedConfig.ToolMaxRounds = "6"
+	m.savedConfig.ToolTimeout = defaultFilesystemToolTimeout
+	m.savedConfig.ToolMaxRounds = defaultFilesystemToolMaxRounds
 	m.savedConfig.ToolApproval = approval
 
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
@@ -2046,7 +2051,7 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	m.pendingToolRoot = ""
 	m.pendingToolHarness = ""
 	m.pendingToolChoice = 0
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " approval=" + approval})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " timeout_ms=" + defaultFilesystemToolTimeout + " max_rounds=" + defaultFilesystemToolMaxRounds + " approval=" + approval})
 	return m.startRunWithWorkflow(task, workflowAgentic)
 }
 
@@ -2098,17 +2103,17 @@ func pendingToolOptions() []pendingToolOption {
 	return []pendingToolOption{
 		{
 			Label:       "Ask each use",
-			Description: "Enable required tools for this root with interactive ask-before-write approval and retry now.",
+			Description: "Enable required tools for this root with interactive ask-before-write approval and retry now. Budget: timeout_ms=" + defaultFilesystemToolTimeout + ", max_rounds=" + defaultFilesystemToolMaxRounds + ".",
 			Approval:    "ask-before-write",
 		},
 		{
 			Label:       "Allow writes",
-			Description: "Enable required tools for this root with auto-approved-safe approval and retry now.",
+			Description: "Enable required tools for this root with auto-approved-safe approval and retry now. Budget: timeout_ms=" + defaultFilesystemToolTimeout + ", max_rounds=" + defaultFilesystemToolMaxRounds + ".",
 			Approval:    "auto-approved-safe",
 		},
 		{
 			Label:       "Full access",
-			Description: "Enable required tools for this root with full-access approval and retry now.",
+			Description: "Enable required tools for this root with full-access approval and retry now. Budget: timeout_ms=" + defaultFilesystemToolTimeout + ", max_rounds=" + defaultFilesystemToolMaxRounds + ".",
 			Approval:    "full-access",
 		},
 		{
@@ -4465,6 +4470,9 @@ func validateToolConfig(config runConfig) error {
 		if err := validateToolApprovalMode(config.ToolApproval); err != nil {
 			return err
 		}
+		if err := validateToolRootCoversTaskPaths(config); err != nil {
+			return err
+		}
 		if len(config.TestCommands) > 0 {
 			if config.ToolHarness != "code-edit" {
 				return errors.New("test commands require code-edit tool harness")
@@ -4479,6 +4487,130 @@ func validateToolConfig(config runConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported tool harness: %s", config.ToolHarness)
+	}
+}
+
+func validateRunnableConfig(config runConfig) error {
+	return validateCodeEditShellBudget(config)
+}
+
+func validateCodeEditShellBudget(config runConfig) error {
+	if config.ToolHarness != "code-edit" || (config.ToolApproval != "ask-before-write" && config.ToolApproval != "full-access") {
+		return nil
+	}
+
+	timeout, err := positiveIntValue(config.ToolTimeout, "tool timeout ms")
+	if err != nil {
+		return err
+	}
+	minTimeout, err := positiveIntValue(defaultFilesystemToolTimeout, "default filesystem tool timeout ms")
+	if err != nil {
+		return err
+	}
+	if timeout < minTimeout {
+		return fmt.Errorf(
+			"code-edit shell access requires tool timeout ms >= %s; run /tools code-edit %s %s %s %s",
+			defaultFilesystemToolTimeout,
+			config.ToolRoot,
+			defaultFilesystemToolTimeout,
+			defaultFilesystemToolMaxRounds,
+			config.ToolApproval,
+		)
+	}
+
+	maxRounds, err := positiveIntValue(config.ToolMaxRounds, "tool max rounds")
+	if err != nil {
+		return err
+	}
+	minRounds, err := positiveIntValue(defaultFilesystemToolMaxRounds, "default filesystem tool max rounds")
+	if err != nil {
+		return err
+	}
+	if maxRounds < minRounds {
+		return fmt.Errorf(
+			"code-edit shell access requires tool max rounds >= %s; run /tools code-edit %s %s %s %s",
+			defaultFilesystemToolMaxRounds,
+			config.ToolRoot,
+			defaultFilesystemToolTimeout,
+			defaultFilesystemToolMaxRounds,
+			config.ToolApproval,
+		)
+	}
+
+	return nil
+}
+
+func validateToolRootCoversTaskPaths(config runConfig) error {
+	root := filepath.Clean(strings.TrimSpace(config.ToolRoot))
+	for _, requestedPath := range taskAbsolutePaths(config.Task) {
+		if !pathWithin(root, requestedPath) {
+			return fmt.Errorf(
+				"tool root %s does not cover requested path %s; run /tools %s %s %s %s %s or choose a broader explicit tool root",
+				root,
+				requestedPath,
+				config.ToolHarness,
+				requestedPath,
+				config.ToolTimeout,
+				config.ToolMaxRounds,
+				config.ToolApproval,
+			)
+		}
+	}
+	return nil
+}
+
+func taskAbsolutePaths(text string) []string {
+	paths := []string{}
+	seen := map[string]bool{}
+
+	for index := 0; index < len(text); index++ {
+		if text[index] != '/' {
+			continue
+		}
+		if index > 0 && (text[index-1] == ':' || text[index-1] == '/') {
+			continue
+		}
+
+		end := index
+		for end < len(text) && text[end] > ' ' {
+			end++
+		}
+
+		candidate := strings.Trim(text[index:end], "\"'`.,;:!?)])}>")
+		candidate = filepath.Clean(candidate)
+		if plausibleTaskAbsolutePath(candidate) && !seen[candidate] {
+			paths = append(paths, candidate)
+			seen[candidate] = true
+		}
+		index = end
+	}
+
+	return paths
+}
+
+func plausibleTaskAbsolutePath(path string) bool {
+	if path == "" || strings.HasPrefix(path, "//") || !filepath.IsAbs(path) || path == string(os.PathSeparator) {
+		return false
+	}
+
+	trimmed := strings.Trim(path, string(os.PathSeparator))
+	if trimmed == "" {
+		return false
+	}
+
+	segments := strings.Split(trimmed, string(os.PathSeparator))
+	if strings.Contains(segments[0], ".") {
+		return false
+	}
+	if len(segments) >= 2 {
+		return true
+	}
+
+	switch segments[0] {
+	case "Users", "home", "tmp", "private", "var", "Volumes", "workspace", "workspaces", "mnt", "opt", "usr", "etc", "srv", "root":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -4549,8 +4681,8 @@ func toolPermissionText(reason string, harness string, root string, activeRoot s
 	}
 	lines = append(lines,
 		"Use the selector below to approve or deny this request.",
-		"Run /allow-tools to enable "+harness+" for this root and retry now.",
-		"Run /yolo-tools to enable "+harness+" full-access for this root and retry now.",
+		"Run /allow-tools to enable "+harness+" for this root with timeout_ms="+defaultFilesystemToolTimeout+" max_rounds="+defaultFilesystemToolMaxRounds+" and retry now.",
+		"Run /yolo-tools to enable "+harness+" full-access for this root with timeout_ms="+defaultFilesystemToolTimeout+" max_rounds="+defaultFilesystemToolMaxRounds+" and retry now.",
 		"Run /deny-tools to decline.",
 	)
 	return strings.Join(lines, "\n")

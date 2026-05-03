@@ -64,6 +64,7 @@ defmodule AgentMachine.Workflows.Basic do
     Create the final user-facing answer from the completed run context.
     Only report side effects that are present in prior results or tool_results.
     Do not claim that files were created or changed unless a tool result confirms it.
+    If an earlier agent has status "error", do not say the task completed or is ready unless later run context explicitly proves recovery.
     Do not call tools. Summarize only the run context.
     """
     |> String.trim()
