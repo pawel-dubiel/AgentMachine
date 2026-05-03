@@ -1,9 +1,14 @@
-.PHONY: help deps test test-openrouter-paid test-openrouter-playwright-mcp test-openrouter-swarm-e2e quality format format-check compile build run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
+.PHONY: help deps test test-openrouter-paid test-openrouter-playwright-mcp test-openrouter-swarm-e2e quality format format-check compile build install run start tui tui-test tui-build run-echo run-echo-json run-echo-jsonl run-agentic-echo-jsonl run-openrouter-jsonl run-agentic-openrouter-jsonl clean
 
 .DEFAULT_GOAL := run
 
 TUI_DIR := tui
 TUI_BIN := $(TUI_DIR)/agent-machine-tui
+PROJECT_ROOT := $(CURDIR)
+INSTALL_BIN_DIR ?= $(HOME)/.local/bin
+INSTALLED_TUI_BIN := $(INSTALL_BIN_DIR)/agent-machine-tui-bin
+INSTALLED_TUI_LAUNCHER := $(INSTALL_BIN_DIR)/agent-machine-tui
+INSTALLED_LAUNCHER := $(INSTALL_BIN_DIR)/agent-machine
 
 help:
 	@printf '%s\n' 'AgentMachine targets:'
@@ -17,6 +22,7 @@ help:
 	@printf '%s\n' '  make format-check                 Check Elixir formatting'
 	@printf '%s\n' '  make run / make start             Compile backend/UI and start TUI'
 	@printf '%s\n' '  make build                        Compile backend and UI artifacts'
+	@printf '%s\n' '  make install                      Install agent-machine launcher and TUI binary'
 	@printf '%s\n' '  make tui                          Start the Bubble Tea TUI (no precompile)'
 	@printf '%s\n' '  make tui-test                     Run Go TUI tests'
 	@printf '%s\n' '  make tui-build                    Build the Go TUI binary'
@@ -70,10 +76,49 @@ compile:
 
 build: compile tui-build
 
+install: build
+	@test -n "$(HOME)" || (printf '%s\n' 'HOME is required to derive the default INSTALL_BIN_DIR.' >&2; exit 2)
+	@test -n "$(INSTALL_BIN_DIR)" || (printf '%s\n' 'INSTALL_BIN_DIR is required.' >&2; exit 2)
+	@case "$(INSTALL_BIN_DIR)" in /*) : ;; *) printf '%s\n' 'INSTALL_BIN_DIR must be an absolute path.' >&2; exit 2 ;; esac
+	@test -f "$(PROJECT_ROOT)/mix.exs" || (printf '%s\n' 'PROJECT_ROOT must point to the AgentMachine repository containing mix.exs.' >&2; exit 2)
+	@command -v mix >/dev/null || (printf '%s\n' 'mix is required on PATH for the installed AgentMachine launcher.' >&2; exit 2)
+	@install -d -m 0755 "$(INSTALL_BIN_DIR)"
+	@install -m 0755 "$(TUI_BIN)" "$(INSTALLED_TUI_BIN)"
+	@{ \
+		printf '%s\n' '#!/bin/sh'; \
+		printf '%s\n' 'set -eu'; \
+		printf '%s\n' ''; \
+		printf '%s\n' 'AGENT_MACHINE_ROOT="$(PROJECT_ROOT)"'; \
+		printf '%s\n' 'AGENT_MACHINE_TUI="$(INSTALLED_TUI_BIN)"'; \
+		printf '%s\n' ''; \
+		printf '%s\n' 'if [ ! -f "$$AGENT_MACHINE_ROOT/mix.exs" ]; then'; \
+		printf '%s\n' '  printf "%s\n" "AgentMachine repository is missing mix.exs at $$AGENT_MACHINE_ROOT." >&2'; \
+		printf '%s\n' '  exit 2'; \
+		printf '%s\n' 'fi'; \
+		printf '%s\n' ''; \
+		printf '%s\n' 'if ! command -v mix >/dev/null 2>&1; then'; \
+		printf '%s\n' '  printf "%s\n" "mix is required on PATH for AgentMachine." >&2'; \
+		printf '%s\n' '  exit 2'; \
+		printf '%s\n' 'fi'; \
+		printf '%s\n' ''; \
+		printf '%s\n' 'if [ ! -x "$$AGENT_MACHINE_TUI" ]; then'; \
+		printf '%s\n' '  printf "%s\n" "AgentMachine TUI binary is missing or not executable at $$AGENT_MACHINE_TUI." >&2'; \
+		printf '%s\n' '  exit 2'; \
+		printf '%s\n' 'fi'; \
+		printf '%s\n' ''; \
+		printf '%s\n' 'export AGENT_MACHINE_ROOT'; \
+		printf '%s\n' 'exec "$$AGENT_MACHINE_TUI" "$$@"'; \
+	} > "$(INSTALLED_LAUNCHER)"
+	@cp "$(INSTALLED_LAUNCHER)" "$(INSTALLED_TUI_LAUNCHER)"
+	@chmod 0755 "$(INSTALLED_LAUNCHER)" "$(INSTALLED_TUI_LAUNCHER)"
+	@printf 'Installed AgentMachine launcher: %s\n' "$(INSTALLED_LAUNCHER)"
+	@printf 'Installed AgentMachine TUI launcher: %s\n' "$(INSTALLED_TUI_LAUNCHER)"
+	@printf 'Installed AgentMachine TUI binary: %s\n' "$(INSTALLED_TUI_BIN)"
+
 run: start
 
 start: build
-	cd $(TUI_DIR) && ./$(notdir $(TUI_BIN))
+	./$(TUI_BIN)
 
 credo:
 	mix credo --strict

@@ -841,25 +841,36 @@ func lastJSONLine(raw string) string {
 	return ""
 }
 
-func projectRoot() string {
-	if root := os.Getenv("AGENT_MACHINE_ROOT"); root != "" {
-		return root
+func projectRoot() (string, error) {
+	if root := strings.TrimSpace(os.Getenv("AGENT_MACHINE_ROOT")); root != "" {
+		return validateProjectRoot(root, "AGENT_MACHINE_ROOT")
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "."
+		return "", fmt.Errorf("failed to read current working directory: %w", err)
 	}
 
 	if fileExists(filepath.Join(cwd, "mix.exs")) {
-		return cwd
+		return cwd, nil
 	}
 
 	parent := filepath.Clean(filepath.Join(cwd, ".."))
 	if fileExists(filepath.Join(parent, "mix.exs")) {
-		return parent
+		return parent, nil
 	}
-	return cwd
+	return "", fmt.Errorf("AgentMachine project root is required: run from the repository root, run from tui/, or set AGENT_MACHINE_ROOT to the repository containing mix.exs")
+}
+
+func validateProjectRoot(root string, source string) (string, error) {
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve %s %q: %w", source, root, err)
+	}
+	if !fileExists(filepath.Join(absolute, "mix.exs")) {
+		return "", fmt.Errorf("%s must point to an AgentMachine repository containing mix.exs, got %q", source, root)
+	}
+	return absolute, nil
 }
 
 func fileExists(path string) bool {

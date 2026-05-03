@@ -28,6 +28,77 @@ func (buffer *closeBuffer) Close() error {
 	return nil
 }
 
+func writeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write test file %s: %v", path, err)
+	}
+}
+
+func TestProjectRootUsesExplicitAgentMachineRoot(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "mix.exs"), "defmodule AgentMachine.MixProject do\nend\n")
+	t.Setenv("AGENT_MACHINE_ROOT", root)
+
+	resolved, err := projectRoot()
+	if err != nil {
+		t.Fatalf("expected explicit project root to resolve, got %v", err)
+	}
+
+	expected, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("failed to resolve temp root: %v", err)
+	}
+	if resolved != expected {
+		t.Fatalf("expected %q, got %q", expected, resolved)
+	}
+}
+
+func TestProjectRootRejectsInvalidExplicitRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENT_MACHINE_ROOT", root)
+
+	_, err := projectRoot()
+	if err == nil {
+		t.Fatalf("expected invalid explicit root to fail")
+	}
+	if !strings.Contains(err.Error(), "AGENT_MACHINE_ROOT") || !strings.Contains(err.Error(), "mix.exs") {
+		t.Fatalf("expected root validation error, got %v", err)
+	}
+}
+
+func TestProjectRootFailsOutsideRepositoryWithoutExplicitRoot(t *testing.T) {
+	t.Setenv("AGENT_MACHINE_ROOT", "")
+	t.Chdir(t.TempDir())
+
+	_, err := projectRoot()
+	if err == nil {
+		t.Fatalf("expected missing project root to fail")
+	}
+	if !strings.Contains(err.Error(), "AGENT_MACHINE_ROOT") {
+		t.Fatalf("expected setup guidance, got %v", err)
+	}
+}
+
+func TestProjectRootFindsParentRepositoryFromTUIDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "mix.exs"), "defmodule AgentMachine.MixProject do\nend\n")
+	tuiDir := filepath.Join(root, "tui")
+	if err := os.Mkdir(tuiDir, 0o700); err != nil {
+		t.Fatalf("failed to create tui dir: %v", err)
+	}
+	t.Setenv("AGENT_MACHINE_ROOT", "")
+	t.Chdir(tuiDir)
+
+	resolved, err := projectRoot()
+	if err != nil {
+		t.Fatalf("expected parent project root to resolve, got %v", err)
+	}
+	if resolved != root {
+		t.Fatalf("expected %q, got %q", root, resolved)
+	}
+}
+
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "review this project",

@@ -180,14 +180,27 @@ Start the terminal UI:
 make run
 ```
 
+Install the TUI launcher for use from any directory:
+
+```sh
+make install
+agent-machine
+```
+
+The installer writes `agent-machine` and `agent-machine-tui` launchers to
+`~/.local/bin` by default. Override the destination with
+`INSTALL_BIN_DIR=/absolute/path`. Both launchers set `AGENT_MACHINE_ROOT` to
+this checkout and still require `mix` on `PATH`.
+
 Run the quality gate:
 
 ```sh
 make quality
 ```
 
-For a deeper feature checklist, see [FEATURES.md](FEATURES.md). For a runtime
-flow diagram, see [docs/agent-runtime-flow.puml](docs/agent-runtime-flow.puml).
+For a deeper feature checklist, see [FEATURES.md](FEATURES.md). For runtime
+flow documentation, see [docs/runtime-flow.md](docs/runtime-flow.md) and the
+standalone [PlantUML diagram](docs/agent-runtime-flow.puml).
 
 ## Terminal UI
 
@@ -426,6 +439,7 @@ Common Make targets:
 ```sh
 make help
 make deps
+make install
 make test
 make quality
 make run
