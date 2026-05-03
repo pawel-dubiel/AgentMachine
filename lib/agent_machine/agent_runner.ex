@@ -1203,6 +1203,7 @@ defmodule AgentMachine.AgentRunner do
           tool,
           started_at,
           started_event,
+          input,
           reason
         )
 
@@ -1231,6 +1232,7 @@ defmodule AgentMachine.AgentRunner do
          tool,
          started_at,
          started_event,
+         input,
          reason
        ) do
     finished_at = DateTime.utc_now()
@@ -1243,14 +1245,31 @@ defmodule AgentMachine.AgentRunner do
 
     emit_event!(opts, failed_event)
 
-    result = %{
-      status: "error",
-      error: error,
-      tool: tool_name(tool)
-    }
+    if terminal_tool_failure?(error, input) do
+      {:error, event_reason, [started_event, failed_event]}
+    else
+      result = %{
+        status: "error",
+        error: error,
+        tool: tool_name(tool)
+      }
 
-    {:ok, %{id: id, result: result}, [started_event, failed_event]}
+      {:ok, %{id: id, result: result}, [started_event, failed_event]}
+    end
   end
+
+  defp terminal_tool_failure?(error, input) when is_binary(error) do
+    String.contains?(error, "outside tool root") and absolute_tool_path?(input)
+  end
+
+  defp terminal_tool_failure?(_error, _input), do: false
+
+  defp absolute_tool_path?(input) when is_map(input) do
+    path = Map.get(input, :path) || Map.get(input, "path")
+    is_binary(path) and Path.type(path) == :absolute
+  end
+
+  defp absolute_tool_path?(_input), do: false
 
   defp tool_error_text(reason) when is_binary(reason), do: reason
   defp tool_error_text(reason), do: inspect(reason)

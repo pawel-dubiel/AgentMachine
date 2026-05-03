@@ -1500,6 +1500,46 @@ defmodule AgentMachine.OrchestratorTest do
            |> Enum.map(& &1.type) == [:tool_call_started, :tool_call_failed]
   end
 
+  test "outside-root tool failures terminate the agent instead of letting it recover elsewhere" do
+    root = tmp_root("agent-machine-outside-root-terminal")
+
+    outside_path =
+      Path.join(System.tmp_dir!(), "agent-machine-outside-#{System.unique_integer()}")
+
+    on_exit(fn -> File.rm_rf(outside_path) end)
+
+    agents = [
+      %{
+        id: "tool-user",
+        provider: AgentMachine.TestProviders.OutsideRootThenFallback,
+        model: "test",
+        input: outside_path,
+        pricing: %{input_per_million: 0.0, output_per_million: 0.0}
+      }
+    ]
+
+    callback = fn context ->
+      assert context.kind == :tool_execution
+      :approved
+    end
+
+    assert {:ok, run} =
+             Orchestrator.run(agents,
+               timeout: 1_000,
+               allowed_tools: [AgentMachine.Tools.CreateDir],
+               tool_policy: AgentMachine.ToolPolicy.new!(permissions: [:local_files_create_dir]),
+               tool_root: root,
+               tool_timeout_ms: 100,
+               tool_max_rounds: 3,
+               tool_approval_mode: :ask_before_write,
+               tool_approval_callback: callback
+             )
+
+    assert run.results["tool-user"].status == :error
+    assert run.results["tool-user"].error =~ "outside tool root"
+    refute File.exists?(Path.join(root, "super"))
+  end
+
   test "rejects a tool call outside allowed_tools" do
     agents = [
       %{
@@ -4028,6 +4068,51 @@ defmodule AgentMachine.TestProviders.ToolFailing do
       output_tokens: output_tokens,
       total_tokens: input_tokens + output_tokens
     }
+  end
+
+  defp token_count(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> length()
+  end
+end
+
+defmodule AgentMachine.TestProviders.OutsideRootThenFallback do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{} = agent, opts) do
+    case Keyword.get(opts, :tool_continuation) do
+      nil ->
+        tool_request(agent.input, "outside-root")
+
+      %{results: [%{result: %{status: "error"}}]} ->
+        tool_request("super", "fallback")
+    end
+  end
+
+  defp tool_request(path, id) do
+    output = "requested create_dir"
+
+    {:ok,
+     %{
+       output: output,
+       tool_calls: [
+         %{
+           id: id,
+           tool: AgentMachine.Tools.CreateDir,
+           input: %{path: path}
+         }
+       ],
+       tool_state: %{round: if(id == "outside-root", do: 1, else: 2)},
+       usage: %{
+         input_tokens: 1,
+         output_tokens: token_count(output),
+         total_tokens: 1 + token_count(output)
+       }
+     }}
   end
 
   defp token_count(text) do
