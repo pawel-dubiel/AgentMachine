@@ -178,35 +178,37 @@ defmodule AgentMachine.ToolHarness do
     raise ArgumentError, "tool harnesses must be a list, got: #{inspect(harnesses)}"
   end
 
-  def definitions!(tools) when is_list(tools) do
-    Enum.map(tools, &definition!/1)
+  def definitions!(tools, opts \\ [])
+
+  def definitions!(tools, opts) when is_list(tools) and is_list(opts) do
+    Enum.map(tools, &definition!(&1, opts))
   end
 
   def put_openai_tools!(body, opts) when is_map(body) do
     case allowed_tools(opts) do
       [] -> body
-      tools -> Map.put(body, "tools", Enum.map(definitions!(tools), &openai_tool/1))
+      tools -> Map.put(body, "tools", Enum.map(definitions!(tools, opts), &openai_tool/1))
     end
   end
 
   def openai_tool_groups!(opts) when is_list(opts) do
     opts
     |> allowed_tools()
-    |> definitions!()
+    |> definitions!(opts)
     |> split_provider_tool_groups(&openai_tool/1)
   end
 
   def put_openrouter_tools!(body, opts) when is_map(body) do
     case allowed_tools(opts) do
       [] -> body
-      tools -> Map.put(body, "tools", Enum.map(definitions!(tools), &openrouter_tool/1))
+      tools -> Map.put(body, "tools", Enum.map(definitions!(tools, opts), &openrouter_tool/1))
     end
   end
 
   def openrouter_tool_groups!(opts) when is_list(opts) do
     opts
     |> allowed_tools()
-    |> definitions!()
+    |> definitions!(opts)
     |> split_provider_tool_groups(&openrouter_tool/1)
   end
 
@@ -241,22 +243,31 @@ defmodule AgentMachine.ToolHarness do
 
   def openrouter_tool_calls!(_message, _opts), do: []
 
-  defp definition!(tool) when is_atom(tool) do
+  defp definition!(tool, opts) when is_atom(tool) do
     unless Code.ensure_loaded?(tool) and function_exported?(tool, :run, 2) do
       raise ArgumentError, "tool must be a loaded module exporting run/2, got: #{inspect(tool)}"
     end
 
-    unless function_exported?(tool, :definition, 0) do
-      raise ArgumentError, "tool #{inspect(tool)} must export definition/0 for provider tool use"
+    unless function_exported?(tool, :definition, 0) or function_exported?(tool, :definition, 1) do
+      raise ArgumentError,
+            "tool #{inspect(tool)} must export definition/0 or definition/1 for provider tool use"
     end
 
-    tool.definition()
+    tool_definition(tool, opts)
     |> require_definition!(tool)
     |> Map.put(:module, tool)
   end
 
-  defp definition!(tool) do
+  defp definition!(tool, _opts) do
     raise ArgumentError, "tool must be a module atom, got: #{inspect(tool)}"
+  end
+
+  defp tool_definition(tool, opts) do
+    if function_exported?(tool, :definition, 1) do
+      tool.definition(opts)
+    else
+      tool.definition()
+    end
   end
 
   defp require_definition!(definition, tool) when is_map(definition) do

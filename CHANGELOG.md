@@ -4,6 +4,9 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Tightened provider-facing code-edit tool schemas so shell command tools expose
+  the configured timeout maximum and `apply_edits` advertises required fields
+  for each operation, reducing invalid model tool calls.
 - Fixed the TUI so legacy low-budget `code-edit` shell settings do not block
   plain auto-routed chat turns such as `hi`; explicit agentic/tool retries still
   fail fast with the `/tools code-edit ... 120000 16 ...` repair command.

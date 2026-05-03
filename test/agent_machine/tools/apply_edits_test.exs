@@ -3,6 +3,37 @@ defmodule AgentMachine.Tools.ApplyEditsTest do
 
   alias AgentMachine.Tools.ApplyEdits
 
+  test "definition requires operation-specific fields" do
+    schema = ApplyEdits.definition().input_schema
+    operations = get_in(schema, ["properties", "changes", "items", "oneOf"])
+
+    assert required_for(operations, "create_file") == [
+             "content",
+             "op",
+             "overwrite",
+             "path"
+           ]
+
+    assert required_for(operations, "replace") == [
+             "expected_replacements",
+             "new_text",
+             "old_text",
+             "op",
+             "path"
+           ]
+
+    assert required_for(operations, "insert_after") == [
+             "anchor",
+             "expected_replacements",
+             "op",
+             "path",
+             "text"
+           ]
+
+    assert required_for(operations, "delete_file") == ["expected_sha256", "op", "path"]
+    assert required_for(operations, "rename_path") == ["from_path", "op", "overwrite", "to_path"]
+  end
+
   test "creates, replaces, inserts, renames, and deletes in one validated batch" do
     root = tmp_root()
     on_exit(fn -> File.rm_rf(root) end)
@@ -251,5 +282,12 @@ defmodule AgentMachine.Tools.ApplyEditsTest do
     :sha256
     |> :crypto.hash(content)
     |> Base.encode16(case: :lower)
+  end
+
+  defp required_for(operations, op) do
+    operations
+    |> Enum.find(fn operation -> get_in(operation, ["properties", "op", "enum"]) == [op] end)
+    |> Map.fetch!("required")
+    |> Enum.sort()
   end
 end

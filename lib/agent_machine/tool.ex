@@ -11,6 +11,11 @@ defmodule AgentMachine.Tool do
               description: binary(),
               input_schema: map()
             }
+  @callback definition(keyword()) :: %{
+              name: binary(),
+              description: binary(),
+              input_schema: map()
+            }
 
-  @optional_callbacks definition: 0, permission: 0, approval_risk: 0
+  @optional_callbacks definition: 0, definition: 1, permission: 0, approval_risk: 0
 end

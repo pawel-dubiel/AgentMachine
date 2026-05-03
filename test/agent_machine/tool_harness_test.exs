@@ -204,6 +204,33 @@ defmodule AgentMachine.ToolHarnessTest do
            } = body
   end
 
+  test "builds command tool schemas with the configured timeout maximum" do
+    body =
+      ToolHarness.put_openrouter_tools!(%{"model" => "test"},
+        allowed_tools: [AgentMachine.Tools.RunShellCommand],
+        tool_timeout_ms: 120_000
+      )
+
+    assert %{
+             "tools" => [
+               %{
+                 "function" => %{
+                   "parameters" => %{
+                     "properties" => %{
+                       "timeout_ms" => %{
+                         "maximum" => 120_000,
+                         "description" => description
+                       }
+                     }
+                   }
+                 }
+               }
+             ]
+           } = body
+
+    assert description =~ "120000"
+  end
+
   test "parses OpenAI Responses function calls into runtime tool calls" do
     response = %{
       "output" => [

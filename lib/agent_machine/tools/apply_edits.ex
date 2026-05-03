@@ -26,39 +26,7 @@ defmodule AgentMachine.Tools.ApplyEdits do
             "type" => "array",
             "minItems" => 1,
             "maxItems" => CodeEditSupport.max_changes(),
-            "items" => %{
-              "type" => "object",
-              "properties" => %{
-                "op" => %{
-                  "type" => "string",
-                  "enum" => [
-                    "create_file",
-                    "replace",
-                    "insert_before",
-                    "insert_after",
-                    "delete_file",
-                    "rename_path"
-                  ]
-                },
-                "path" => %{"type" => "string"},
-                "from_path" => %{"type" => "string"},
-                "to_path" => %{"type" => "string"},
-                "content" => %{"type" => "string"},
-                "old_text" => %{"type" => "string"},
-                "new_text" => %{"type" => "string"},
-                "anchor" => %{"type" => "string"},
-                "text" => %{"type" => "string"},
-                "expected_replacements" => %{
-                  "type" => "integer",
-                  "minimum" => 1,
-                  "maximum" => 100
-                },
-                "expected_sha256" => %{"type" => "string"},
-                "overwrite" => %{"type" => "boolean"}
-              },
-              "required" => ["op"],
-              "additionalProperties" => false
-            }
+            "items" => change_schema()
           }
         },
         "required" => ["changes"],
@@ -86,6 +54,112 @@ defmodule AgentMachine.Tools.ApplyEdits do
   end
 
   def run(input, _opts), do: {:error, {:invalid_input, input}}
+
+  defp change_schema do
+    %{
+      "oneOf" => [
+        create_file_schema(),
+        replace_schema(),
+        insert_schema("insert_before"),
+        insert_schema("insert_after"),
+        delete_file_schema(),
+        rename_path_schema()
+      ]
+    }
+  end
+
+  defp create_file_schema do
+    operation_schema(
+      "create_file",
+      %{
+        "path" => path_schema("File path to create under tool_root."),
+        "content" => %{
+          "type" => "string",
+          "description" => "Complete UTF-8 file content to write."
+        },
+        "overwrite" => %{
+          "type" => "boolean",
+          "description" => "Whether an existing file may be overwritten."
+        }
+      },
+      ["op", "path", "content", "overwrite"]
+    )
+  end
+
+  defp replace_schema do
+    operation_schema(
+      "replace",
+      %{
+        "path" => path_schema("Existing file path under tool_root."),
+        "old_text" => %{"type" => "string", "description" => "Exact existing text to replace."},
+        "new_text" => %{"type" => "string", "description" => "Replacement UTF-8 text."},
+        "expected_replacements" => expected_replacements_schema()
+      },
+      ["op", "path", "old_text", "new_text", "expected_replacements"]
+    )
+  end
+
+  defp insert_schema(op) do
+    operation_schema(
+      op,
+      %{
+        "path" => path_schema("Existing file path under tool_root."),
+        "anchor" => %{"type" => "string", "description" => "Exact existing anchor text."},
+        "text" => %{"type" => "string", "description" => "UTF-8 text to insert."},
+        "expected_replacements" => expected_replacements_schema()
+      },
+      ["op", "path", "anchor", "text", "expected_replacements"]
+    )
+  end
+
+  defp delete_file_schema do
+    operation_schema(
+      "delete_file",
+      %{
+        "path" => path_schema("Existing file path under tool_root."),
+        "expected_sha256" => %{
+          "type" => "string",
+          "description" => "Lowercase SHA-256 of the current file content."
+        }
+      },
+      ["op", "path", "expected_sha256"]
+    )
+  end
+
+  defp rename_path_schema do
+    operation_schema(
+      "rename_path",
+      %{
+        "from_path" => path_schema("Existing source path under tool_root."),
+        "to_path" => path_schema("Destination path under tool_root."),
+        "overwrite" => %{
+          "type" => "boolean",
+          "description" => "Whether an existing destination may be overwritten."
+        }
+      },
+      ["op", "from_path", "to_path", "overwrite"]
+    )
+  end
+
+  defp operation_schema(op, properties, required) do
+    %{
+      "type" => "object",
+      "properties" => Map.put(properties, "op", %{"type" => "string", "enum" => [op]}),
+      "required" => required,
+      "additionalProperties" => false
+    }
+  end
+
+  defp path_schema(description), do: %{"type" => "string", "description" => description}
+
+  defp expected_replacements_schema do
+    %{
+      "type" => "integer",
+      "minimum" => 1,
+      "maximum" => 100,
+      "description" => "Exact number of replacements or insertions expected."
+    }
+  end
 
   defp stage_change(root, change, {plan, touched}) when is_map(change) do
     case fetch_change!(change, "op") do

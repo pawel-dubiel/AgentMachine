@@ -140,6 +140,7 @@ defmodule AgentMachine.RunContextPromptTest do
     assert instruction =~ "inspect that exact relative path"
     assert instruction =~ "Use search_files only for content search under a narrow path"
     assert instruction =~ "less than or equal to tool_timeout_ms"
+    assert instruction =~ "create_file needs path, content, overwrite"
     assert instruction =~ "Use MCP browser tools for web browsing"
 
     assert instruction =~

@@ -12,12 +12,15 @@ defmodule AgentMachine.Tools.RunShellCommand do
   def approval_risk, do: :command
 
   @impl true
-  def definition do
+  def definition, do: definition([])
+
+  @impl true
+  def definition(opts) when is_list(opts) do
     %{
       name: "run_shell_command",
       description:
         "Run a foreground POSIX shell command from a cwd under the configured code-edit root. Requires explicit timeout_ms and returns bounded redacted combined output.",
-      input_schema: shell_input_schema()
+      input_schema: shell_input_schema(opts)
     }
   end
 
@@ -33,7 +36,7 @@ defmodule AgentMachine.Tools.RunShellCommand do
 
   def run(input, _opts), do: {:error, {:invalid_input, input}}
 
-  defp shell_input_schema do
+  defp shell_input_schema(opts) do
     %{
       "type" => "object",
       "properties" => %{
@@ -46,15 +49,33 @@ defmodule AgentMachine.Tools.RunShellCommand do
           "description" =>
             "Relative working directory under the configured tool root, or an absolute path inside that root."
         },
-        "timeout_ms" => %{
-          "type" => "integer",
-          "description" =>
-            "Command timeout in milliseconds. Must be less than or equal to the configured tool timeout."
-        }
+        "timeout_ms" => timeout_schema(opts)
       },
       "required" => ["command", "cwd", "timeout_ms"],
       "additionalProperties" => false
     }
+  end
+
+  defp timeout_schema(opts) do
+    base = %{
+      "type" => "integer",
+      "minimum" => 1,
+      "description" =>
+        "Command timeout in milliseconds. Must be less than or equal to the configured tool timeout."
+    }
+
+    case Keyword.get(opts, :tool_timeout_ms) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+        base
+        |> Map.put("maximum", timeout_ms)
+        |> Map.put(
+          "description",
+          "Command timeout in milliseconds. Must be less than or equal to configured tool_timeout_ms #{timeout_ms}."
+        )
+
+      _other ->
+        base
+    end
   end
 end
 
@@ -72,7 +93,10 @@ defmodule AgentMachine.Tools.StartShellCommand do
   def approval_risk, do: :command
 
   @impl true
-  def definition do
+  def definition, do: definition([])
+
+  @impl true
+  def definition(opts) when is_list(opts) do
     %{
       name: "start_shell_command",
       description:
@@ -86,11 +110,7 @@ defmodule AgentMachine.Tools.StartShellCommand do
             "description" =>
               "Relative working directory under the configured tool root, or an absolute path inside that root."
           },
-          "timeout_ms" => %{
-            "type" => "integer",
-            "description" =>
-              "Command timeout in milliseconds. Must be less than or equal to the configured tool timeout."
-          }
+          "timeout_ms" => timeout_schema(opts)
         },
         "required" => ["command", "cwd", "timeout_ms"],
         "additionalProperties" => false
@@ -101,6 +121,28 @@ defmodule AgentMachine.Tools.StartShellCommand do
   @impl true
   def run(input, opts) when is_map(input), do: ShellCommandRegistry.start_command(input, opts)
   def run(input, _opts), do: {:error, {:invalid_input, input}}
+
+  defp timeout_schema(opts) do
+    base = %{
+      "type" => "integer",
+      "minimum" => 1,
+      "description" =>
+        "Command timeout in milliseconds. Must be less than or equal to the configured tool timeout."
+    }
+
+    case Keyword.get(opts, :tool_timeout_ms) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+        base
+        |> Map.put("maximum", timeout_ms)
+        |> Map.put(
+          "description",
+          "Command timeout in milliseconds. Must be less than or equal to configured tool_timeout_ms #{timeout_ms}."
+        )
+
+      _other ->
+        base
+    end
+  end
 end
 
 defmodule AgentMachine.Tools.ReadShellCommandOutput do

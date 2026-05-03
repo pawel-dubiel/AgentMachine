@@ -53,6 +53,8 @@ defmodule AgentMachine.Workflows.Basic do
     """
     Answer the user's task directly. Keep the response concise and actionable.
     If a task requires external side effects such as writing files, use an available tool.
+    For run_shell_command or start_shell_command, read tool_timeout_ms from runtime context and set timeout_ms to that value or lower. Do not guess a larger timeout.
+    For apply_edits, include every operation-specific required field: create_file path/content/overwrite; replace path/old_text/new_text/expected_replacements; insert_before or insert_after path/anchor/text/expected_replacements; delete_file path/expected_sha256; rename_path from_path/to_path/overwrite.
     Do not claim that you created, changed, read, or deleted a file unless a tool result proves it.
     If no relevant tool is available, say that you cannot perform that action in this run.
     """
