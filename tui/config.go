@@ -198,7 +198,7 @@ func loadResolvedSavedConfig(resolution tuiConfigResolution) (savedConfig, bool,
 	return mergedConfig, loadedLegacy, nil
 }
 
-func migrateHomeToolRootToWorkingDir(config *savedConfig, workingDir string) (bool, error) {
+func migrateSavedToolRootToWorkingDir(config *savedConfig, workingDir string) (bool, error) {
 	if config.ToolHarness != "local-files" && config.ToolHarness != "code-edit" {
 		return false, nil
 	}
@@ -208,28 +208,29 @@ func migrateHomeToolRootToWorkingDir(config *savedConfig, workingDir string) (bo
 		return false, nil
 	}
 
-	home := strings.TrimSpace(os.Getenv("HOME"))
-	if home == "" {
-		return false, nil
-	}
-
 	resolvedRoot, err := resolveToolRootPath(root, workingDir)
 	if err != nil {
 		return false, err
 	}
 
-	home = filepath.Clean(home)
 	workingDir = filepath.Clean(strings.TrimSpace(workingDir))
-	if resolvedRoot != home || workingDir == "" || workingDir == home {
-		if resolvedRoot != root {
-			config.ToolRoot = resolvedRoot
-			return true, nil
-		}
-		return false, nil
+	if workingDir != "" && resolvedRoot == filepath.Join(workingDir, "tui") {
+		config.ToolRoot = workingDir
+		return true, nil
 	}
 
-	config.ToolRoot = workingDir
-	return true, nil
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home != "" && resolvedRoot == filepath.Clean(home) && workingDir != "" && workingDir != filepath.Clean(home) {
+		config.ToolRoot = workingDir
+		return true, nil
+	}
+
+	if resolvedRoot != root {
+		config.ToolRoot = resolvedRoot
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func resolveToolRootPath(root string, workingDir string) (string, error) {

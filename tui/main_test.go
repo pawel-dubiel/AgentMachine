@@ -611,6 +611,58 @@ func TestInitialModelMigratesHomeToolRootToLaunchDirectory(t *testing.T) {
 	}
 }
 
+func TestInitialModelMigratesTUISubdirToolRootToLaunchDirectory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	workspace := t.TempDir()
+	tuiRoot := filepath.Join(workspace, "tui")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	t.Chdir(workspace)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		Provider:      "echo",
+		ToolHarness:   "code-edit",
+		ToolRoot:      tuiRoot,
+		ToolTimeout:   "120000",
+		ToolMaxRounds: "16",
+		ToolApproval:  "ask-before-write",
+	}); err != nil {
+		t.Fatalf("failed to write user config: %v", err)
+	}
+
+	model, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if model.savedConfig.ToolRoot != workspace {
+		t.Fatalf("expected launch workspace root, got %#v", model.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config to load, got %v", err)
+	}
+	if loaded.ToolRoot != workspace {
+		t.Fatalf("expected migrated saved root %q, got %q", workspace, loaded.ToolRoot)
+	}
+}
+
+func TestInitialModelUsesLaunchDirectoryAsToolRootBase(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	workspace := t.TempDir()
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+	t.Chdir(workspace)
+
+	model, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	if model.toolRootBaseDir() != workspace {
+		t.Fatalf("expected launch directory %q as tool root base, got %q", workspace, model.toolRootBaseDir())
+	}
+}
+
 func TestInitialModelMigratesLegacyConfigToHomeAgentMachine(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")

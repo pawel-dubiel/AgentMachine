@@ -451,7 +451,7 @@ func initialModelWithArgs(args []string) (model, error) {
 		return model{}, err
 	}
 	migratedRouterDefault := migrateLegacyLocalRouterDefault(&savedConfig, configPath)
-	migratedToolRoot, err := migrateHomeToolRootToWorkingDir(&savedConfig, configResolution.WorkingDir)
+	migratedToolRoot, err := migrateSavedToolRootToWorkingDir(&savedConfig, configResolution.WorkingDir)
 	if err != nil {
 		return model{}, err
 	}

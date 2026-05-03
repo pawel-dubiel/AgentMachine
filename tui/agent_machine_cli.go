@@ -92,9 +92,14 @@ func runSkillsCLICommandWithConfig(args []string, config runConfig) tea.Cmd {
 
 func runSkillsCLICommandWithEnv(args []string, env []string) tea.Cmd {
 	return func() tea.Msg {
+		root, err := projectRoot()
+		if err != nil {
+			return skillsCommandMsg{Err: err}
+		}
+
 		cmdArgs := append([]string{"agent_machine.skills"}, args...)
 		cmd := exec.Command("mix", cmdArgs...)
-		cmd.Dir = projectRoot()
+		cmd.Dir = root
 		if env != nil {
 			cmd.Env = env
 		}
@@ -114,6 +119,10 @@ func runAgentMachineCompact(config runConfig, messages []chatMessage) (compactSu
 	if len(messages) == 0 {
 		return compactSummary{}, "", errors.New("conversation compaction requires messages")
 	}
+	root, err := projectRoot()
+	if err != nil {
+		return compactSummary{}, "", err
+	}
 
 	inputFile, cleanup, err := writeCompactInput(messages)
 	if err != nil {
@@ -123,7 +132,7 @@ func runAgentMachineCompact(config runConfig, messages []chatMessage) (compactSu
 
 	args := buildCompactArgs(config, inputFile)
 	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
+	cmd.Dir = root
 	cmd.Env = commandEnv(os.Environ(), config)
 
 	output, err := cmd.CombinedOutput()
@@ -199,10 +208,14 @@ func startAgentMachineStream(config runConfig) (*streamSession, error) {
 	if err := prepareRunLog(config); err != nil {
 		return nil, err
 	}
+	root, err := projectRoot()
+	if err != nil {
+		return nil, err
+	}
 
 	args := buildRunArgs(config)
 	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
+	cmd.Dir = root
 	cmd.Env = commandEnv(os.Environ(), config)
 
 	stdout, err := cmd.StdoutPipe()
@@ -237,6 +250,10 @@ func startAgentMachineSession(config runConfig) (*streamSession, error) {
 	if err := prepareRunLog(runConfig{LogFile: config.EventLogFile}); err != nil {
 		return nil, err
 	}
+	root, err := projectRoot()
+	if err != nil {
+		return nil, err
+	}
 
 	args := []string{
 		"agent_machine.session",
@@ -246,7 +263,7 @@ func startAgentMachineSession(config runConfig) (*streamSession, error) {
 		"--log-file", config.EventLogFile,
 	}
 	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
+	cmd.Dir = root
 	cmd.Env = commandEnv(os.Environ(), config)
 
 	stdout, err := cmd.StdoutPipe()
@@ -515,10 +532,14 @@ func runAgentMachine(config runConfig) (summary, string, error) {
 	if err := prepareRunLog(config); err != nil {
 		return summary{}, "", err
 	}
+	root, err := projectRoot()
+	if err != nil {
+		return summary{}, "", err
+	}
 
 	args := buildRunArgs(config)
 	cmd := exec.Command("mix", args...)
-	cmd.Dir = projectRoot()
+	cmd.Dir = root
 	cmd.Env = commandEnv(os.Environ(), config)
 
 	output, err := cmd.CombinedOutput()
