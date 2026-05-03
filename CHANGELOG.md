@@ -4,6 +4,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added a minimal Next.js website under `html/` for the project landing page.
 - Tightened provider-facing code-edit tool schemas so shell command tools expose
   the configured timeout maximum and `apply_edits` advertises required fields
   for each operation, reducing invalid model tool calls.

@@ -10,6 +10,9 @@
 /test-results/
 /mcp.json
 /agent-machine-playwright-mcp-npm-cache/
+/html/.next/
+/html/node_modules/
+/html/out/
 .fetch
 *.app
 *.ez
