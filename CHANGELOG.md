@@ -4,6 +4,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed the TUI live-events panel to show only the most recent runtime event
+  instead of a scrollable compacted event history.
 - Fixed MCP no-argument tool calls so empty provider input is treated as empty
   MCP arguments when the configured tool schema allows it, and guarded progress
   observer commentary from reporting success when recent terminal evidence

@@ -5357,23 +5357,33 @@ func TestJSONLAssistantDeltaUpdatesStreamWithoutLiveFeedNoise(t *testing.T) {
 	}
 }
 
-func TestLiveActivityViewRendersSummariesAndScrollHint(t *testing.T) {
+func TestLiveActivityViewShowsOnlyLatestEvent(t *testing.T) {
 	m := model{running: true, streamFrame: 1, eventAutoScroll: true}
-	for i := 0; i < liveEventWindowSize+1; i++ {
-		m.eventLog = append(m.eventLog, eventSummary{
+	m.eventLog = []eventSummary{
+		{
 			Type:    "provider_request_started",
 			AgentID: "assistant",
-			Summary: "assistant sent provider request",
-		})
+			Summary: "old provider request",
+		},
+		{
+			Type:    "tool_call_finished",
+			AgentID: "worker",
+			Tool:    "read_file",
+			Status:  "ok",
+			Summary: "latest worker read README.md",
+		},
 	}
 	m.clampEventScroll()
 
 	view := m.liveActivityView()
-	if !strings.Contains(view, "assistant sent provider request") {
-		t.Fatalf("expected event summary in live view, got %q", view)
+	if !strings.Contains(view, "latest worker read README.md") {
+		t.Fatalf("expected latest event summary in live view, got %q", view)
 	}
-	if !strings.Contains(view, "Up/Down scroll") {
-		t.Fatalf("expected scroll hint, got %q", view)
+	if strings.Contains(view, "old provider request") {
+		t.Fatalf("expected old event to be hidden in live view, got %q", view)
+	}
+	if strings.Contains(view, "Up/Down scroll") {
+		t.Fatalf("expected live view without scroll hint, got %q", view)
 	}
 }
 

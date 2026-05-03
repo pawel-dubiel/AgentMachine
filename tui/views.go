@@ -750,25 +750,8 @@ func (m model) liveActivityView() string {
 		return styles.Hint.Render(liveActivityHeader(m) + "\nwaiting for events...")
 	}
 
-	displayLines := compactEventDisplayLinesWithTheme(m.eventLog, m.activeTheme())
-
-	start := m.eventScroll
-	if start < 0 {
-		start = 0
-	}
-	if start > maxEventScroll(len(displayLines), liveEventWindowSize) {
-		start = maxEventScroll(len(displayLines), liveEventWindowSize)
-	}
-	end := start + liveEventWindowSize
-	if end > len(displayLines) {
-		end = len(displayLines)
-	}
-
 	lines := []string{liveActivityHeader(m)}
-	lines = append(lines, displayLines[start:end]...)
-	if len(displayLines) > liveEventWindowSize {
-		lines = append(lines, styles.Hint.Render(fmt.Sprintf("showing %d-%d of %d; Up/Down scroll, End follows", start+1, end, len(displayLines))))
-	}
+	lines = append(lines, eventDisplayLineWithTheme(m.eventLog[len(m.eventLog)-1], m.activeTheme()))
 	return strings.Join(lines, "\n")
 }
 
