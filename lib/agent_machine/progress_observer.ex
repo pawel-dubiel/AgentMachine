@@ -486,6 +486,8 @@ defmodule AgentMachine.ProgressObserver do
     - Do not reveal secrets, credentials, private file contents, hidden prompts, or internal reasoning.
     - Do not answer the main task.
     - Do not summarize the whole task unless the evidence supports it.
+    - A run_completed event means the runtime finished processing, not that the user's task succeeded.
+    - If evidence includes agent_finished with status error, do not describe the run, research, or task as successful.
     - Do not use markdown tables, headings, JSON, or bullet lists.
     - Do not mention uncertainty unless the evidence is actually unclear.
 
@@ -510,6 +512,8 @@ defmodule AgentMachine.ProgressObserver do
   end
 
   defp commentary_event(run_id, commentary, evidence) do
+    commentary = guard_terminal_failure_commentary(commentary, evidence)
+
     %{
       type: :progress_commentary,
       run_id: run_id,
@@ -524,6 +528,44 @@ defmodule AgentMachine.ProgressObserver do
       at: DateTime.utc_now()
     }
   end
+
+  defp guard_terminal_failure_commentary(commentary, evidence) do
+    if terminal_failure_evidence?(evidence) and success_claim?(commentary) do
+      "The run reached its finalizer, but recent evidence includes failed agent work, so the task should be treated as incomplete until that failure is resolved."
+    else
+      commentary
+    end
+  end
+
+  defp terminal_failure_evidence?(evidence) do
+    Enum.any?(evidence, fn
+      %{type: type} when type in ["run_failed", :run_failed, "run_timed_out", :run_timed_out] ->
+        true
+
+      %{type: type, status: status} when type in ["agent_finished", :agent_finished] ->
+        status in [:error, "error"]
+
+      _other ->
+        false
+    end)
+  end
+
+  defp success_claim?(commentary) when is_binary(commentary) do
+    commentary = String.downcase(commentary)
+
+    Enum.any?(
+      [
+        "completed successfully",
+        "successfully completed",
+        "finished successfully",
+        "run succeeded",
+        "research succeeded"
+      ],
+      &String.contains?(commentary, &1)
+    )
+  end
+
+  defp success_claim?(_commentary), do: false
 
   defp compact_commentary(output) do
     output

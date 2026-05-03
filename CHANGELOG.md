@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed MCP no-argument tool calls so empty provider input is treated as empty
+  MCP arguments when the configured tool schema allows it, and guarded progress
+  observer commentary from reporting success when recent terminal evidence
+  includes failed agents.
 - Added opt-in planner review for agentic runs, with CLI/TUI controls,
   JSONL review decisions, approve/decline/revise runtime events, bounded
   planner revisions, and worker scheduling paused until the plan is accepted.

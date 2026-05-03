@@ -8,9 +8,9 @@ defmodule AgentMachine.MCP.ToolRunner do
   def run(server_id, tool_name, input, opts) when is_map(input) do
     config = Keyword.fetch!(opts, :mcp_config)
 
-    with {:ok, arguments} <- arguments(input),
-         %Config.Tool{input_schema: input_schema} <-
+    with %Config.Tool{input_schema: input_schema} <-
            Config.tool_by_name!(config, server_id, tool_name),
+         {:ok, arguments} <- arguments(input, input_schema),
          :ok <- validate_arguments(input_schema, arguments) do
       timeout_ms = Keyword.fetch!(opts, :tool_timeout_ms)
       Config.server_by_id!(config, server_id)
@@ -39,7 +39,7 @@ defmodule AgentMachine.MCP.ToolRunner do
     end
   end
 
-  defp arguments(input) do
+  defp arguments(input, input_schema) do
     cond do
       Map.has_key?(input, "arguments") and is_map(input["arguments"]) ->
         {:ok, input["arguments"]}
@@ -47,10 +47,24 @@ defmodule AgentMachine.MCP.ToolRunner do
       Map.has_key?(input, :arguments) and is_map(input[:arguments]) ->
         {:ok, input[:arguments]}
 
+      input == %{} and empty_arguments_valid?(input_schema) ->
+        {:ok, %{}}
+
       true ->
         {:error, "MCP tool input requires an arguments object"}
     end
   end
+
+  defp empty_arguments_valid?(schema) when schema in [nil, %{}], do: true
+
+  defp empty_arguments_valid?(schema) when is_map(schema) do
+    type = schema_value(schema, "type")
+    required = schema_value(schema, "required") || []
+
+    type in [nil, "object"] and required == []
+  end
+
+  defp empty_arguments_valid?(_schema), do: false
 
   defp validate_arguments(schema, arguments) when schema in [nil, %{}] and is_map(arguments),
     do: :ok

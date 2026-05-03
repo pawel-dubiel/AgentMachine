@@ -389,6 +389,41 @@ defmodule AgentMachine.MCPIntegrationTest do
     assert reason == "MCP tool arguments invalid: missing required field arguments.url"
   end
 
+  test "MCP tool runner treats empty input as empty arguments for no-argument tools" do
+    script = fake_stdio_server!("snapshot ok")
+
+    config =
+      Config.from_map!(%{
+        "servers" => [
+          %{
+            "id" => "playwright",
+            "transport" => "stdio",
+            "command" => script,
+            "args" => [],
+            "env" => %{},
+            "tools" => [
+              %{
+                "name" => "search",
+                "permission" => "mcp_playwright_browser_snapshot",
+                "risk" => "read",
+                "inputSchema" => %{"type" => "object"}
+              }
+            ]
+          }
+        ]
+      })
+
+    [tool] = ToolFactory.tools!(config)
+
+    assert {:ok, result} =
+             tool.run(%{},
+               mcp_config: config,
+               tool_timeout_ms: 1_000
+             )
+
+    assert get_in(result, [:result, "content", Access.at(0), "text"]) == "snapshot ok"
+  end
+
   test "agent runner fails early when provider repeats the same malformed MCP call" do
     config =
       Config.from_map!(%{

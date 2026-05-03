@@ -158,6 +158,52 @@ defmodule AgentMachine.ProgressObserverTest do
     assert_receive {:event, %{type: :progress_commentary, commentary: "Slow observer done."}},
                    1_500
   end
+
+  test "guards misleading success commentary when terminal evidence includes failed agents" do
+    observer = %{
+      provider: AgentMachine.ProgressObserverTest.MisleadingObserverProvider,
+      model: "test-observer",
+      pricing: %{input_per_million: 0.0, output_per_million: 0.0},
+      provider_opts: [],
+      task: "research AI news",
+      debounce_ms: 0,
+      cooldown_ms: 0
+    }
+
+    parent = self()
+    name = :"progress-observer-#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      ProgressObserver.start_link(
+        {"run-1", observer, fn event -> send(parent, {:event, event}) end, name: name}
+      )
+
+    at = DateTime.utc_now()
+
+    ProgressObserver.observe(pid, %{
+      type: :agent_finished,
+      run_id: "run-1",
+      agent_id: "ai-news-researcher",
+      status: :error,
+      attempt: 1,
+      at: at
+    })
+
+    ProgressObserver.observe(pid, %{
+      type: :agent_finished,
+      run_id: "run-1",
+      agent_id: "finalizer",
+      status: :ok,
+      attempt: 1,
+      at: at
+    })
+
+    ProgressObserver.observe(pid, %{type: :run_completed, run_id: "run-1", at: at})
+
+    assert_receive {:event, %{type: :progress_commentary} = event}, 500
+    assert event.commentary =~ "failed agent work"
+    refute String.contains?(String.downcase(event.commentary), "completed successfully")
+  end
 end
 
 defmodule AgentMachine.ProgressObserverTest.EchoTool do
@@ -277,6 +323,22 @@ defmodule AgentMachine.ProgressObserverTest.SlowObserverProvider do
      %{
        output: "Slow observer done.",
        usage: %{input_tokens: 1, output_tokens: 3, total_tokens: 4}
+     }}
+  end
+end
+
+defmodule AgentMachine.ProgressObserverTest.MisleadingObserverProvider do
+  @behaviour AgentMachine.Provider
+
+  alias AgentMachine.Agent
+
+  @impl true
+  def complete(%Agent{}, _opts) do
+    {:ok,
+     %{
+       output:
+         "The research run completed successfully; the finalizer finished analyzing recent AI news.",
+       usage: %{input_tokens: 1, output_tokens: 10, total_tokens: 11}
      }}
   end
 end
