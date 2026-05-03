@@ -1029,6 +1029,11 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.final_output =~ "finalizer"
     assert_receive {:event, :run_started, %{run_id: _run_id}}
     assert_receive {:event, :agent_started, %{agent_id: "assistant"}}
+
+    assert_receive {:event, :provider_request_finished,
+                    %{agent_id: "assistant", usage: %{total_tokens: total_tokens}}}
+
+    assert total_tokens > 0
     assert_receive {:event, :agent_finished, %{agent_id: "assistant", status: :ok}}
     assert_receive {:event, :agent_started, %{agent_id: "finalizer"}}
     assert_receive {:event, :run_completed, %{run_id: _run_id}}

@@ -13,6 +13,7 @@ defmodule AgentMachine.SessionServer do
     ProgressObserver,
     RunSpec,
     SessionProtocol,
+    SessionRunLog,
     SessionTranscript,
     SessionWriter,
     ToolHarness,
@@ -83,6 +84,7 @@ defmodule AgentMachine.SessionServer do
        names: %{},
        agent_seq: 0,
        current_attrs: nil,
+       current_run_log_file: nil,
        current_session_tool_opts: nil
      }}
   end
@@ -96,6 +98,7 @@ defmodule AgentMachine.SessionServer do
         |> put_command_id(command.message_id)
         |> put_in([:user_message_tasks, task.ref], command)
         |> Map.put(:current_attrs, command.run)
+        |> Map.put(:current_run_log_file, Map.get(command, :log_file))
         |> Map.put(:current_session_tool_opts, command.session_tool_opts)
 
       {:reply, {:ok, %{status: "started", message_id: command.message_id}}, state}
@@ -188,7 +191,7 @@ defmodule AgentMachine.SessionServer do
 
         {:noreply,
          write_user_message_failure(
-           command.message_id,
+           command,
            "user message routing task exited: #{inspect(reason)}",
            state
          )}
@@ -206,6 +209,8 @@ defmodule AgentMachine.SessionServer do
   end
 
   defp start_user_message_routing(command, state) do
+    SessionRunLog.prepare!(Map.get(command, :log_file))
+
     SessionTranscript.append_session!(state.session_dir, state.session_id, %{
       type: "user_message",
       message_id: command.message_id,
@@ -238,7 +243,7 @@ defmodule AgentMachine.SessionServer do
         start_routed_user_message(command, route, state)
 
       {:error, reason} ->
-        write_user_message_failure(command.message_id, reason, state)
+        write_user_message_failure(command, reason, state)
     end
   end
 
@@ -249,7 +254,7 @@ defmodule AgentMachine.SessionServer do
           put_started_user_message(state, {:coordinator, task}, command.message_id)
 
         {:error, reason} ->
-          write_user_message_failure(command.message_id, reason, state)
+          write_user_message_failure(command, reason, state)
       end
     else
       case start_primary_agent(command, state) do
@@ -257,7 +262,7 @@ defmodule AgentMachine.SessionServer do
           put_started_user_message(state, {:agent, agent}, command.message_id)
 
         {:error, reason} ->
-          write_user_message_failure(command.message_id, reason, state)
+          write_user_message_failure(command, reason, state)
       end
     end
   end
@@ -267,8 +272,10 @@ defmodule AgentMachine.SessionServer do
     {command, %{state | user_message_tasks: tasks}}
   end
 
-  defp write_user_message_failure(message_id, reason, state) do
-    maybe_write_primary_summary(message_id, failed_primary_summary(reason), state)
+  defp write_user_message_failure(command, reason, state) do
+    summary = failed_primary_summary(reason)
+    SessionRunLog.write_summary(Map.get(command, :log_file), summary)
+    maybe_write_primary_summary(command.message_id, summary, state)
   end
 
   defp coordinator_route?(%{selected: "chat", tool_intent: "none"}), do: true
@@ -294,6 +301,7 @@ defmodule AgentMachine.SessionServer do
           session_id: state.session_id,
           session_dir: state.session_dir,
           writer: state.writer,
+          log_file: Map.get(command, :log_file),
           session_server: session_server,
           permission_control: state.permission_control
         })
@@ -332,16 +340,24 @@ defmodule AgentMachine.SessionServer do
 
     case Orchestrator.run([agent], opts) do
       {:ok, run} ->
-        {:ok, ClientRunner.summarize_run!(run)}
+        summary = ClientRunner.summarize_run!(run)
+        SessionRunLog.write_summary(Map.get(context, :log_file), summary)
+        {:ok, summary}
 
       {:error, {:failed, run}} ->
-        {:ok, Map.put(ClientRunner.summarize_run!(run), :status, "failed")}
+        summary = run |> ClientRunner.summarize_run!() |> Map.put(:status, "failed")
+        SessionRunLog.write_summary(Map.get(context, :log_file), summary)
+        {:ok, summary}
 
       {:error, {:timeout, run}} ->
-        {:ok, Map.put(ClientRunner.summarize_run!(run), :status, "timeout")}
+        summary = run |> ClientRunner.summarize_run!() |> Map.put(:status, "timeout")
+        SessionRunLog.write_summary(Map.get(context, :log_file), summary)
+        {:ok, summary}
 
       {:error, reason} ->
-        {:error, inspect(reason)}
+        reason = inspect(reason)
+        SessionRunLog.write_summary(Map.get(context, :log_file), failed_primary_summary(reason))
+        {:error, reason}
     end
   end
 
@@ -358,6 +374,7 @@ defmodule AgentMachine.SessionServer do
 
   defp coordinator_opts(spec, context) do
     event_sink = fn event ->
+      SessionRunLog.write_event(Map.get(context, :log_file), event)
       SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
     end
 
@@ -562,6 +579,7 @@ defmodule AgentMachine.SessionServer do
       attrs: attrs,
       message: message,
       writer: state.writer,
+      log_file: state.current_run_log_file,
       permission_control: state.permission_control,
       attempt: attempt
     }

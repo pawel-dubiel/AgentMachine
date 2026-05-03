@@ -105,7 +105,7 @@ defmodule AgentMachine.ClawHubSkillsTest do
 
     lock =
       skills_dir
-      |> Path.join(".agent_machine_skills.lock.json")
+      |> Path.join(".agent-machine-skills.lock.json")
       |> File.read!()
       |> JSON.decode!()
 

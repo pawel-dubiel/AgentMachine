@@ -4,7 +4,8 @@ defmodule AgentMachine.Skills.Installer do
   alias AgentMachine.{JSON, Skills.Registry}
   alias AgentMachine.Skills.{ClawHub, Loader, Manifest}
 
-  @lockfile ".agent_machine_skills.lock.json"
+  @lockfile ".agent-machine-skills.lock.json"
+  @legacy_lockfile ".agent_machine_skills.lock.json"
 
   def install_from_registry!(name, opts) when is_list(opts) do
     registry = Keyword.get(opts, :registry, Registry.default_path())
@@ -73,7 +74,7 @@ defmodule AgentMachine.Skills.Installer do
 
   def update_clawhub!("--all", opts) when is_list(opts) do
     skills_dir = ensure_skills_dir!(Keyword.fetch!(opts, :skills_dir))
-    lock = read_lock(Path.join(skills_dir, @lockfile))
+    lock = read_lock(skills_dir)
 
     entries =
       lock
@@ -97,7 +98,7 @@ defmodule AgentMachine.Skills.Installer do
   def update_clawhub!(target, opts) when is_list(opts) do
     slug = ClawHub.normalize_slug!(target)
     skills_dir = ensure_skills_dir!(Keyword.fetch!(opts, :skills_dir))
-    lock = read_lock(Path.join(skills_dir, @lockfile))
+    lock = read_lock(skills_dir)
 
     {name, entry} =
       Enum.find(lock, fn {_name, entry} ->
@@ -219,8 +220,7 @@ defmodule AgentMachine.Skills.Installer do
   end
 
   defp write_lock!(skills_dir, skill, entry) do
-    lock_path = Path.join(skills_dir, @lockfile)
-    lock = read_lock(lock_path)
+    lock = read_lock(skills_dir)
 
     lock =
       Map.put(lock, skill.name, %{
@@ -230,20 +230,49 @@ defmodule AgentMachine.Skills.Installer do
         hash: skill_hash(skill.root)
       })
 
-    File.write!(lock_path, JSON.encode!(lock) <> "\n")
+    File.write!(lock_path(skills_dir), JSON.encode!(lock) <> "\n")
+    cleanup_legacy_lock!(skills_dir)
   end
 
   defp remove_lock!(skills_dir, name) do
-    lock_path = Path.join(skills_dir, @lockfile)
-    lock = lock_path |> read_lock() |> Map.delete(name)
-    File.write!(lock_path, JSON.encode!(lock) <> "\n")
+    lock = skills_dir |> read_lock() |> Map.delete(name)
+    File.write!(lock_path(skills_dir), JSON.encode!(lock) <> "\n")
+    cleanup_legacy_lock!(skills_dir)
   end
 
-  defp read_lock(path) do
+  defp read_lock(skills_dir) do
+    path = existing_lock_path(skills_dir)
+
     case File.read(path) do
       {:ok, body} -> JSON.decode!(body)
       {:error, :enoent} -> %{}
       {:error, reason} -> raise ArgumentError, "failed to read skill lockfile: #{inspect(reason)}"
+    end
+  end
+
+  defp existing_lock_path(skills_dir) do
+    path = lock_path(skills_dir)
+    legacy_path = Path.join(skills_dir, @legacy_lockfile)
+
+    cond do
+      File.regular?(path) -> path
+      File.regular?(legacy_path) -> legacy_path
+      true -> path
+    end
+  end
+
+  defp lock_path(skills_dir), do: Path.join(skills_dir, @lockfile)
+
+  defp cleanup_legacy_lock!(skills_dir) do
+    case skills_dir |> Path.join(@legacy_lockfile) |> File.rm() do
+      :ok ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        raise ArgumentError, "failed to remove legacy skill lockfile: #{inspect(reason)}"
     end
   end
 

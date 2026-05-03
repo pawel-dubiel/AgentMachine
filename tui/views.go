@@ -38,6 +38,13 @@ func (m model) View() string {
 		return b.String()
 	}
 
+	if m.skillPickerOpen {
+		b.WriteString(m.skillPickerView())
+		b.WriteString("\n\n")
+		b.WriteString(styles.Hint.Render("Skill picker is active. Enter selects; Esc closes."))
+		return b.String()
+	}
+
 	switch m.view {
 	case viewSetup:
 		b.WriteString(m.setupView())
@@ -58,13 +65,13 @@ func (m model) View() string {
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 	if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
-		b.WriteString(styles.Hint.Render("Runtime permission pending. Up/Down selects. Enter accepts. a=approve, d=deny."))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Runtime permission pending. Up/Down selects. Enter accepts. a=approve, d=deny."), m.viewWidth())))
 	} else if m.running {
-		b.WriteString(styles.Hint.Render("Running. Enter queues message. /queue edits queue. Tab navigates."))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."), m.viewWidth())))
 	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
-		b.WriteString(styles.Hint.Render("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."), m.viewWidth())))
 	} else {
-		b.WriteString(styles.Hint.Render("Type a message or /help. Tab changes view. Esc goes back."))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Type a message or /help. Tab changes view. Esc goes back."), m.viewWidth())))
 	}
 	return b.String()
 }
@@ -72,6 +79,7 @@ func (m model) View() string {
 func (m model) statusLine() string {
 	parts := []string{"view=" + m.viewName()}
 	parts = append(parts, "theme="+string(m.activeTheme()))
+	parts = append(parts, m.sessionRuntimeStatusParts()...)
 	if !m.providerSet {
 		parts = append(parts, "provider=missing")
 		return strings.Join(parts, " | ")
@@ -101,7 +109,24 @@ func (m model) statusLine() string {
 	if m.modelStatus != "" {
 		parts = append(parts, "models="+m.modelStatus)
 	}
+	if m.skillStatus != "" {
+		parts = append(parts, "skill-list="+m.skillStatus)
+	}
 	return strings.Join(parts, " | ")
+}
+
+func (m model) inputStatusLine(prompt string) string {
+	parts := []string{prompt}
+	parts = append(parts, m.sessionRuntimeStatusParts()...)
+	return strings.Join(parts, " | ")
+}
+
+func (m model) sessionRuntimeStatusParts() []string {
+	return []string{
+		"session_tokens=" + formatTokenCount(m.sessionUsage.TotalTokens),
+		"cwd=" + compactWorkingDirStatus(m.workingDir),
+		"branch=" + emptyAs(m.gitBranchStatus, "unknown"),
+	}
 }
 
 func contextBudgetStatus(event *eventSummary) string {
@@ -1128,6 +1153,59 @@ func (m model) modelPickerView() string {
 	}
 	if m.modelPickerQuery != "" {
 		lines = append(lines, fmt.Sprintf("filtered from %d total models", len(m.modelOptions)))
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(styles.Border).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m model) skillPickerView() string {
+	if len(m.skillOptions) == 0 {
+		return ""
+	}
+	styles := m.styles()
+
+	indexes := m.filteredSkillIndexes()
+	selectedPosition := selectedModelPickerPosition(indexes, m.skillPickerIndex)
+	start, end := modelPickerWindow(len(indexes), selectedPosition, 12)
+	lines := []string{
+		styles.Label.Render("Installed skills"),
+		"",
+		"Directory: " + emptyAsNone(m.savedConfig.SkillsDir),
+		"Search: " + emptyAs(m.skillPickerQuery, "(type to filter)"),
+		"Use Up / Down, Enter to select or unselect, Esc to cancel, Backspace to edit",
+		"",
+	}
+
+	if len(indexes) == 0 {
+		lines = append(lines, "No skills match "+m.skillPickerQuery)
+		return lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(styles.Border).
+			Padding(1, 2).
+			Render(strings.Join(lines, "\n"))
+	}
+
+	for position := start; position < end; position++ {
+		index := indexes[position]
+		prefix := "  "
+		if index == m.skillPickerIndex {
+			prefix = "> "
+		}
+		selected := " "
+		if stringSliceContains(m.savedConfig.SkillNames, m.skillOptions[index].Name) {
+			selected = "*"
+		}
+		lines = append(lines, fmt.Sprintf("%s[%s] %s - %s", prefix, selected, m.skillOptions[index].Name, m.skillOptions[index].Description))
+	}
+	if len(indexes) > end-start {
+		lines = append(lines, "", fmt.Sprintf("showing %d-%d of %d", start+1, end, len(indexes)))
+	}
+	if m.skillPickerQuery != "" {
+		lines = append(lines, fmt.Sprintf("filtered from %d installed skills", len(m.skillOptions)))
 	}
 
 	return lipgloss.NewStyle().

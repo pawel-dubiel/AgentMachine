@@ -83,18 +83,22 @@ func compactCommand(config runConfig, messages []chatMessage) tea.Cmd {
 }
 
 func runSkillsCLICommand(args []string) tea.Cmd {
-	return runSkillsCLICommandWithEnv(args, nil)
+	return runSkillsCLICommandFor("", args)
+}
+
+func runSkillsCLICommandFor(action string, args []string) tea.Cmd {
+	return runSkillsCLICommandWithEnv(action, args, nil)
 }
 
 func runSkillsCLICommandWithConfig(args []string, config runConfig) tea.Cmd {
-	return runSkillsCLICommandWithEnv(args, commandEnv(os.Environ(), config))
+	return runSkillsCLICommandWithEnv("", args, commandEnv(os.Environ(), config))
 }
 
-func runSkillsCLICommandWithEnv(args []string, env []string) tea.Cmd {
+func runSkillsCLICommandWithEnv(action string, args []string, env []string) tea.Cmd {
 	return func() tea.Msg {
 		root, err := projectRoot()
 		if err != nil {
-			return skillsCommandMsg{Err: err}
+			return skillsCommandMsg{Action: action, Err: err}
 		}
 
 		cmdArgs := append([]string{"agent_machine.skills"}, args...)
@@ -107,12 +111,24 @@ func runSkillsCLICommandWithEnv(args []string, env []string) tea.Cmd {
 		raw := strings.TrimSpace(string(output))
 		if err != nil {
 			if raw != "" {
-				return skillsCommandMsg{Output: raw, Err: fmt.Errorf("mix command failed: %w\n%s", err, raw)}
+				return skillsCommandMsg{Action: action, Output: raw, Err: fmt.Errorf("mix command failed: %w\n%s", err, raw)}
 			}
-			return skillsCommandMsg{Err: fmt.Errorf("mix command failed: %w", err)}
+			return skillsCommandMsg{Action: action, Err: fmt.Errorf("mix command failed: %w", err)}
 		}
-		return skillsCommandMsg{Output: raw}
+		if hasArg(args, "--json") {
+			raw = lastJSONLine(raw)
+		}
+		return skillsCommandMsg{Action: action, Output: raw}
 	}
+}
+
+func hasArg(args []string, value string) bool {
+	for _, arg := range args {
+		if arg == value {
+			return true
+		}
+	}
+	return false
 }
 
 func runAgentMachineCompact(config runConfig, messages []chatMessage) (compactSummary, string, error) {
@@ -354,6 +370,9 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 		"stream_response":         true,
 		"session_tool_timeout_ms": sessionToolTimeout,
 		"session_tool_max_rounds": sessionToolMaxRounds,
+	}
+	if strings.TrimSpace(config.LogFile) != "" {
+		run["log_file"] = config.LogFile
 	}
 	if config.ProgressObserver {
 		run["progress_observer"] = true
@@ -861,7 +880,8 @@ func lastJSONLine(raw string) string {
 	lines := strings.Split(strings.TrimSpace(raw), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
+		if (strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}")) ||
+			(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
 			return line
 		}
 	}

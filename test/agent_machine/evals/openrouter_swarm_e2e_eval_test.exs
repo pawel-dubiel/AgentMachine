@@ -224,7 +224,7 @@ defmodule AgentMachine.OpenRouterSwarmE2EEvalTest do
   defp root_escape_detected?(root) do
     root
     |> File.ls!()
-    |> Enum.reject(&(&1 == ".agent_machine"))
+    |> Enum.reject(&(&1 == ".agent-machine"))
     |> Enum.any?()
   end
 
@@ -233,7 +233,7 @@ defmodule AgentMachine.OpenRouterSwarmE2EEvalTest do
       is_binary(context.swarm_id) and context.swarm_id != "" and
       context.variant_id in @variant_ids and
       is_binary(context.workspace) and
-      String.contains?(context.workspace, ".agent_machine/swarm/") and
+      String.contains?(context.workspace, ".agent-machine/swarm/") and
       context.risk in [:write, :command] and
       context.tool in [AgentMachine.Tools.ApplyPatch, AgentMachine.Tools.RunTestCommand]
   end

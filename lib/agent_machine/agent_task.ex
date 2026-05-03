@@ -7,6 +7,7 @@ defmodule AgentMachine.AgentTask do
     ClientRunner,
     PermissionControl,
     SessionProtocol,
+    SessionRunLog,
     SessionTranscript,
     SessionWriter
   }
@@ -21,6 +22,7 @@ defmodule AgentMachine.AgentTask do
     })
 
     summary = ClientRunner.run!(context.attrs, runner_opts(context))
+    SessionRunLog.write_summary(Map.get(context, :log_file), summary)
 
     append_agent(context, %{
       type: "assistant_message",
@@ -33,6 +35,7 @@ defmodule AgentMachine.AgentTask do
   rescue
     exception ->
       reason = Exception.format(:error, exception, __STACKTRACE__)
+      SessionRunLog.write_summary(Map.get(context, :log_file), failed_summary(reason))
 
       append_agent(context, %{
         type: "error",
@@ -46,8 +49,13 @@ defmodule AgentMachine.AgentTask do
   defp event_sink(context) do
     fn event ->
       maybe_append_tool_record(context, event)
+      SessionRunLog.write_event(Map.get(context, :log_file), event)
       SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
     end
+  end
+
+  defp failed_summary(reason) do
+    %{status: "failed", error: reason, final_output: nil, results: %{}, events: []}
   end
 
   defp runner_opts(%{permission_control: control} = context) when is_pid(control) do

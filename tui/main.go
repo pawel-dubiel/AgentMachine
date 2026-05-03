@@ -155,6 +155,7 @@ type eventSummary struct {
 	UsedPercent           *float64       `json:"used_percent"`
 	RemainingPercent      *float64       `json:"remaining_percent"`
 	Breakdown             map[string]int `json:"breakdown"`
+	Usage                 usageSummary   `json:"usage"`
 	InputSummary          map[string]any `json:"input_summary"`
 	ResultSummary         map[string]any `json:"result_summary"`
 	Details               map[string]any `json:"details"`
@@ -207,8 +208,19 @@ type streamDoneMsg struct {
 type streamTickMsg struct{}
 
 type skillsCommandMsg struct {
+	Action string
 	Output string
 	Err    error
+}
+
+type skillCatalogEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Root        string `json:"root"`
+}
+
+type skillListResult struct {
+	Skills []skillCatalogEntry `json:"skills"`
 }
 
 type compactResultMsg struct {
@@ -400,6 +412,11 @@ type model struct {
 	modelPickerIndex        int
 	modelPickerPending      bool
 	modelPickerQuery        string
+	skillOptions            []skillCatalogEntry
+	skillPickerOpen         bool
+	skillPickerIndex        int
+	skillPickerQuery        string
+	skillStatus             string
 	messages                []chatMessage
 	inputHistory            []string
 	historyIndex            int
@@ -412,6 +429,10 @@ type model struct {
 	running                 bool
 	activeConfig            runConfig
 	lastSummary             summary
+	sessionUsage            usageSummary
+	countedSummaryRunIDs    map[string]struct{}
+	liveUsageByRunID        map[string]usageSummary
+	gitBranchStatus         string
 	agents                  map[string]agentState
 	agentOrder              []string
 	workItems               map[string]workItem
@@ -469,7 +490,11 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err := migrateManagedMCPConfig(configPath, &savedConfig); err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() || migratedRouterDefault || migratedToolRoot || loadedLegacyConfig {
+	initializedSkillsDir, err := initializeDefaultSkillsDir(&savedConfig)
+	if err != nil {
+		return model{}, err
+	}
+	if startup.hasOverrides() || migratedRouterDefault || migratedToolRoot || loadedLegacyConfig || initializedSkillsDir {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}
@@ -501,6 +526,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err := m.applySavedSettings(); err != nil {
 		return model{}, err
 	}
+	m.refreshGitBranchStatus()
 
 	return m, nil
 }
@@ -631,6 +657,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.skillPickerOpen {
+			switch msg.String() {
+			case "esc":
+				m.skillPickerOpen = false
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "skill picker canceled"})
+				return m, nil
+			case "up":
+				m.moveSkillPicker(-1)
+				return m, nil
+			case "down":
+				m.moveSkillPicker(1)
+				return m, nil
+			case "enter":
+				return m.selectSkillFromPicker()
+			case "backspace", "ctrl+h":
+				m.removeLastSkillPickerQueryRune()
+				return m, nil
+			case "delete", "ctrl+u":
+				m.setSkillPickerQuery("")
+				return m, nil
+			}
+			if len(msg.Runes) > 0 {
+				m.setSkillPickerQuery(m.skillPickerQuery + string(msg.Runes))
+				return m, nil
+			}
+			return m, nil
+		}
+
 		if request, ok := m.currentPendingPermission(); ok && m.view == viewChat {
 			if strings.TrimSpace(m.input.Value()) == "" {
 				switch msg.String() {
@@ -746,6 +800,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runResultMsg:
 		m.running = false
 		m.lastSummary = msg.Summary
+		m.recordSummaryUsage(msg.Summary)
+		m.refreshGitBranchStatus()
 		m.raw = msg.Raw
 		m.view = viewChat
 
@@ -798,6 +854,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stream = nil
 		m.running = false
+		m.refreshGitBranchStatus()
 		m.pendingPermissions = nil
 		m.pendingPermissionID = nil
 		m.pendingPermissionChoice = 0
@@ -829,6 +886,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case skillsCommandMsg:
 		if msg.Err != nil {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "skills command failed:\n" + msg.Err.Error()})
+		} else if msg.Action == "list" {
+			parsed, err := parseSkillListResult(msg.Output)
+			if err != nil {
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "skills list parse failed:\n" + err.Error()})
+				return m, nil
+			}
+			m.skillOptions = parsed.Skills
+			m.skillPickerQuery = ""
+			m.skillPickerIndex = selectedSkillIndex(m.skillOptions, m.savedConfig.SkillNames)
+			m.skillStatus = fmt.Sprintf("loaded %d skills", len(m.skillOptions))
+			if len(m.skillOptions) == 0 {
+				m.skillPickerOpen = false
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "no installed skills in " + emptyAsNone(m.savedConfig.SkillsDir)})
+			} else {
+				m.modelPickerOpen = false
+				m.modelPickerPending = false
+				m.view = viewChat
+				m.skillPickerOpen = true
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: m.skillStatus})
+			}
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: strings.TrimSpace(msg.Output)})
 		}
@@ -840,6 +917,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "compact failed:\n" + msg.Err.Error()})
 			return m, nil
 		}
+		m.recordUsage("", msg.Summary.Usage)
 		m.messages = []chatMessage{{Role: "summary", Text: compactConversationSummaryText(msg.Summary)}}
 		return m, nil
 
@@ -875,7 +953,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.view != viewAgents && m.view != viewAgentDetail && !m.modelPickerOpen {
+	if m.view != viewAgents && m.view != viewAgentDetail && !m.modelPickerOpen && !m.skillPickerOpen {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -956,6 +1034,7 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	if err != nil {
 		return m.withRunPreparationError(err), nil
 	}
+	m.refreshGitBranchStatus()
 	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
 		config.Workflow = workflowAgentic
 	} else {
@@ -1770,6 +1849,31 @@ func compactQueueText(text string) string {
 	return text[:96] + "..."
 }
 
+func formatTokenCount(tokens int) string {
+	return strconv.Itoa(tokens)
+}
+
+func compactWorkingDirStatus(workingDir string) string {
+	trimmed := strings.TrimSpace(workingDir)
+	if trimmed == "" {
+		return "missing"
+	}
+	cleaned := filepath.Clean(trimmed)
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		return cleaned
+	}
+	cleanHome := filepath.Clean(home)
+	switch {
+	case cleaned == cleanHome:
+		return "~"
+	case strings.HasPrefix(cleaned, cleanHome+string(filepath.Separator)):
+		return "~" + strings.TrimPrefix(cleaned, cleanHome)
+	default:
+		return cleaned
+	}
+}
+
 func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (tea.Model, tea.Cmd) {
 	if m.pendingToolTask == "" {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no pending tool request"})
@@ -2517,7 +2621,7 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills list"})
 			return m, nil
 		}
-		return m, m.skillsCLICommand("list")
+		return m, m.skillsCLICommandFor("list", "list")
 	case "search":
 		if len(args) < 2 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /skills search <query> [downloads|trending|updated|stars]"})
@@ -2613,13 +2717,17 @@ func (m model) handleSkillsCommand(args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) skillsCLICommand(args ...string) tea.Cmd {
+	return m.skillsCLICommandFor("", args...)
+}
+
+func (m model) skillsCLICommandFor(action string, args ...string) tea.Cmd {
 	cliArgs, err := buildSkillsCLIArgs(args, m.savedConfig.SkillsDir, true)
 	if err != nil {
 		return func() tea.Msg {
-			return skillsCommandMsg{Err: err}
+			return skillsCommandMsg{Action: action, Err: err}
 		}
 	}
-	return runSkillsCLICommand(cliArgs)
+	return runSkillsCLICommandFor(action, cliArgs)
 }
 
 func (m model) skillsCLINoDirCommand(args ...string) tea.Cmd {
@@ -2640,6 +2748,37 @@ func (m model) skillsGenerateCommand(config runConfig, name string, description 
 		}
 	}
 	return runSkillsCLICommandWithConfig(cliArgs, config)
+}
+
+func parseSkillListResult(raw string) (skillListResult, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return skillListResult{}, errors.New("skills list output was empty")
+	}
+	var result skillListResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return skillListResult{}, fmt.Errorf("invalid skills list JSON: %w", err)
+	}
+	for _, skill := range result.Skills {
+		if strings.TrimSpace(skill.Name) == "" {
+			return skillListResult{}, errors.New("skills list returned a skill without a name")
+		}
+		if strings.TrimSpace(skill.Description) == "" {
+			return skillListResult{}, fmt.Errorf("skills list returned %s without a description", skill.Name)
+		}
+	}
+	return result, nil
+}
+
+func selectedSkillIndex(skills []skillCatalogEntry, selected []string) int {
+	for _, name := range selected {
+		for index, skill := range skills {
+			if skill.Name == name {
+				return index
+			}
+		}
+	}
+	return 0
 }
 
 func buildSkillsCLIArgs(args []string, skillsDir string, requireDir bool) ([]string, error) {
@@ -2877,6 +3016,8 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 		m.applyEvent(envelope.Event)
 	case "summary":
 		m.lastSummary = envelope.Summary
+		m.recordSummaryUsage(envelope.Summary)
+		m.refreshGitBranchStatus()
 		m.raw = line
 		m.applySummaryResults(envelope.Summary)
 		m.applySummaryChecklist(envelope.Summary)
@@ -2928,6 +3069,7 @@ func (m *model) applyEvent(event eventSummary) {
 		return
 	}
 
+	m.recordEventUsage(event)
 	m.eventLog = append(m.eventLog, event)
 	if m.eventAutoScroll {
 		m.clampEventScroll()
@@ -3319,6 +3461,104 @@ func (m *model) applySummaryResults(summary summary) {
 	}
 }
 
+func (m *model) recordSummaryUsage(summary summary) {
+	runID := strings.TrimSpace(summary.RunID)
+	if runID != "" {
+		if m.summaryUsageCounted(runID) {
+			return
+		}
+		if liveUsage, ok := m.liveUsageByRunID[runID]; ok {
+			m.recordUsage("", usageDelta(summary.Usage, liveUsage))
+			m.markSummaryUsageCounted(runID)
+			return
+		}
+	}
+	m.recordUsage(summary.RunID, summary.Usage)
+}
+
+func (m *model) recordEventUsage(event eventSummary) {
+	if event.Type != "provider_request_finished" || event.Usage.TotalTokens <= 0 {
+		return
+	}
+	m.recordUsage("", event.Usage)
+	runID := strings.TrimSpace(event.RunID)
+	if runID == "" {
+		return
+	}
+	if m.liveUsageByRunID == nil {
+		m.liveUsageByRunID = map[string]usageSummary{}
+	}
+	m.liveUsageByRunID[runID] = addUsage(m.liveUsageByRunID[runID], event.Usage)
+}
+
+func (m *model) recordUsage(runID string, usage usageSummary) {
+	runID = strings.TrimSpace(runID)
+	if runID != "" {
+		if m.summaryUsageCounted(runID) {
+			return
+		}
+		m.markSummaryUsageCounted(runID)
+	}
+
+	m.sessionUsage = addUsage(m.sessionUsage, usage)
+}
+
+func (m *model) summaryUsageCounted(runID string) bool {
+	if runID == "" {
+		return false
+	}
+	_, ok := m.countedSummaryRunIDs[runID]
+	return ok
+}
+
+func (m *model) markSummaryUsageCounted(runID string) {
+	if runID == "" {
+		return
+	}
+	if m.countedSummaryRunIDs == nil {
+		m.countedSummaryRunIDs = map[string]struct{}{}
+	}
+	m.countedSummaryRunIDs[runID] = struct{}{}
+}
+
+func addUsage(left usageSummary, right usageSummary) usageSummary {
+	return usageSummary{
+		Agents:       left.Agents + right.Agents,
+		InputTokens:  left.InputTokens + right.InputTokens,
+		OutputTokens: left.OutputTokens + right.OutputTokens,
+		TotalTokens:  left.TotalTokens + right.TotalTokens,
+		CostUSD:      left.CostUSD + right.CostUSD,
+	}
+}
+
+func usageDelta(total usageSummary, counted usageSummary) usageSummary {
+	return usageSummary{
+		Agents:       positiveDelta(total.Agents, counted.Agents),
+		InputTokens:  positiveDelta(total.InputTokens, counted.InputTokens),
+		OutputTokens: positiveDelta(total.OutputTokens, counted.OutputTokens),
+		TotalTokens:  positiveDelta(total.TotalTokens, counted.TotalTokens),
+		CostUSD:      positiveFloatDelta(total.CostUSD, counted.CostUSD),
+	}
+}
+
+func positiveDelta(total int, counted int) int {
+	if total <= counted {
+		return 0
+	}
+	return total - counted
+}
+
+func positiveFloatDelta(total float64, counted float64) float64 {
+	if total <= counted {
+		return 0
+	}
+	return total - counted
+}
+
+func (m *model) refreshGitBranchStatus() {
+	m.gitBranchStatus = gitBranchStatusForWorkingDir(m.workingDir)
+}
+
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
 		Task:                     task,
@@ -3476,6 +3716,103 @@ func (m model) filteredModelIndexes() []int {
 		}
 	}
 	return indexes
+}
+
+func (m *model) moveSkillPicker(delta int) {
+	indexes := m.filteredSkillIndexes()
+	if len(indexes) == 0 {
+		m.skillPickerIndex = 0
+		return
+	}
+	position := 0
+	for index, skillIndex := range indexes {
+		if skillIndex == m.skillPickerIndex {
+			position = index
+			break
+		}
+	}
+	position = (position + delta + len(indexes)) % len(indexes)
+	m.skillPickerIndex = indexes[position]
+}
+
+func (m *model) setSkillPickerQuery(query string) {
+	m.skillPickerQuery = query
+	m.ensureSkillPickerSelectionVisible()
+}
+
+func (m *model) removeLastSkillPickerQueryRune() {
+	runes := []rune(m.skillPickerQuery)
+	if len(runes) == 0 {
+		return
+	}
+	m.setSkillPickerQuery(string(runes[:len(runes)-1]))
+}
+
+func (m *model) ensureSkillPickerSelectionVisible() {
+	indexes := m.filteredSkillIndexes()
+	if len(indexes) == 0 {
+		m.skillPickerIndex = 0
+		return
+	}
+	for _, index := range indexes {
+		if index == m.skillPickerIndex {
+			return
+		}
+	}
+	m.skillPickerIndex = indexes[0]
+}
+
+func (m model) filteredSkillIndexes() []int {
+	query := strings.ToLower(strings.TrimSpace(m.skillPickerQuery))
+	indexes := make([]int, 0, len(m.skillOptions))
+	for index, skill := range m.skillOptions {
+		searchText := strings.ToLower(skill.Name + " " + skill.Description)
+		if query == "" || strings.Contains(searchText, query) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+func (m model) selectSkillFromPicker() (tea.Model, tea.Cmd) {
+	if len(m.skillOptions) == 0 {
+		m.skillPickerOpen = false
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no skills available"})
+		return m, nil
+	}
+	if len(m.filteredSkillIndexes()) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no skill matches " + m.skillPickerQuery})
+		return m, nil
+	}
+	if m.skillPickerIndex < 0 || m.skillPickerIndex >= len(m.skillOptions) {
+		m.skillPickerIndex = 0
+	}
+
+	selected := m.skillOptions[m.skillPickerIndex]
+	m.savedConfig.SkillsMode = ""
+	if stringSliceContains(m.savedConfig.SkillNames, selected.Name) {
+		m.savedConfig.SkillNames = removeString(m.savedConfig.SkillNames, selected.Name)
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "skill unselected " + selected.Name})
+	} else {
+		m.savedConfig.SkillNames = append(m.savedConfig.SkillNames, selected.Name)
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "skill selected " + selected.Name})
+	}
+
+	if err := validateSkillsConfig(runConfig{
+		SkillsMode:        m.savedConfig.SkillsMode,
+		SkillsDir:         m.savedConfig.SkillsDir,
+		SkillNames:        m.savedConfig.SkillNames,
+		AllowSkillScripts: m.savedConfig.AllowSkillScripts,
+	}); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.skillPickerOpen = false
+	return m, nil
 }
 
 func (m model) loadModelsCommand() tea.Cmd {
@@ -4380,6 +4717,15 @@ func removeString(values []string, value string) []string {
 		}
 	}
 	return filtered
+}
+
+func stringSliceContains(values []string, value string) bool {
+	for _, current := range values {
+		if current == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (config savedConfig) apiKeyFor(provider provider) string {

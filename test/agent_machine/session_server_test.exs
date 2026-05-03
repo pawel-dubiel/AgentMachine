@@ -27,6 +27,56 @@ defmodule AgentMachine.SessionServerTest do
     assert Map.has_key?(summary["results"], "coordinator")
   end
 
+  test "coordinator turns write the advertised run log file" do
+    %{server: server, output: output} = start_session!()
+    log_path = Path.join(tmp_dir!("agent-machine-session-run-log"), "run.jsonl")
+
+    assert {:ok, %{status: "started"}} =
+             SessionServer.user_message(
+               server,
+               user_message("msg-1", "say hello", [], log_file: log_path)
+             )
+
+    wait_until(fn -> log_summary?(log_path) end)
+    last_summary(output)
+
+    entries = jsonl_file_entries(log_path)
+
+    assert Enum.any?(
+             entries,
+             &match?(%{"type" => "event", "event" => %{"type" => "run_started"}}, &1)
+           )
+
+    assert %{"workflow_route" => %{"selected" => "session"}} =
+             entries |> last_log_summary() |> Map.fetch!("summary")
+  end
+
+  test "primary sidechain turns write the advertised run log file" do
+    %{server: server, output: output} = start_session!()
+    log_path = Path.join(tmp_dir!("agent-machine-session-primary-log"), "run.jsonl")
+
+    assert {:ok, %{status: "started"}} =
+             SessionServer.user_message(
+               server,
+               user_message("msg-1", "say hello", [workflow: :basic, max_steps: 4],
+                 log_file: log_path
+               )
+             )
+
+    wait_until(fn -> log_summary?(log_path) end)
+    last_summary(output)
+
+    entries = jsonl_file_entries(log_path)
+
+    assert Enum.any?(
+             entries,
+             &match?(%{"type" => "event", "event" => %{"type" => "run_started"}}, &1)
+           )
+
+    assert %{"workflow_route" => %{"selected" => "basic"}} =
+             entries |> last_log_summary() |> Map.fetch!("summary")
+  end
+
   test "auto-routed code mutation starts a primary sidechain and writes its summary" do
     %{server: server, output: output} = start_session!()
     root = tmp_dir!("agent-machine-session-code-edit")
@@ -268,7 +318,7 @@ defmodule AgentMachine.SessionServerTest do
     %{server: server, output: output, session_dir: session_dir, session_id: session_id}
   end
 
-  defp user_message(message_id, task, run_overrides \\ []) do
+  defp user_message(message_id, task, run_overrides \\ [], command_overrides \\ []) do
     run =
       %{
         task: task,
@@ -287,6 +337,7 @@ defmodule AgentMachine.SessionServerTest do
       run: run,
       session_tool_opts: %{timeout_ms: 10_000, max_rounds: 4}
     }
+    |> Map.merge(Map.new(command_overrides))
   end
 
   defp tmp_dir!(prefix) do
@@ -318,6 +369,23 @@ defmodule AgentMachine.SessionServerTest do
     |> elem(1)
     |> String.split("\n", trim: true)
     |> Enum.map(&JSON.decode!/1)
+  end
+
+  defp jsonl_file_entries(path) do
+    path
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> Enum.map(&JSON.decode!/1)
+  end
+
+  defp log_summary?(path) do
+    File.exists?(path) and Enum.any?(jsonl_file_entries(path), &(&1["type"] == "summary"))
+  end
+
+  defp last_log_summary(entries) do
+    entries
+    |> Enum.filter(&(&1["type"] == "summary"))
+    |> List.last()
   end
 
   defp wait_until(callback, attempts \\ 100)

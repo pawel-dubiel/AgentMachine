@@ -10,11 +10,10 @@ import (
 )
 
 const (
-	userConfigDirName     = ".agent-machine"
-	legacyConfigDirName   = "agent-machine"
-	tuiConfigFileName     = "tui-config.json"
-	projectConfigDirName  = ".agent-machine"
-	projectConfigDirAlias = ".agentMachine"
+	userConfigDirName    = ".agent-machine"
+	legacyConfigDirName  = "agent-machine"
+	tuiConfigFileName    = "tui-config.json"
+	projectConfigDirName = ".agent-machine"
 )
 
 type tuiConfigResolution struct {
@@ -142,26 +141,13 @@ func findProjectTUIConfig() (string, string, error) {
 }
 
 func projectConfigInDir(dir string) (string, error) {
-	primary := filepath.Join(dir, projectConfigDirName, tuiConfigFileName)
-	alias := filepath.Join(dir, projectConfigDirAlias, tuiConfigFileName)
-
-	primaryExists, err := pathExists(primary)
+	configPath := filepath.Join(dir, projectConfigDirName, tuiConfigFileName)
+	exists, err := pathExists(configPath)
 	if err != nil {
 		return "", err
 	}
-	aliasExists, err := pathExists(alias)
-	if err != nil {
-		return "", err
-	}
-
-	if primaryExists && aliasExists {
-		return "", fmt.Errorf("project has both %s and %s; keep exactly one AgentMachine project config", primary, alias)
-	}
-	if primaryExists {
-		return primary, nil
-	}
-	if aliasExists {
-		return alias, nil
+	if exists {
+		return configPath, nil
 	}
 	return "", nil
 }
@@ -443,6 +429,31 @@ func loadSavedConfig(path string) (savedConfig, error) {
 
 func defaultRouterModelDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "router-models", defaultRouterModelDirName)
+}
+
+func defaultSkillsDir() (string, error) {
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		return "", errors.New("HOME is required to locate ~/.agent-machine/skills")
+	}
+	return filepath.Join(home, userConfigDirName, "skills"), nil
+}
+
+func initializeDefaultSkillsDir(config *savedConfig) (bool, error) {
+	if strings.TrimSpace(config.SkillsDir) != "" {
+		return false, nil
+	}
+
+	dir, err := defaultSkillsDir()
+	if err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, fmt.Errorf("failed to create default skills directory %s: %w", dir, err)
+	}
+
+	config.SkillsDir = dir
+	return true, nil
 }
 
 func migrateLegacyLocalRouterDefault(config *savedConfig, configPath string) bool {

@@ -9,6 +9,7 @@ defmodule AgentMachine.SessionProtocol do
     "task" => :task,
     "workflow" => :workflow,
     "provider" => :provider,
+    "log_file" => :log_file,
     "model" => :model,
     "timeout_ms" => :timeout_ms,
     "max_steps" => :max_steps,
@@ -86,6 +87,7 @@ defmodule AgentMachine.SessionProtocol do
           type: :user_message,
           message_id: require_non_empty_binary!(Map.get(payload, "message_id"), "message_id"),
           run: run_attrs_from_payload!(run),
+          log_file: log_file_from_payload!(run),
           session_tool_opts: session_tool_opts_from_payload!(run)
         }
 
@@ -136,7 +138,14 @@ defmodule AgentMachine.SessionProtocol do
     payload
     |> Map.new(fn {key, value} -> {Map.fetch!(@run_keys, key), value} end)
     |> normalize_run_attrs!()
-    |> Map.drop([:session_tool_timeout_ms, :session_tool_max_rounds])
+    |> Map.drop([:log_file, :session_tool_timeout_ms, :session_tool_max_rounds])
+  end
+
+  defp log_file_from_payload!(payload) do
+    case Map.fetch(payload, "log_file") do
+      {:ok, value} -> require_non_empty_binary!(value, "log_file")
+      :error -> nil
+    end
   end
 
   def session_tool_opts_from_payload!(payload) do

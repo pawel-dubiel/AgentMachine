@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,83 @@ func TestPaidOpenRouterRunThroughTUIAdapter(t *testing.T) {
 	}
 	if !strings.Contains(string(logContent), `"type":"summary"`) {
 		t.Fatalf("expected run log to include summary, got %s", string(logContent))
+	}
+}
+
+func TestPaidOpenRouterSkillGenerateListAndPicker(t *testing.T) {
+	apiKey := paidOpenRouterAPIKey(t)
+	paidModel := paidOpenRouterModel(t)
+	skillsDir := filepath.Join(t.TempDir(), "skills")
+	configPath := filepath.Join(t.TempDir(), "tui-config.json")
+	skillName := "paid-tui-docs-helper"
+	config := runConfig{
+		Provider:     providerOpenRouter,
+		APIKey:       apiKey,
+		Model:        paidModel,
+		InputPrice:   "0",
+		OutputPrice:  "0",
+		HTTPTimeout:  "120000",
+		SkillsDir:    skillsDir,
+		ToolApproval: "read-only",
+	}
+	t.Logf("starting paid OpenRouter TUI skill generation with model=%s", paidModel)
+
+	generateArgs, err := buildSkillsGenerateCLIArgs(config, skillName, "Helps draft concise TUI release notes")
+	if err != nil {
+		t.Fatalf("expected skill generation args, got %v", err)
+	}
+	generateMsg, ok := runSkillsCLICommandWithConfig(generateArgs, config)().(skillsCommandMsg)
+	if !ok {
+		t.Fatalf("expected skills command message")
+	}
+	if generateMsg.Err != nil {
+		t.Fatalf("expected paid skill generation to succeed: %v\n%s", generateMsg.Err, generateMsg.Output)
+	}
+	var created struct {
+		Created skillCatalogEntry `json:"created"`
+	}
+	if err := json.Unmarshal([]byte(generateMsg.Output), &created); err != nil {
+		t.Fatalf("expected generated skill JSON, got %v\n%s", err, generateMsg.Output)
+	}
+	if created.Created.Name != skillName {
+		t.Fatalf("expected generated skill %s, got %#v", skillName, created)
+	}
+
+	listArgs, err := buildSkillsCLIArgs([]string{"list"}, skillsDir, true)
+	if err != nil {
+		t.Fatalf("expected skills list args, got %v", err)
+	}
+	listMsg, ok := runSkillsCLICommandFor("list", listArgs)().(skillsCommandMsg)
+	if !ok {
+		t.Fatalf("expected skills command message")
+	}
+	if listMsg.Err != nil {
+		t.Fatalf("expected paid generated skill to list: %v\n%s", listMsg.Err, listMsg.Output)
+	}
+	list, err := parseSkillListResult(listMsg.Output)
+	if err != nil {
+		t.Fatalf("expected parseable skills list, got %v\n%s", err, listMsg.Output)
+	}
+	if len(list.Skills) != 1 || list.Skills[0].Name != skillName {
+		t.Fatalf("expected generated skill in list, got %#v", list.Skills)
+	}
+
+	picker := model{
+		configPath: configPath,
+		savedConfig: savedConfig{
+			SkillsDir: skillsDir,
+		},
+		skillOptions:     list.Skills,
+		skillPickerOpen:  true,
+		skillPickerIndex: 0,
+	}
+	updated, _ := picker.selectSkillFromPicker()
+	result := updated.(model)
+	if result.skillPickerOpen {
+		t.Fatal("expected picker to close after selecting paid generated skill")
+	}
+	if len(result.savedConfig.SkillNames) != 1 || result.savedConfig.SkillNames[0] != skillName {
+		t.Fatalf("expected generated skill to be selected, got %#v", result.savedConfig.SkillNames)
 	}
 }
 
@@ -271,7 +349,7 @@ func TestPaidOpenRouterAgenticCodeEditThroughTUIAdapter(t *testing.T) {
 	assertFileContent(t, sourcePath, updatedSource)
 	assertFileContent(t, docPath, createdDoc)
 
-	checkpointRoot := filepath.Join(root, ".agent_machine", "checkpoints")
+	checkpointRoot := filepath.Join(root, ".agent-machine", "checkpoints")
 	entries, err := os.ReadDir(checkpointRoot)
 	if err != nil {
 		t.Fatalf("expected code-edit checkpoint directory %s: %v\nsummary:%#v\nraw:%s", checkpointRoot, err, summary, raw)

@@ -169,30 +169,33 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
 
     assert message =~ "expected 1 replacements but found 0"
     assert File.read!(Path.join(root, "source.txt")) == "old"
-    refute File.exists?(Path.join(root, ".agent_machine/checkpoints"))
+    refute File.exists?(Path.join(root, ".agent-machine/checkpoints"))
   end
 
   test "code-edit mutations reject checkpoint storage paths" do
     root = tmp_root()
     on_exit(fn -> File.rm_rf(root) end)
-    File.mkdir_p!(Path.join(root, ".agent_machine/checkpoints"))
 
-    assert {:error, message} =
-             ApplyEdits.run(
-               %{
-                 "changes" => [
-                   %{
-                     "op" => "create_file",
-                     "path" => ".agent_machine/checkpoints/tamper.txt",
-                     "content" => "bad",
-                     "overwrite" => false
-                   }
-                 ]
-               },
-               tool_root: root
-             )
+    Enum.each([".agent-machine", ".agent_machine"], fn state_dir ->
+      File.mkdir_p!(Path.join(root, "#{state_dir}/checkpoints"))
 
-    assert message =~ "checkpoint storage"
+      assert {:error, message} =
+               ApplyEdits.run(
+                 %{
+                   "changes" => [
+                     %{
+                       "op" => "create_file",
+                       "path" => "#{state_dir}/checkpoints/tamper.txt",
+                       "content" => "bad",
+                       "overwrite" => false
+                     }
+                   ]
+                 },
+                 tool_root: root
+               )
+
+      assert message =~ "checkpoint storage"
+    end)
   end
 
   test "rollback restores changed files and creates a rollback checkpoint" do
@@ -357,7 +360,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpointTest do
     File.write!(Path.join(outside, "pwned.txt"), "after")
 
     checkpoint_id = "20260426T000000Z-1"
-    checkpoint_dir = Path.join([root, ".agent_machine", "checkpoints", checkpoint_id])
+    checkpoint_dir = Path.join([root, ".agent-machine", "checkpoints", checkpoint_id])
     contents_dir = Path.join(checkpoint_dir, "contents")
     before = "before"
     before_sha = sha256(before)

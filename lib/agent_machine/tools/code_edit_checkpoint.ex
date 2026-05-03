@@ -4,10 +4,17 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
   alias AgentMachine.JSON
   alias AgentMachine.Tools.{CodeEditSupport, PathGuard, ToolResultSummary}
 
-  @checkpoint_parent [".agent_machine", "checkpoints"]
+  @checkpoint_parent [".agent-machine", "checkpoints"]
   @checkpoint_id_pattern ~r/\A\d{8}T\d{6}Z-\d+\z/
   @snapshot_max_files 1_000
-  @snapshot_skip_dirs MapSet.new([".agent_machine", ".git", "_build", "deps", "node_modules"])
+  @snapshot_skip_dirs MapSet.new([
+                        ".agent-machine",
+                        ".agent_machine",
+                        ".git",
+                        "_build",
+                        "deps",
+                        "node_modules"
+                      ])
 
   def apply_plan!(root, tool_name, plan) when is_binary(root) and is_binary(tool_name) do
     root = PathGuard.root!(tool_root: root)
@@ -212,7 +219,7 @@ defmodule AgentMachine.Tools.CodeEditCheckpoint do
 
   defp ensure_checkpoint_dir!(root, checkpoint_dir, contents_dir) do
     root
-    |> Path.join(".agent_machine")
+    |> Path.join(".agent-machine")
     |> ensure_directory_no_symlink!()
 
     root

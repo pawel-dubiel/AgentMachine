@@ -95,6 +95,10 @@ defmodule AgentMachine.Tools.CodeEditSupport do
     relative = Path.relative_to(target, root)
 
     case Path.split(relative) do
+      [".agent-machine", "checkpoints" | _rest] ->
+        raise ArgumentError,
+              "#{label} must not target AgentMachine checkpoint storage: #{inspect(target)}"
+
       [".agent_machine", "checkpoints" | _rest] ->
         raise ArgumentError,
               "#{label} must not target AgentMachine checkpoint storage: #{inspect(target)}"

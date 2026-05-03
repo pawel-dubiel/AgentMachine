@@ -155,12 +155,12 @@ defmodule AgentMachine.Providers.Echo do
     %{
       "id" => "variant-#{variant_id}",
       "input" =>
-        "Produce the #{variant_id} variant in workspace .agent_machine/swarm/#{run_id}/#{variant_id}. Report confirmed checks and partial failures.",
+        "Produce the #{variant_id} variant in workspace .agent-machine/swarm/#{run_id}/#{variant_id}. Report confirmed checks and partial failures.",
       "metadata" => %{
         "agent_machine_role" => "swarm_variant",
         "swarm_id" => "default",
         "variant_id" => variant_id,
-        "workspace" => ".agent_machine/swarm/#{run_id}/#{variant_id}"
+        "workspace" => ".agent-machine/swarm/#{run_id}/#{variant_id}"
       }
     }
   end

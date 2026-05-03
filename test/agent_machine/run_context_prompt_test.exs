@@ -90,7 +90,7 @@ defmodule AgentMachine.RunContextPromptTest do
             agent_machine_role: "swarm_variant",
             swarm_id: "default",
             variant_id: "minimal",
-            workspace: ".agent_machine/swarm/run-1/minimal"
+            workspace: ".agent-machine/swarm/run-1/minimal"
           },
           results: %{},
           artifacts: %{}
@@ -105,7 +105,7 @@ defmodule AgentMachine.RunContextPromptTest do
                  "parent_agent_id" => "planner",
                  "agent_machine_role" => "swarm_variant",
                  "variant_id" => "minimal",
-                 "workspace" => ".agent_machine/swarm/run-1/minimal"
+                 "workspace" => ".agent-machine/swarm/run-1/minimal"
                }
              }
            } = JSON.decode!(text)

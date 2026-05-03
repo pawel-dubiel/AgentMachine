@@ -89,12 +89,42 @@ defmodule AgentMachine.SkillsTest do
 
     lock =
       skills_dir
-      |> Path.join(".agent_machine_skills.lock.json")
+      |> Path.join(".agent-machine-skills.lock.json")
       |> File.read!()
       |> JSON.decode!()
 
     assert %{"docs-helper" => %{"hash" => hash, "source" => %{"type" => "local"}}} = lock
     assert is_binary(hash)
+  end
+
+  test "migrates legacy underscore skill lockfile to hyphenated lockfile", %{root: root} do
+    source = write_skill!(root, "docs-helper", "Helps with docs", "Body")
+    registry = Path.join(root, "registry.json")
+    skills_dir = Path.join(root, "installed")
+
+    File.write!(
+      registry,
+      JSON.encode!(%{
+        skills: [
+          %{
+            name: "docs-helper",
+            description: "Helps with docs",
+            source: %{type: "local", path: source}
+          }
+        ]
+      })
+    )
+
+    Installer.install_from_registry!("docs-helper", skills_dir: skills_dir, registry: registry)
+
+    canonical = Path.join(skills_dir, ".agent-machine-skills.lock.json")
+    legacy = Path.join(skills_dir, ".agent_machine_skills.lock.json")
+    File.rename!(canonical, legacy)
+
+    assert %{removed: "docs-helper"} = Installer.remove!("docs-helper", skills_dir: skills_dir)
+    assert File.regular?(canonical)
+    refute File.exists?(legacy)
+    assert %{} = canonical |> File.read!() |> JSON.decode!()
   end
 
   test "creator creates a valid skill with requested resource dirs", %{root: root} do

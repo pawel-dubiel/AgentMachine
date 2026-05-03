@@ -429,7 +429,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert Enum.any?(run.events, fn event ->
              event.type == :agent_started and event.agent_id == "variant-minimal" and
                event.agent_machine_role == "swarm_variant" and event.variant_id == "minimal" and
-               event.workspace == ".agent_machine/swarm/run-graph/minimal" and
+               event.workspace == ".agent-machine/swarm/run-graph/minimal" and
                event.spawn_depth == 1
            end)
   end
@@ -461,8 +461,8 @@ defmodule AgentMachine.OrchestratorTest do
                tool_approval_mode: :auto_approved_safe
              )
 
-    minimal_workspace = Path.join(root, ".agent_machine/swarm/#{run_id}/minimal")
-    robust_workspace = Path.join(root, ".agent_machine/swarm/#{run_id}/robust")
+    minimal_workspace = Path.join(root, ".agent-machine/swarm/#{run_id}/minimal")
+    robust_workspace = Path.join(root, ".agent-machine/swarm/#{run_id}/robust")
 
     assert File.dir?(minimal_workspace)
     assert File.dir?(robust_workspace)
@@ -533,13 +533,13 @@ defmodule AgentMachine.OrchestratorTest do
     assert Enum.all?(approval_contexts, fn context ->
              context.agent_machine_role == "swarm_variant" and
                context.variant_id in ["minimal", "robust", "experimental"] and
-               context.workspace == ".agent_machine/swarm/#{run_id}/#{context.variant_id}" and
+               context.workspace == ".agent-machine/swarm/#{run_id}/#{context.variant_id}" and
                context.spawn_depth == 1
            end)
 
     Enum.each(["minimal", "robust", "experimental"], fn variant_id ->
       assert File.exists?(
-               Path.join(root, ".agent_machine/swarm/#{run_id}/#{variant_id}/sort_check.exs")
+               Path.join(root, ".agent-machine/swarm/#{run_id}/#{variant_id}/sort_check.exs")
              )
     end)
 
@@ -600,7 +600,7 @@ defmodule AgentMachine.OrchestratorTest do
     assert run.results["variant-minimal"].status == :error
     assert run.results["variant-robust"].status == :error
     assert run.results["variant-experimental"].status == :error
-    assert Path.wildcard(Path.join(root, ".agent_machine/swarm/**/sort_check.exs")) == []
+    assert Path.wildcard(Path.join(root, ".agent-machine/swarm/**/sort_check.exs")) == []
 
     assert Enum.count(run.events, fn event ->
              event.type == :tool_call_failed and event.agent_machine_role == "swarm_variant" and
@@ -1843,7 +1843,7 @@ defmodule AgentMachine.OrchestratorTest do
           agent_machine_role: "swarm_variant",
           swarm_id: "default",
           variant_id: "minimal",
-          workspace: ".agent_machine/swarm/run-approval/minimal"
+          workspace: ".agent-machine/swarm/run-approval/minimal"
         }
       }
     ]
@@ -1870,13 +1870,13 @@ defmodule AgentMachine.OrchestratorTest do
     assert context.agent_machine_role == "swarm_variant"
     assert context.swarm_id == "default"
     assert context.variant_id == "minimal"
-    assert context.workspace == ".agent_machine/swarm/run-approval/minimal"
+    assert context.workspace == ".agent-machine/swarm/run-approval/minimal"
     assert context.spawn_depth == 0
 
     assert Enum.any?(run.events, fn event ->
              event.type == :tool_call_finished and event.agent_id == "variant-minimal" and
                event.agent_machine_role == "swarm_variant" and event.variant_id == "minimal" and
-               event.workspace == ".agent_machine/swarm/run-approval/minimal" and
+               event.workspace == ".agent-machine/swarm/run-approval/minimal" and
                event.spawn_depth == 0
            end)
   end
@@ -2394,7 +2394,7 @@ defmodule AgentMachine.TestProviders.SwarmGraph do
         agent_machine_role: "swarm_variant",
         swarm_id: "default",
         variant_id: variant_id,
-        workspace: ".agent_machine/swarm/run-graph/#{variant_id}"
+        workspace: ".agent-machine/swarm/run-graph/#{variant_id}"
       }
     }
   end
@@ -2492,7 +2492,7 @@ defmodule AgentMachine.TestProviders.SwarmWorkspace do
         agent_machine_role: "swarm_variant",
         swarm_id: "default",
         variant_id: variant_id,
-        workspace: ".agent_machine/swarm/#{run_id}/#{variant_id}"
+        workspace: ".agent-machine/swarm/#{run_id}/#{variant_id}"
       }
     }
   end
@@ -2623,7 +2623,7 @@ defmodule AgentMachine.TestProviders.SwarmCodeEdit do
         agent_machine_role: "swarm_variant",
         swarm_id: "default",
         variant_id: variant_id,
-        workspace: ".agent_machine/swarm/#{run_id}/#{variant_id}"
+        workspace: ".agent-machine/swarm/#{run_id}/#{variant_id}"
       }
     }
   end

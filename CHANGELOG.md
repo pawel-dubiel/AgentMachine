@@ -4,6 +4,22 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added TUI session context to the status lines, showing cumulative session token
+  usage, launch working directory, and current git branch while preserving the
+  input hints for idle, running, queued, and permission states, and updating
+  token totals from completed provider requests before the final summary arrives.
+- Fixed TUI session runs to persist the advertised per-run JSONL log path by
+  passing `log_file` through the session protocol and mirroring runtime events
+  plus final summaries into that file.
+- Normalized user-facing config and skills paths on `agent-machine`, removed
+  the camelCase project config alias, moved hidden runtime directories and skill
+  lockfiles to hyphenated names, and documented where Elixir `agent_machine`
+  names remain required.
+- Initialized the TUI skills directory to `~/.agent-machine/skills` when no
+  `skills_dir` is configured, creating and persisting that directory so
+  `/skills list` has an explicit local catalog to read.
+- Changed TUI `/skills list` to open an installed-skill picker with filtering
+  and Enter-to-select explicit skill config.
 - Added detailed runtime flow documentation with PlantUML interaction diagrams
   for routing, session agents, planner delegation, observers, and tool harness
   permissions.
@@ -44,7 +60,7 @@ Add the newest changes at the top of the list. Keep each entry short and concret
   stay on the lightweight tool route.
 - Moved the default TUI config path to `~/.agent-machine/tui-config.json`,
   added legacy OS config fallback, and allowed nearest project
-  `.agent-machine`/`.agentMachine` config files to override non-secret settings.
+  `.agent-machine` config files to override non-secret settings.
 - Split shared workflow provider/tool option helpers and canonical router
   intents into small internal modules to reduce duplicated workflow code and
   router compile coupling.

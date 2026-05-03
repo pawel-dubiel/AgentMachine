@@ -160,7 +160,7 @@ defmodule AgentMachine.Workflows.Agentic do
       - The minimal variant should pursue the smallest correct solution.
       - The robust variant should pursue production-oriented validation, tests, and maintainability where applicable.
       - The experimental variant should pursue a creative or alternative architecture.
-      - Each variant worker MUST include metadata with agent_machine_role "swarm_variant", swarm_id "default", a unique variant_id, and workspace ".agent_machine/swarm/<run_id>/<variant_id>" using the run_id from runtime facts.
+      - Each variant worker MUST include metadata with agent_machine_role "swarm_variant", swarm_id "default", a unique variant_id, and workspace ".agent-machine/swarm/<run_id>/<variant_id>" using the run_id from runtime facts.
       - Each variant input MUST include the variant goal, workspace path, acceptance criteria, instructions to report partial failures, and instructions not to claim file changes unless tool_results confirm them.
       - Add exactly one evaluator agent with metadata agent_machine_role "swarm_evaluator" and swarm_id "default".
       - The evaluator MUST depend_on every variant worker and compare correctness, simplicity, maintainability, testability, risk, changed files, artifacts, and tool results when available.
@@ -168,7 +168,7 @@ defmodule AgentMachine.Workflows.Agentic do
       - Do not auto-merge any variant back into the original project.
 
       Return only JSON with this shape for swarm:
-      {"decision":{"mode":"swarm","reason":"non-empty reason"},"output":"short planning note","next_agents":[{"id":"variant-minimal","input":"worker task","instructions":"optional worker instructions","metadata":{"agent_machine_role":"swarm_variant","swarm_id":"default","variant_id":"minimal","workspace":".agent_machine/swarm/<run_id>/minimal"}},{"id":"swarm-evaluator","input":"compare variants","depends_on":["variant-minimal"],"metadata":{"agent_machine_role":"swarm_evaluator","swarm_id":"default"}}]}
+      {"decision":{"mode":"swarm","reason":"non-empty reason"},"output":"short planning note","next_agents":[{"id":"variant-minimal","input":"worker task","instructions":"optional worker instructions","metadata":{"agent_machine_role":"swarm_variant","swarm_id":"default","variant_id":"minimal","workspace":".agent-machine/swarm/<run_id>/minimal"}},{"id":"swarm-evaluator","input":"compare variants","depends_on":["variant-minimal"],"metadata":{"agent_machine_role":"swarm_evaluator","swarm_id":"default"}}]}
       """
     ]
     |> Enum.join("\n\n")

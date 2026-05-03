@@ -121,7 +121,7 @@ several approaches, auto routing selects the agentic workflow with a visible
 `swarm` strategy. The planner creates isolated variant workers, normally
 `minimal`, `robust`, and `experimental`, followed by an evaluator that compares
 the variants. Variants use separate workspaces such as
-`.agent_machine/swarm/<run_id>/<variant_id>` under the configured tool root.
+`.agent-machine/swarm/<run_id>/<variant_id>` under the configured tool root.
 For swarm variants, filesystem and code-edit tools are rooted at the variant
 workspace, not the original project root. The planner can propose workers and
 metadata, but tool permissions still come only from runtime options and
@@ -132,10 +132,9 @@ variant back into the original project.
 **Everything important is logged**
 
 Runs can produce JSON or JSONL output. The TUI runs one long-lived Elixir
-session daemon per conversation and writes session-level JSONL logs that include
-route decisions, provider calls, tool calls, agent lifecycle events, MCP
-activity, heartbeats, timeout events, sidechain agent notifications, and final
-summaries.
+session daemon per conversation, writes a session-level JSONL log for daemon
+activity, and writes an explicit per-turn run log containing the runtime events
+and final summary shown in the TUI status line.
 
 ## Requirements
 
@@ -261,19 +260,37 @@ The TUI keeps saved user settings in `~/.agent-machine/tui-config.json` with
 `0600` permissions. Override the exact config path with
 `AGENT_MACHINE_TUI_CONFIG`.
 
+When no skills directory is configured, the TUI initializes and persists
+`~/.agent-machine/skills` so `/skills list` has an explicit local catalog path.
+In the TUI, `/skills list` opens an installed-skill picker. Use Up/Down to
+move, type to filter, and Enter to select or unselect an explicit skill.
+
+The TUI status lines include cumulative token usage for the current TUI session,
+the launch working directory, and the current git branch. The same context is
+also shown next to the input hint, including while idle, queued, or waiting on
+permission. Token totals update when provider requests finish, with the final
+run summary used as a fallback for any remaining usage.
+
+Naming convention:
+
+- Use `agent-machine` for user-facing launchers, config directories, logs, and
+  examples, as well as hidden runtime directories under a tool root.
+- Keep `agent_machine` only for Elixir/Mix task names, Elixir file paths, and
+  internal metadata keys where underscore naming is the actual API.
+
 Config precedence:
 
 ```text
 AGENT_MACHINE_TUI_CONFIG
-nearest ./.agent-machine/tui-config.json or ./.agentMachine/tui-config.json
+nearest ./.agent-machine/tui-config.json
 ~/.agent-machine/tui-config.json
 legacy OS config dir fallback, such as ~/Library/Application Support/agent-machine/tui-config.json
 ```
 
 Project config files may override non-secret settings. Provider API keys must
 stay in the user config, project `full-access` tool approval is rejected, and
-project path settings must stay inside the project root. Session logs are
-written under the user config area in `logs/*.jsonl`.
+project path settings must stay inside the project root. Session logs and TUI
+per-run logs are written under the user config area in `logs/*.jsonl`.
 Sidechain agent transcripts are stored under `logs/sessions/<session-id>/`.
 
 The TUI talks to the runtime through:
@@ -284,9 +301,10 @@ mix agent_machine.session --jsonl-stdio --session-id <id> --session-dir <path>
 
 That daemon accepts JSONL commands such as `user_message`,
 `send_agent_message`, `read_agent_output`, `cancel_agent`, `shutdown`, and
-`permission_decision`. `user_message` may include `progress_observer: true`
-to enable the same background observer for that run. Normal one-shot CLI usage
-remains `mix agent_machine.run`.
+`permission_decision`. `user_message` may include an explicit `log_file` path
+for the per-turn run log and `progress_observer: true` to enable the same
+background observer for that run. Normal one-shot CLI usage remains
+`mix agent_machine.run`.
 
 ## Providers
 
@@ -620,11 +638,11 @@ Common commands:
 
 ```sh
 mix agent_machine.skills create docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation"
 
 mix agent_machine.skills generate docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation" \
   --provider openrouter \
   --model <model-id> \
@@ -632,9 +650,12 @@ mix agent_machine.skills generate docs-helper \
   --input-price-per-million <input-price> \
   --output-price-per-million <output-price>
 
-mix agent_machine.skills list --skills-dir ~/.agent_machine/skills
-mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills list --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills install docs-helper --skills-dir ~/.agent-machine/skills
 ```
+
+In the TUI, use `/skills list` to open the installed-skill picker for the
+configured skills directory.
 
 More detail is in [docs/skills.md](docs/skills.md).
 

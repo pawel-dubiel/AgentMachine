@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -228,11 +229,13 @@ func TestBuildRunArgsIncludesAgenticPersistenceOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "run.jsonl")
 	payload, err := sessionRunPayload(runConfig{
 		Task:              "review this project",
 		Workflow:          workflowAuto,
 		Provider:          providerOpenRouter,
 		Model:             "moonshotai/kimi-k2.6",
+		LogFile:           logFile,
 		InputPrice:        "1.00",
 		OutputPrice:       "3.00",
 		HTTPTimeout:       "120000",
@@ -252,6 +255,9 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 
 	if payload["task"] != "review this project" || payload["workflow"] != "auto" || payload["provider"] != "openrouter" {
 		t.Fatalf("unexpected basic payload: %#v", payload)
+	}
+	if payload["log_file"] != logFile {
+		t.Fatalf("expected run log file in payload, got %#v", payload)
 	}
 	if payload["timeout_ms"] != 240000 || payload["session_tool_timeout_ms"] != 240000 {
 		t.Fatalf("expected typed timeout values, got %#v", payload)
@@ -696,6 +702,40 @@ func TestInitialModelUsesLaunchDirectoryAsToolRootBase(t *testing.T) {
 	}
 }
 
+func TestInitialModelInitializesDefaultSkillsDir(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	workspace := filepath.Join(home, "repo")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", "")
+	t.Setenv("HOME", home)
+	t.Chdir(workspace)
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+
+	expected := filepath.Join(home, ".agent-machine", "skills")
+	if m.savedConfig.SkillsDir != expected {
+		t.Fatalf("expected default skills dir %q, got %q", expected, m.savedConfig.SkillsDir)
+	}
+	if info, err := os.Stat(expected); err != nil || !info.IsDir() {
+		t.Fatalf("expected default skills dir to exist, stat=%#v err=%v", info, err)
+	}
+
+	loaded, err := loadSavedConfig(filepath.Join(home, ".agent-machine", "tui-config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SkillsDir != expected {
+		t.Fatalf("expected persisted default skills dir %q, got %q", expected, loaded.SkillsDir)
+	}
+}
+
 func TestInitialModelMigratesLegacyConfigToHomeAgentMachine(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -841,6 +881,104 @@ func TestStatusLineRendersContextBudgetEvents(t *testing.T) {
 	if status := m.statusLine(); !strings.Contains(status, "ctx=unknown missing_context_tokenizer_path") {
 		t.Fatalf("expected unknown context budget in status, got %q", status)
 	}
+}
+
+func TestStatusLinesRenderSessionUsageWorkingDirAndBranch(t *testing.T) {
+	t.Setenv("HOME", "/Users/pawel")
+	m := model{
+		running:         true,
+		workingDir:      "/Users/pawel/priv/elixir",
+		gitBranchStatus: "codex/status-line",
+		sessionUsage: usageSummary{
+			TotalTokens: 12345,
+		},
+	}
+
+	for _, line := range []string{
+		m.statusLine(),
+		m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."),
+		m.inputStatusLine("Type a message or /help. Tab changes view. Esc goes back."),
+	} {
+		if !strings.Contains(line, "session_tokens=12345") {
+			t.Fatalf("expected token usage in status line, got %q", line)
+		}
+		if !strings.Contains(line, "cwd=~/priv/elixir") {
+			t.Fatalf("expected compact cwd in status line, got %q", line)
+		}
+		if !strings.Contains(line, "branch=codex/status-line") {
+			t.Fatalf("expected branch in status line, got %q", line)
+		}
+	}
+	if !strings.Contains(m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."), "Running. Enter queues message. /queue edits queue. Tab navigates.") {
+		t.Fatalf("expected running queue help to remain, got %q", m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."))
+	}
+}
+
+func TestDefaultInputHintRendersSessionStatus(t *testing.T) {
+	t.Setenv("HOME", "/Users/pawel")
+	m := model{
+		input:           textinput.New(),
+		workingDir:      "/Users/pawel/priv/elixir",
+		gitBranchStatus: "main",
+		sessionUsage: usageSummary{
+			TotalTokens: 42,
+		},
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Type a message or /help. Tab changes view. Esc goes back.") {
+		t.Fatalf("expected default prompt help, got %q", view)
+	}
+	if !strings.Contains(view, "session_tokens=42") || !strings.Contains(view, "cwd=~/priv/elixir") || !strings.Contains(view, "branch=main") {
+		t.Fatalf("expected session status in default prompt hint, got %q", view)
+	}
+}
+
+func TestCompactWorkingDirStatusUsesHomeRelativePath(t *testing.T) {
+	t.Setenv("HOME", "/Users/pawel")
+
+	if got := compactWorkingDirStatus("/Users/pawel/priv/elixir"); got != "~/priv/elixir" {
+		t.Fatalf("expected home-relative cwd, got %q", got)
+	}
+	if got := compactWorkingDirStatus(""); got != "missing" {
+		t.Fatalf("expected explicit missing cwd, got %q", got)
+	}
+}
+
+func TestGitBranchStatusForWorkingDirReportsNotGit(t *testing.T) {
+	if got := gitBranchStatusForWorkingDir(t.TempDir()); got != "not-git" {
+		t.Fatalf("expected not-git status, got %q", got)
+	}
+}
+
+func TestGitBranchStatusForWorkingDirReportsBranchAndDetachedHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is required for branch status test: %v", err)
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "checkout", "-B", "status-test")
+
+	if got := gitBranchStatusForWorkingDir(repo); got != "status-test" {
+		t.Fatalf("expected branch name, got %q", got)
+	}
+
+	runGit(t, repo, "-c", "user.name=AgentMachine Test", "-c", "user.email=agent-machine@example.test", "commit", "--allow-empty", "-m", "init")
+	runGit(t, repo, "checkout", "--detach", "HEAD")
+	if got := gitBranchStatusForWorkingDir(repo); !strings.HasPrefix(got, "detached:") {
+		t.Fatalf("expected detached branch status, got %q", got)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	commandArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.Command("git", commandArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(output))
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {
@@ -3145,6 +3283,91 @@ func TestSkillsCommandPersistsExplicitSkill(t *testing.T) {
 	}
 }
 
+func TestSkillsListMessageOpensSkillPicker(t *testing.T) {
+	m := model{savedConfig: savedConfig{SkillsDir: "/tmp/agent-machine-skills"}}
+
+	updated, _ := m.Update(skillsCommandMsg{
+		Action: "list",
+		Output: `{"skills":[{"name":"docs-helper","description":"Helps write concise docs","root":"/tmp/agent-machine-skills/docs-helper"},{"name":"review-helper","description":"Reviews implementation notes","root":"/tmp/agent-machine-skills/review-helper"}]}`,
+	})
+	result := updated.(model)
+
+	if !result.skillPickerOpen {
+		t.Fatal("expected skill picker to open")
+	}
+	if len(result.skillOptions) != 2 || result.skillOptions[0].Name != "docs-helper" {
+		t.Fatalf("expected parsed skill options, got %#v", result.skillOptions)
+	}
+	view := stripANSI(result.View())
+	if !strings.Contains(view, "Installed skills") || !strings.Contains(view, "docs-helper") {
+		t.Fatalf("expected skill picker view, got %q", view)
+	}
+}
+
+func TestSkillPickerSelectsExplicitSkill(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := saveSavedConfig(configPath, savedConfig{SkillsDir: "/tmp/agent-machine-skills"}); err != nil {
+		t.Fatalf("expected config write, got %v", err)
+	}
+
+	m := model{
+		configPath: configPath,
+		savedConfig: savedConfig{
+			SkillsMode: "auto",
+			SkillsDir:  "/tmp/agent-machine-skills",
+		},
+		skillOptions: []skillCatalogEntry{
+			{Name: "docs-helper", Description: "Helps write concise docs"},
+			{Name: "review-helper", Description: "Reviews implementation notes"},
+		},
+		skillPickerOpen:  true,
+		skillPickerIndex: 0,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if result.skillPickerOpen {
+		t.Fatal("expected skill picker to close after selection")
+	}
+	if result.savedConfig.SkillsMode != "" {
+		t.Fatalf("expected explicit selection to clear auto mode, got %#v", result.savedConfig)
+	}
+	if len(result.savedConfig.SkillNames) != 1 || result.savedConfig.SkillNames[0] != "docs-helper" {
+		t.Fatalf("expected docs-helper to be selected, got %#v", result.savedConfig.SkillNames)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.SkillNames) != 1 || loaded.SkillNames[0] != "docs-helper" {
+		t.Fatalf("expected selected skill to persist, got %#v", loaded)
+	}
+}
+
+func TestSkillPickerFiltersSkillsWhileTyping(t *testing.T) {
+	m := model{
+		savedConfig: savedConfig{SkillsDir: "/tmp/agent-machine-skills"},
+		skillOptions: []skillCatalogEntry{
+			{Name: "docs-helper", Description: "Helps write concise docs"},
+			{Name: "review-helper", Description: "Reviews implementation notes"},
+		},
+		skillPickerOpen:  true,
+		skillPickerIndex: 0,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("review")})
+	result := updated.(model)
+
+	if result.skillPickerQuery != "review" {
+		t.Fatalf("expected skill query to be review, got %q", result.skillPickerQuery)
+	}
+	if result.skillPickerIndex != 1 {
+		t.Fatalf("expected review-helper to be selected by filter, got %d", result.skillPickerIndex)
+	}
+}
+
 func TestSkillsGenerateCommandRequiresSkillsDir(t *testing.T) {
 	m := model{provider: providerEcho, providerSet: true}
 
@@ -3239,6 +3462,18 @@ func TestSkillsClawHubUpdateUsesSkillsDir(t *testing.T) {
 	}
 	assertContainsSequence(t, args, []string{"update", "--all", "--skills-dir", "/tmp/skills"})
 	assertContainsSequence(t, args, []string{"--json"})
+}
+
+func TestLastJSONLineIgnoresMixCompileNoise(t *testing.T) {
+	raw := strings.Join([]string{
+		"Compiling 2 files (.ex)",
+		"Generated agent_machine app",
+		`{"skills":[{"name":"docs-helper","description":"Helps write docs"}]}`,
+	}, "\n")
+
+	if got := lastJSONLine(raw); got != `{"skills":[{"name":"docs-helper","description":"Helps write docs"}]}` {
+		t.Fatalf("expected final JSON line, got %q", got)
+	}
 }
 
 func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
@@ -4803,6 +5038,39 @@ func TestJSONLSummaryAppliesCompletedAgentResults(t *testing.T) {
 	}
 	if updated.agents["assistant"].Output != "hello" {
 		t.Fatalf("expected assistant output, got %#v", updated.agents["assistant"])
+	}
+}
+
+func TestJSONLSummaryAccumulatesSessionUsageOncePerRun(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-1","status":"completed","final_output":"done","results":{},"usage":{"agents":1,"input_tokens":3,"output_tokens":4,"total_tokens":7},"events":[]}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-2","status":"completed","final_output":"done","results":{},"usage":{"agents":1,"input_tokens":5,"output_tokens":6,"total_tokens":11},"events":[]}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-1","status":"completed","final_output":"done again","results":{},"usage":{"agents":1,"input_tokens":3,"output_tokens":4,"total_tokens":7},"events":[]}}`)
+
+	if updated.sessionUsage.TotalTokens != 18 {
+		t.Fatalf("expected deduplicated session token total, got %#v", updated.sessionUsage)
+	}
+	if updated.sessionUsage.InputTokens != 8 || updated.sessionUsage.OutputTokens != 10 {
+		t.Fatalf("expected input/output token totals, got %#v", updated.sessionUsage)
+	}
+	if !strings.Contains(updated.statusLine(), "session_tokens=18") {
+		t.Fatalf("expected token total in status line, got %q", updated.statusLine())
+	}
+}
+
+func TestJSONLProviderUsageEventsAccumulateSessionUsageWithoutSummaryDoubleCount(t *testing.T) {
+	m := model{agents: map[string]agentState{}}
+
+	updated, _ := m.handleStreamLine(`{"type":"event","event":{"type":"provider_request_finished","run_id":"run-1","agent_id":"assistant","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"event","event":{"type":"provider_request_finished","run_id":"run-1","agent_id":"assistant","usage":{"input_tokens":20,"output_tokens":7,"total_tokens":27}}}`)
+	updated, _ = updated.handleStreamLine(`{"type":"summary","summary":{"run_id":"run-1","status":"completed","final_output":"done","results":{},"usage":{"agents":1,"input_tokens":30,"output_tokens":12,"total_tokens":42},"events":[]}}`)
+
+	if updated.sessionUsage.TotalTokens != 42 {
+		t.Fatalf("expected live usage total without summary double count, got %#v", updated.sessionUsage)
+	}
+	if updated.sessionUsage.InputTokens != 30 || updated.sessionUsage.OutputTokens != 12 {
+		t.Fatalf("expected live input/output totals, got %#v", updated.sessionUsage)
 	}
 }
 

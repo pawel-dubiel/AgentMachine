@@ -236,7 +236,7 @@ defmodule AgentMachine.DelegationResponseTest do
           "agent_machine_role" => "swarm_variant",
           "swarm_id" => "default",
           "variant_id" => "minimal",
-          "workspace" => ".agent_machine/swarm/run-1/minimal"
+          "workspace" => ".agent-machine/swarm/run-1/minimal"
         }
       },
       %{
@@ -246,7 +246,7 @@ defmodule AgentMachine.DelegationResponseTest do
           "agent_machine_role" => "swarm_variant",
           "swarm_id" => "default",
           "variant_id" => "robust",
-          "workspace" => ".agent_machine/swarm/run-1/robust"
+          "workspace" => ".agent-machine/swarm/run-1/robust"
         }
       },
       %{

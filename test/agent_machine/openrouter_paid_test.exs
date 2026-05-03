@@ -435,7 +435,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
 
     Enum.each(variant_ids(), fn variant_id ->
       pattern =
-        Path.join(root, ".agent_machine/swarm/#{run.id}/#{variant_id}/**/sort_check.exs")
+        Path.join(root, ".agent-machine/swarm/#{run.id}/#{variant_id}/**/sort_check.exs")
 
       assert Path.wildcard(pattern) != []
     end)
@@ -529,7 +529,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
     end
 
     defp variant(variant_id, run_id, agent) do
-      workspace = ".agent_machine/swarm/#{run_id}/#{variant_id}"
+      workspace = ".agent-machine/swarm/#{run_id}/#{variant_id}"
 
       %{
         id: "variant-#{variant_id}",
@@ -771,7 +771,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       context.swarm_id == "default" and
       is_binary(context.variant_id) and context.variant_id != "" and
       is_binary(context.workspace) and
-      String.contains?(context.workspace, ".agent_machine/swarm/") and
+      String.contains?(context.workspace, ".agent-machine/swarm/") and
       context.risk in [:write, :command]
   end
 
@@ -791,7 +791,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
   defp root_entries_without_swarm_state(root) do
     root
     |> File.ls!()
-    |> Enum.reject(&(&1 == ".agent_machine"))
+    |> Enum.reject(&(&1 == ".agent-machine"))
     |> Enum.sort()
   end
 

@@ -56,14 +56,14 @@ flags to Elixir.
 All commands that read or write skills need a skills directory:
 
 ```sh
-mix agent_machine.skills list --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills list --skills-dir ~/.agent-machine/skills
 ```
 
 For run commands, `--skills-dir` may be replaced with
 `AGENT_MACHINE_SKILLS_DIR`:
 
 ```sh
-AGENT_MACHINE_SKILLS_DIR=~/.agent_machine/skills \
+AGENT_MACHINE_SKILLS_DIR=~/.agent-machine/skills \
 mix agent_machine.run ... --skills auto "Update README"
 ```
 
@@ -78,7 +78,7 @@ Creates a local skill skeleton and validates it:
 
 ```sh
 mix agent_machine.skills create docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation"
 ```
 
@@ -86,7 +86,7 @@ Optional resource directories:
 
 ```sh
 mix agent_machine.skills create docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation" \
   --resources references,assets,scripts
 ```
@@ -103,7 +103,7 @@ same environment variables used by runs, such as `OPENAI_API_KEY` or
 
 ```sh
 mix agent_machine.skills generate docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --description "Helps write concise project documentation" \
   --provider openrouter \
   --model <model-id> \
@@ -120,8 +120,8 @@ assets, references, README files, or other extra files.
 Validates a skill folder or `SKILL.md` path:
 
 ```sh
-mix agent_machine.skills validate ~/.agent_machine/skills/docs-helper
-mix agent_machine.skills validate ~/.agent_machine/skills/docs-helper/SKILL.md --json
+mix agent_machine.skills validate ~/.agent-machine/skills/docs-helper
+mix agent_machine.skills validate ~/.agent-machine/skills/docs-helper/SKILL.md --json
 ```
 
 ### List
@@ -129,8 +129,8 @@ mix agent_machine.skills validate ~/.agent_machine/skills/docs-helper/SKILL.md -
 Lists installed skills:
 
 ```sh
-mix agent_machine.skills list --skills-dir ~/.agent_machine/skills
-mix agent_machine.skills list --skills-dir ~/.agent_machine/skills --json
+mix agent_machine.skills list --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills list --skills-dir ~/.agent-machine/skills --json
 ```
 
 ### Show
@@ -138,7 +138,7 @@ mix agent_machine.skills list --skills-dir ~/.agent_machine/skills --json
 Prints one installed skill, including instructions and resource inventory:
 
 ```sh
-mix agent_machine.skills show docs-helper --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills show docs-helper --skills-dir ~/.agent-machine/skills
 ```
 
 ### Search
@@ -146,8 +146,8 @@ mix agent_machine.skills show docs-helper --skills-dir ~/.agent_machine/skills
 Searches installed skills and the configured registry metadata:
 
 ```sh
-mix agent_machine.skills search docs --skills-dir ~/.agent_machine/skills
-mix agent_machine.skills search docs --skills-dir ~/.agent_machine/skills --registry ./priv/skills/registry.json
+mix agent_machine.skills search docs --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills search docs --skills-dir ~/.agent-machine/skills --registry ./priv/skills/registry.json
 ```
 
 Current search is metadata search, not remote ClawHub search.
@@ -157,8 +157,8 @@ Current search is metadata search, not remote ClawHub search.
 Installs a skill from an AgentMachine registry entry:
 
 ```sh
-mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills
-mix agent_machine.skills install docs-helper --skills-dir ~/.agent_machine/skills --registry ./skills.registry.json
+mix agent_machine.skills install docs-helper --skills-dir ~/.agent-machine/skills
+mix agent_machine.skills install docs-helper --skills-dir ~/.agent-machine/skills --registry ./skills.registry.json
 ```
 
 The install flow:
@@ -168,7 +168,7 @@ The install flow:
 3. Copy or clone the source into a staging directory.
 4. Validate `SKILL.md`.
 5. Move into `<skills-dir>/<name>`.
-6. Write `.agent_machine_skills.lock.json`.
+6. Write `.agent-machine-skills.lock.json`.
 
 Existing installs fail unless `--force` is provided.
 
@@ -181,7 +181,7 @@ mix agent_machine.skills install-git \
   --repo https://github.com/example/agent-skills.git \
   --ref v1.0.0 \
   --path skills/docs-helper \
-  --skills-dir ~/.agent_machine/skills
+  --skills-dir ~/.agent-machine/skills
 ```
 
 The git ref must be explicit. Do not silently install from a moving default
@@ -192,7 +192,7 @@ branch.
 Removes an installed skill folder and lockfile entry:
 
 ```sh
-mix agent_machine.skills remove docs-helper --skills-dir ~/.agent_machine/skills
+mix agent_machine.skills remove docs-helper --skills-dir ~/.agent-machine/skills
 ```
 
 ## Registry Format
@@ -245,7 +245,7 @@ mix agent_machine.run \
   --max-steps 6 \
   --max-attempts 1 \
   --skills auto \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   "Update README documentation"
 ```
 
@@ -258,7 +258,7 @@ mix agent_machine.run \
   --timeout-ms 30000 \
   --max-steps 6 \
   --max-attempts 1 \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --skill docs-helper \
   "Update README documentation"
 ```
@@ -290,7 +290,7 @@ mix agent_machine.run \
   --max-attempts 1 \
   --input-price-per-million 0.15 \
   --output-price-per-million 0.60 \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --skill docs-helper \
   --tool-harness skills \
   --tool-timeout-ms 1000 \
@@ -314,7 +314,7 @@ both the `skills` harness and script execution:
 ```sh
 mix agent_machine.run \
   ... \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --skill build-helper \
   --tool-harness skills \
   --tool-timeout-ms 1000 \
@@ -329,16 +329,20 @@ It should be treated as untrusted command execution.
 
 ## TUI Commands
 
+When no skills directory is configured, the TUI initializes
+`~/.agent-machine/skills`, creates that directory, and persists it to the TUI
+config. The Elixir CLI/runtime still receive an explicit `--skills-dir`.
+
 Set auto mode:
 
 ```text
-/skills auto ~/.agent_machine/skills
+/skills auto ~/.agent-machine/skills
 ```
 
 Set the directory and choose explicit skills:
 
 ```text
-/skills dir ~/.agent_machine/skills
+/skills dir ~/.agent-machine/skills
 /skills add docs-helper
 /skills remove docs-helper
 /skills clear
@@ -359,6 +363,11 @@ Inspect and install via Elixir CLI:
 /skills create docs-helper Helps write concise documentation
 /skills generate docs-helper Helps write concise documentation
 ```
+
+`/skills list` opens a picker for installed skills in the configured directory.
+Use Up/Down to move, type to filter by name or description, and press Enter to
+select or unselect an explicit skill. Selecting from the picker clears auto mode
+because the saved config now contains explicit skill names.
 
 Control script exposure:
 
@@ -407,14 +416,14 @@ Install a version-pinned zip bundle:
 
 ```sh
 mix agent_machine.skills install clawhub:docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --version latest
 
 mix agent_machine.skills install clawhub:owner/docs-helper \
-  --skills-dir ~/.agent_machine/skills
+  --skills-dir ~/.agent-machine/skills
 
 mix agent_machine.skills install clawhub:docs-helper \
-  --skills-dir ~/.agent_machine/skills \
+  --skills-dir ~/.agent-machine/skills \
   --version 1.2.3
 ```
 
@@ -422,10 +431,10 @@ Update ClawHub-installed skills from lockfile provenance:
 
 ```sh
 mix agent_machine.skills update clawhub:docs-helper \
-  --skills-dir ~/.agent_machine/skills
+  --skills-dir ~/.agent-machine/skills
 
 mix agent_machine.skills update --all \
-  --skills-dir ~/.agent_machine/skills
+  --skills-dir ~/.agent-machine/skills
 ```
 
 The default registry base URL is `https://clawhub.ai`. Override it with either:
@@ -449,7 +458,7 @@ Integration rules:
 - Validate the downloaded `SKILL.md` with the same local validator before
   install.
 - Write ClawHub source metadata, resolved version, registry URL, remote metadata
-  snapshot, bundle hash, and installed hash into `.agent_machine_skills.lock.json`.
+  snapshot, bundle hash, and installed hash into `.agent-machine-skills.lock.json`.
 - Refuse install when the bundle contains unsafe zip paths, symlinks, multiple
   skill roots, or invalid manifests.
 - Reject hidden, removed, suspicious, or malware-blocked skills when the API

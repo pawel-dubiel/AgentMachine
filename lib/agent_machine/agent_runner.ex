@@ -285,7 +285,10 @@ defmodule AgentMachine.AgentRunner do
     case result do
       {:ok, %{output: output, usage: _provider_usage} = payload} when is_binary(output) ->
         finished_at = DateTime.utc_now()
-        finished_event = provider_request_finished_event(context, agent, started_at, finished_at)
+
+        finished_event =
+          provider_request_finished_event(context, agent, started_at, finished_at, payload.usage)
+
         emit_event!(opts, finished_event)
 
         {:ok,
@@ -1616,13 +1619,14 @@ defmodule AgentMachine.AgentRunner do
     }
   end
 
-  defp provider_request_finished_event(context, agent, started_at, finished_at) do
+  defp provider_request_finished_event(context, agent, started_at, finished_at, usage) do
     %{
       type: :provider_request_finished,
       run_id: context.run_id,
       agent_id: agent.id,
       attempt: context.attempt,
       provider: provider_name(agent.provider),
+      usage: usage,
       duration_ms: duration_ms(started_at, finished_at),
       at: finished_at
     }

@@ -12,6 +12,7 @@ defmodule AgentMachine.SessionProtocolTest do
           task: "hello",
           workflow: "agentic",
           provider: "echo",
+          log_file: "/tmp/agent-machine-run.jsonl",
           timeout_ms: 1_000,
           max_steps: 6,
           max_attempts: 1,
@@ -39,8 +40,11 @@ defmodule AgentMachine.SessionProtocolTest do
                stream_response: true,
                progress_observer: true
              },
+             log_file: "/tmp/agent-machine-run.jsonl",
              session_tool_opts: %{timeout_ms: 1_000, max_rounds: 4}
            } = SessionProtocol.parse_command!(line)
+
+    refute Map.has_key?(SessionProtocol.parse_command!(line).run, :log_file)
   end
 
   test "rejects unknown run keys" do
