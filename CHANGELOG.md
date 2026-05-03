@@ -4,6 +4,29 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added detailed runtime flow documentation with PlantUML interaction diagrams
+  for routing, session agents, planner delegation, observers, and tool harness
+  permissions.
+- Added `make install` to build the TUI, install a global `agent-machine`
+  launcher plus `agent-machine-tui`, and run the TUI from any directory through
+  an explicit `AGENT_MACHINE_ROOT`.
+- Changed the installed `agent-machine-tui` command into the same launcher style
+  as `agent-machine`, with the real Go binary installed behind it.
+- Changed `make run` to start the built TUI from the repository root instead of
+  `tui/`, so relative tool roots resolve to the project checkout.
+- Migrated saved tool roots equal to the launch directory's `tui/` subdirectory
+  back to the launch directory on TUI startup.
+- Added an opt-in runtime progress observer for JSONL/TUI runs, emitting
+  UI-only `progress_commentary` events through `--progress-observer`,
+  `progress_observer: true`, and `/progress observer on|off` without adding
+  those comments to conversation history or compaction; the TUI labels and
+  wraps the observer commentary block in the live chat view.
+- Changed absolute tool paths outside the configured tool root to fail the
+  current agent attempt instead of being returned to the model as a recoverable
+  tool result, preventing fallback writes into the wrong relative directory.
+- Fixed provider-backed skill generation to pass an explicit empty run context
+  to OpenAI/OpenRouter providers and added paid OpenRouter coverage for
+  generating, listing, and selecting a skill.
 - Changed TUI filesystem tool roots so relative roots resolve from the TUI
   launch directory and legacy home-directory roots migrate to that launch
   directory.
