@@ -5,6 +5,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
 
   alias AgentMachine.{Agent, ClientRunner, JSON, Orchestrator, Providers.OpenRouterChat, SSE}
   alias Mix.Tasks.AgentMachine.Run
+  alias Mix.Tasks.AgentMachine.Skills, as: SkillsTask
 
   @moduletag :paid_openrouter
   @moduletag timeout: 180_000
@@ -162,6 +163,65 @@ defmodule AgentMachine.OpenRouterPaidTest do
     assert String.trim(summary.final_output) != ""
     assert summary.usage.total_tokens > 0
     assert Enum.any?(summary.events, &(&1.type == "run_completed"))
+  end
+
+  test "mix agent_machine.skills generate creates and lists an OpenRouter-authored skill" do
+    root = paid_tmp_root!("skills-generate")
+    skills_dir = Path.join(root, "skills")
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    Mix.Task.reenable("agent_machine.skills")
+
+    generate_output =
+      capture_io(fn ->
+        SkillsTask.run([
+          "generate",
+          "paid-docs-helper",
+          "--skills-dir",
+          skills_dir,
+          "--description",
+          "Helps produce concise release note documentation from implementation notes",
+          "--provider",
+          "openrouter",
+          "--model",
+          paid_model(),
+          "--http-timeout-ms",
+          "120000",
+          "--input-price-per-million",
+          "0",
+          "--output-price-per-million",
+          "0",
+          "--json"
+        ])
+      end)
+
+    assert %{"created" => %{"name" => "paid-docs-helper"}} =
+             JSON.decode!(String.trim(generate_output))
+
+    Mix.Task.reenable("agent_machine.skills")
+
+    list_output =
+      capture_io(fn ->
+        SkillsTask.run(["list", "--skills-dir", skills_dir, "--json"])
+      end)
+
+    assert %{"skills" => [%{"name" => "paid-docs-helper"}]} =
+             JSON.decode!(String.trim(list_output))
+
+    summary =
+      ClientRunner.run!(%{
+        task: "Use paid-docs-helper to draft release note documentation",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        skills_mode: :auto,
+        skills_dir: skills_dir
+      })
+
+    assert [%{name: "paid-docs-helper"}] = summary.skills
   end
 
   test "mix agent_machine.run streams a completed OpenRouter JSONL run" do

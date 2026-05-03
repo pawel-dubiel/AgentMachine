@@ -53,7 +53,7 @@ defmodule AgentMachine.Skills.Generator do
   end
 
   defp complete_provider!(%Agent{} = agent, http_timeout_ms) do
-    case agent.provider.complete(agent, http_timeout_ms: http_timeout_ms) do
+    case agent.provider.complete(agent, provider_opts(http_timeout_ms)) do
       {:ok, %{output: output}} when is_binary(output) ->
         output
 
@@ -64,6 +64,14 @@ defmodule AgentMachine.Skills.Generator do
       {:error, reason} ->
         raise RuntimeError, "skill generator provider failed: #{inspect(reason)}"
     end
+  end
+
+  defp provider_opts(http_timeout_ms) do
+    [
+      http_timeout_ms: http_timeout_ms,
+      run_context: %{results: %{}, artifacts: %{}},
+      runtime_facts: false
+    ]
   end
 
   defp parse_payload!(output, expected_name) do
