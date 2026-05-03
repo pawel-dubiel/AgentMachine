@@ -29,6 +29,7 @@ defmodule AgentMachine.SessionProtocol do
     "skill_names" => :skill_names,
     "allow_skill_scripts" => :allow_skill_scripts,
     "stream_response" => :stream_response,
+    "progress_observer" => :progress_observer,
     "context_window_tokens" => :context_window_tokens,
     "context_warning_percent" => :context_warning_percent,
     "context_tokenizer_path" => :context_tokenizer_path,

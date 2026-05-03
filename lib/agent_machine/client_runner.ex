@@ -9,6 +9,7 @@ defmodule AgentMachine.ClientRunner do
     EventSummary,
     JSON,
     Orchestrator,
+    ProgressObserver,
     RunChecklist,
     RunSpec,
     Telemetry,
@@ -37,6 +38,7 @@ defmodule AgentMachine.ClientRunner do
         run_opts = put_timeout_lease_opts(run_opts, spec)
         run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
         run_opts = put_event_sink(run_opts, opts)
+        run_opts = put_progress_observer_opts(run_opts, spec)
         run_opts = put_tool_approval_callback(run_opts, opts)
 
         case Orchestrator.run(agents, run_opts) do
@@ -111,7 +113,13 @@ defmodule AgentMachine.ClientRunner do
   end
 
   def jsonl_event!(event) when is_map(event) do
-    event = event |> summarize_event() |> Redactor.redact_output() |> Map.fetch!(:value)
+    event =
+      event
+      |> ProgressObserver.strip_private_evidence()
+      |> summarize_event()
+      |> Redactor.redact_output()
+      |> Map.fetch!(:value)
+
     JSON.encode!(%{type: "event", event: event})
   end
 
@@ -220,6 +228,16 @@ defmodule AgentMachine.ClientRunner do
       :error -> run_opts
       {:ok, callback} -> Keyword.put(run_opts, :tool_approval_callback, callback)
     end
+  end
+
+  defp put_progress_observer_opts(run_opts, %{progress_observer: false}), do: run_opts
+
+  defp put_progress_observer_opts(run_opts, %{progress_observer: true} = spec) do
+    unless Keyword.has_key?(run_opts, :event_sink) do
+      raise ArgumentError, "progress observer requires an explicit event sink"
+    end
+
+    Keyword.put(run_opts, :progress_observer, ProgressObserver.from_run_spec!(spec))
   end
 
   defp put_event_sink(run_opts, opts) do
@@ -455,6 +473,7 @@ defmodule AgentMachine.ClientRunner do
 
   defp summarize_event(event) do
     event
+    |> ProgressObserver.strip_private_evidence()
     |> EventSummary.enrich()
     |> Map.new(fn
       {:type, type} -> {:type, Atom.to_string(type)}

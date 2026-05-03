@@ -5,7 +5,15 @@ defmodule AgentMachine.RunServer do
 
   use GenServer
 
-  alias AgentMachine.{Agent, AgentResult, AgentRunner, ContextBudget, ContextCompactor}
+  alias AgentMachine.{
+    Agent,
+    AgentResult,
+    AgentRunner,
+    ContextBudget,
+    ContextCompactor,
+    ProgressObserver
+  }
+
   alias AgentMachine.Tools.PathGuard
 
   @default_heartbeat_interval_ms 10_000
@@ -1250,6 +1258,7 @@ defmodule AgentMachine.RunServer do
 
   defp append_event(run, event) do
     emit_event!(run.opts, event)
+    event = public_event(event)
 
     run
     |> Map.update!(:events, &(&1 ++ [event]))
@@ -1258,6 +1267,7 @@ defmodule AgentMachine.RunServer do
 
   defp append_events(run, events) do
     emit_events!(run.opts, events)
+    events = Enum.map(events, &public_event/1)
 
     run
     |> Map.update!(:events, &(&1 ++ events))
@@ -1265,7 +1275,7 @@ defmodule AgentMachine.RunServer do
   end
 
   defp append_stored_events(run, events) do
-    %{run | events: run.events ++ events}
+    %{run | events: run.events ++ Enum.map(events, &public_event/1)}
   end
 
   defp emit_events!(opts, events), do: Enum.each(events, &emit_event!(opts, &1))
@@ -1278,10 +1288,12 @@ defmodule AgentMachine.RunServer do
       :error ->
         case Keyword.fetch(opts, :event_sink) do
           :error -> :ok
-          {:ok, sink} -> sink.(event)
+          {:ok, sink} -> sink.(public_event(event))
         end
     end
   end
+
+  defp public_event(event), do: ProgressObserver.strip_private_evidence(event)
 
   defp record_health(run, events) when is_list(events) do
     Enum.reduce(events, run, &record_health(&2, &1))

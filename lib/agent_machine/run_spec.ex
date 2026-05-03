@@ -33,6 +33,7 @@ defmodule AgentMachine.RunSpec do
     :skill_names,
     :allow_skill_scripts,
     :stream_response,
+    :progress_observer,
     :context_window_tokens,
     :context_warning_percent,
     :context_tokenizer_path,
@@ -72,6 +73,7 @@ defmodule AgentMachine.RunSpec do
           skill_names: [binary()],
           allow_skill_scripts: boolean(),
           stream_response: boolean(),
+          progress_observer: boolean(),
           context_window_tokens: pos_integer() | nil,
           context_warning_percent: pos_integer() | nil,
           context_tokenizer_path: binary() | nil,
@@ -114,6 +116,7 @@ defmodule AgentMachine.RunSpec do
     require_positive_integer!(spec.max_attempts, :max_attempts)
     validate_provider_options!(spec)
     require_boolean!(spec.stream_response, :stream_response)
+    require_boolean!(spec.progress_observer, :progress_observer)
     validate_skill_options!(spec)
     validate_tool_options!(spec)
     validate_context_options!(spec)
@@ -217,6 +220,7 @@ defmodule AgentMachine.RunSpec do
     |> Map.put_new(:skill_names, [])
     |> Map.put_new(:allow_skill_scripts, false)
     |> Map.put_new(:stream_response, false)
+    |> Map.put_new(:progress_observer, false)
     |> Map.put_new(:run_context_compaction, :off)
     |> Map.put_new(:router_mode, :llm)
     |> normalize_skill_names!()

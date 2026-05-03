@@ -36,6 +36,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
     json: :boolean,
     jsonl: :boolean,
     stream_response: :boolean,
+    progress_observer: :boolean,
     context_window_tokens: :integer,
     context_warning_percent: :integer,
     context_tokenizer_path: :string,
@@ -142,6 +143,10 @@ defmodule Mix.Tasks.AgentMachine.Run do
     if Keyword.get(opts, :stream_response, false) and not Keyword.get(opts, :jsonl, false) do
       Mix.raise("--stream-response requires --jsonl")
     end
+
+    if Keyword.get(opts, :progress_observer, false) and not Keyword.get(opts, :jsonl, false) do
+      Mix.raise("--progress-observer requires --jsonl")
+    end
   end
 
   defp with_log_file(opts, callback) when is_function(callback, 1) do
@@ -247,6 +252,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
       skill_names: Keyword.get_values(opts, :skill),
       allow_skill_scripts: Keyword.get(opts, :allow_skill_scripts, false),
       stream_response: Keyword.get(opts, :stream_response, false),
+      progress_observer: Keyword.get(opts, :progress_observer, false),
       context_window_tokens: Keyword.get(opts, :context_window_tokens),
       context_warning_percent: Keyword.get(opts, :context_warning_percent),
       context_tokenizer_path: Keyword.get(opts, :context_tokenizer_path),

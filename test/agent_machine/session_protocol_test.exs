@@ -18,6 +18,7 @@ defmodule AgentMachine.SessionProtocolTest do
           agentic_persistence_rounds: 2,
           router_mode: "llm",
           stream_response: true,
+          progress_observer: true,
           session_tool_timeout_ms: 1_000,
           session_tool_max_rounds: 4
         }
@@ -35,7 +36,8 @@ defmodule AgentMachine.SessionProtocolTest do
                max_attempts: 1,
                agentic_persistence_rounds: 2,
                router_mode: :llm,
-               stream_response: true
+               stream_response: true,
+               progress_observer: true
              },
              session_tool_opts: %{timeout_ms: 1_000, max_rounds: 4}
            } = SessionProtocol.parse_command!(line)

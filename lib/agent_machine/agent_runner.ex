@@ -7,6 +7,7 @@ defmodule AgentMachine.AgentRunner do
     AgentResult,
     ContextBudget,
     DelegationResponse,
+    ProgressObserver,
     ToolHarness,
     ToolPolicy,
     ToolSessionSupervisor,
@@ -1761,6 +1762,8 @@ defmodule AgentMachine.AgentRunner do
   end
 
   defp tool_call_finished_event(context, id, tool, started_at, finished_at, opts, result) do
+    tool_name = tool_name(tool)
+
     %{
       type: :tool_call_finished,
       run_id: context.run_id,
@@ -1768,16 +1771,23 @@ defmodule AgentMachine.AgentRunner do
       attempt: context.attempt,
       round: context.round,
       tool_call_id: id,
-      tool: tool_name(tool),
+      tool: tool_name,
       status: :ok,
       permission: safe_tool_permission(tool),
       approval_risk: safe_tool_approval_risk(tool),
       approval_mode: Keyword.get(opts, :tool_approval_mode),
       result_summary: summarize_tool_result(result),
+      progress_observer_evidence: progress_observer_evidence(tool_name, result),
       duration_ms: duration_ms(started_at, finished_at),
       at: finished_at
     }
     |> Map.merge(tool_event_metadata(context))
+  end
+
+  defp progress_observer_evidence(tool_name, result) do
+    ProgressObserver.tool_result_evidence(tool_name, result)
+  rescue
+    _exception -> nil
   end
 
   defp tool_call_failed_event(context, id, tool, started_at, finished_at, opts, reason) do

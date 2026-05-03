@@ -111,6 +111,11 @@ defmodule AgentMachine.EventSummary do
     "#{agent_id} permission cancelled for #{tool}: #{reason}"
   end
 
+  defp summary(%{type: :progress_commentary, commentary: commentary})
+       when is_binary(commentary) do
+    commentary
+  end
+
   defp summary(%{type: type}), do: Atom.to_string(type)
 
   defp details(event) do
@@ -185,7 +190,12 @@ defmodule AgentMachine.EventSummary do
       :warning_percent,
       :breakdown,
       :covered_items,
-      :compaction_count
+      :compaction_count,
+      :commentary,
+      :source,
+      :evidence_count,
+      :agent_ids,
+      :tool_call_ids
     ])
     |> reject_empty_values()
   end

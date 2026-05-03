@@ -10,6 +10,7 @@ defmodule AgentMachine.SessionServer do
     CapabilityRequired,
     ClientRunner,
     Orchestrator,
+    ProgressObserver,
     RunSpec,
     SessionProtocol,
     SessionTranscript,
@@ -356,6 +357,10 @@ defmodule AgentMachine.SessionServer do
   end
 
   defp coordinator_opts(spec, context) do
+    event_sink = fn event ->
+      SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
+    end
+
     [
       timeout: spec.timeout_ms,
       max_steps: 1,
@@ -379,12 +384,17 @@ defmodule AgentMachine.SessionServer do
           "list_session_agents"
         ]
       },
-      event_sink: fn event ->
-        SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
-      end
+      event_sink: event_sink
     ]
+    |> maybe_put_progress_observer(spec)
     |> WorkflowProvider.put_http_opts(spec)
     |> WorkflowOptions.put_context_opts(spec)
+  end
+
+  defp maybe_put_progress_observer(opts, %RunSpec{progress_observer: false}), do: opts
+
+  defp maybe_put_progress_observer(opts, %RunSpec{progress_observer: true} = spec) do
+    Keyword.put(opts, :progress_observer, ProgressObserver.from_run_spec!(spec))
   end
 
   defp coordinator_input(spec, context) do

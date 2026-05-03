@@ -3,13 +3,14 @@ defmodule AgentMachine.RunEventCollector do
 
   use GenServer
 
-  alias AgentMachine.Telemetry
+  alias AgentMachine.{ProgressObserver, Telemetry}
 
   def start_link({run_id, event_sink, opts})
       when is_binary(run_id) and (is_nil(event_sink) or is_function(event_sink, 1)) and
              is_list(opts) do
     name = Keyword.fetch!(opts, :name)
-    GenServer.start_link(__MODULE__, {run_id, event_sink}, name: name)
+    progress_observer = Keyword.get(opts, :progress_observer)
+    GenServer.start_link(__MODULE__, {run_id, event_sink, progress_observer}, name: name)
   end
 
   def emit(collector, event) when is_map(event) do
@@ -17,11 +18,12 @@ defmodule AgentMachine.RunEventCollector do
   end
 
   @impl true
-  def init({run_id, event_sink}) do
+  def init({run_id, event_sink, progress_observer}) do
     {:ok,
      %{
        run_id: run_id,
        event_sink: event_sink,
+       progress_observer: progress_observer,
        run_started_at: nil,
        agents_started_at: %{},
        tools_started_at: %{}
@@ -31,6 +33,8 @@ defmodule AgentMachine.RunEventCollector do
   @impl true
   def handle_call({:emit, event}, _from, state) do
     state = emit_telemetry(event, state)
+    maybe_observe_progress(state.progress_observer, event)
+    event = ProgressObserver.strip_private_evidence(event)
     AgentMachine.RunServer.record_runtime_health(state.run_id, event)
 
     if is_function(state.event_sink, 1) do
@@ -160,6 +164,14 @@ defmodule AgentMachine.RunEventCollector do
   end
 
   defp emit_telemetry(_event, state), do: state
+
+  defp maybe_observe_progress(nil, _event), do: :ok
+
+  defp maybe_observe_progress(observer, event) do
+    ProgressObserver.observe(observer, event)
+  rescue
+    _exception -> :ok
+  end
 
   defp stop_measurements(nil), do: %{duration: 0}
   defp stop_measurements(started_at), do: %{duration: Telemetry.duration_since(started_at)}

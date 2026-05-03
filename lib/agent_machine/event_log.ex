@@ -3,7 +3,7 @@ defmodule AgentMachine.EventLog do
 
   use GenServer
 
-  alias AgentMachine.{EventSummary, JSON}
+  alias AgentMachine.{EventSummary, JSON, ProgressObserver}
   alias AgentMachine.Secrets.Redactor
 
   def start_link(_opts) do
@@ -95,6 +95,7 @@ defmodule AgentMachine.EventLog do
   defp event_line(event) do
     event =
       event
+      |> ProgressObserver.strip_private_evidence()
       |> EventSummary.enrich()
       |> Redactor.redact_output()
       |> Map.fetch!(:value)

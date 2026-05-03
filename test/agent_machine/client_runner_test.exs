@@ -1685,6 +1685,27 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "mix agent_machine.run requires JSONL for progress observer" do
+    Mix.Task.reenable("agent_machine.run")
+
+    assert_raise Mix.Error, ~r/--progress-observer requires --jsonl/, fn ->
+      Run.run([
+        "--workflow",
+        "basic",
+        "--provider",
+        "echo",
+        "--timeout-ms",
+        "1000",
+        "--max-steps",
+        "2",
+        "--max-attempts",
+        "1",
+        "--progress-observer",
+        "task"
+      ])
+    end
+  end
+
   test "mix agent_machine.run requires tool max rounds with a tool harness" do
     Mix.Task.reenable("agent_machine.run")
 
