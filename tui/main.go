@@ -3240,7 +3240,7 @@ func buildSkillsGenerateCLIArgs(config runConfig, name string, description strin
 		return nil, errors.New("output pricing is missing for skill generation")
 	}
 
-	return []string{
+	cliArgs := []string{
 		"generate",
 		name,
 		"--skills-dir",
@@ -3258,7 +3258,12 @@ func buildSkillsGenerateCLIArgs(config runConfig, name string, description strin
 		"--output-price-per-million",
 		config.OutputPrice,
 		"--json",
-	}, nil
+	}
+	for _, key := range sortedStringMapKeys(config.ProviderOptions) {
+		value := config.ProviderOptions[key]
+		cliArgs = append(cliArgs, "--provider-option", key+"="+value)
+	}
+	return cliArgs, nil
 }
 
 func validClawHubSort(value string) bool {
@@ -3998,6 +4003,8 @@ func (m model) runConfig(task string) runConfig {
 		Workflow:                  workflowAuto,
 		Provider:                  m.provider,
 		APIKey:                    m.apiKey(),
+		ProviderSecrets:           m.savedConfig.providerSecretsFor(m.provider),
+		ProviderOptions:           m.savedConfig.providerOptionsFor(m.provider),
 		Model:                     m.modelID(),
 		ToolHarness:               m.savedConfig.ToolHarness,
 		ToolRoot:                  m.savedConfig.ToolRoot,
@@ -4081,12 +4088,29 @@ func (m model) contextWindowForModel(modelID string) string {
 }
 
 func (m *model) rememberAPIKey(provider provider, apiKey string) {
-	switch provider {
-	case providerOpenAI:
-		m.savedConfig.OpenAIAPIKey = apiKey
-	case providerOpenRouter:
-		m.savedConfig.OpenRouterAPIKey = apiKey
+	m.rememberProviderSecret(provider, "api_key", apiKey)
+}
+
+func (m *model) rememberProviderSecret(provider provider, field string, value string) {
+	if m.savedConfig.ProviderSecrets == nil {
+		m.savedConfig.ProviderSecrets = map[string]map[string]string{}
 	}
+	providerID := string(provider)
+	if m.savedConfig.ProviderSecrets[providerID] == nil {
+		m.savedConfig.ProviderSecrets[providerID] = map[string]string{}
+	}
+	m.savedConfig.ProviderSecrets[providerID][field] = value
+}
+
+func (m *model) rememberProviderOption(provider provider, field string, value string) {
+	if m.savedConfig.ProviderOptions == nil {
+		m.savedConfig.ProviderOptions = map[string]map[string]string{}
+	}
+	providerID := string(provider)
+	if m.savedConfig.ProviderOptions[providerID] == nil {
+		m.savedConfig.ProviderOptions[providerID] = map[string]string{}
+	}
+	m.savedConfig.ProviderOptions[providerID][field] = value
 }
 
 func (m *model) changeModel(delta int) {
@@ -4095,6 +4119,14 @@ func (m *model) changeModel(delta int) {
 	}
 	m.modelIndex = (m.modelIndex + delta + len(m.modelOptions)) % len(m.modelOptions)
 	m.selectedModel = m.modelOptions[m.modelIndex].ID
+}
+
+func (m *model) moveProviderPicker(delta int) {
+	if len(providers) == 0 {
+		m.providerPickerIndex = 0
+		return
+	}
+	m.providerPickerIndex = (m.providerPickerIndex + delta + len(providers)) % len(providers)
 }
 
 func (m *model) moveModelPicker(delta int) {
@@ -4150,6 +4182,15 @@ func (m model) filteredModelIndexes() []int {
 		}
 	}
 	return indexes
+}
+
+func providerListIndex(selected provider) int {
+	for index, option := range providers {
+		if option == selected {
+			return index
+		}
+	}
+	return 0
 }
 
 func (m *model) moveSkillPicker(delta int) {
@@ -4253,7 +4294,7 @@ func (m model) loadModelsCommand() tea.Cmd {
 	if m.provider == providerEcho {
 		return nil
 	}
-	return loadModelsCommand(m.provider, m.apiKey())
+	return loadModelsCommand(m.runConfig("load models"))
 }
 
 func validateConfig(config runConfig) error {
@@ -4288,12 +4329,15 @@ func validateConfig(config runConfig) error {
 	switch config.Provider {
 	case providerEcho:
 		return nil
-	case providerOpenAI, providerOpenRouter:
+	default:
+		if _, ok := providerSetups[config.Provider]; !ok {
+			return fmt.Errorf("unsupported provider: %s", config.Provider)
+		}
 		if config.Model == "" {
 			return errors.New("model must not be empty for remote providers")
 		}
-		if config.APIKey == "" {
-			return fmt.Errorf("%s must not be empty", apiKeyName(config.Provider))
+		if err := validateProviderSetup(config); err != nil {
+			return err
 		}
 		if config.InputPrice == "" {
 			return fmt.Errorf("input pricing is missing for model %q", config.Model)
@@ -4314,9 +4358,25 @@ func validateConfig(config runConfig) error {
 			return err
 		}
 		return nil
-	default:
-		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+func validateProviderSetup(config runConfig) error {
+	for _, field := range providerSecretFields(config.Provider) {
+		value := strings.TrimSpace(config.ProviderSecrets[field.Name])
+		if value == "" && field.Name == "api_key" {
+			value = strings.TrimSpace(config.APIKey)
+		}
+		if value == "" {
+			return fmt.Errorf("%s must not be empty", field.Env)
+		}
+	}
+	for _, field := range providerOptionFields(config.Provider) {
+		if strings.TrimSpace(config.ProviderOptions[field.Name]) == "" {
+			return fmt.Errorf("provider option %s must not be empty for %s", field.Name, config.Provider)
+		}
+	}
+	return nil
 }
 
 func validatePlannerReviewConfig(config runConfig) error {
@@ -4359,12 +4419,15 @@ func validateCompactConfig(config runConfig) error {
 	switch config.Provider {
 	case providerEcho:
 		return nil
-	case providerOpenAI, providerOpenRouter:
+	default:
+		if _, ok := providerSetups[config.Provider]; !ok {
+			return fmt.Errorf("unsupported provider: %s", config.Provider)
+		}
 		if config.Model == "" {
 			return errors.New("model must not be empty for remote providers")
 		}
-		if config.APIKey == "" {
-			return fmt.Errorf("%s must not be empty", apiKeyName(config.Provider))
+		if err := validateProviderSetup(config); err != nil {
+			return err
 		}
 		if config.InputPrice == "" {
 			return fmt.Errorf("input pricing is missing for model %q", config.Model)
@@ -4382,8 +4445,6 @@ func validateCompactConfig(config runConfig) error {
 			return err
 		}
 		return validatePositiveInt(config.HTTPTimeout, "HTTP timeout ms")
-	default:
-		return fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
 }
 
@@ -4887,32 +4948,14 @@ func resolveConfig(config runConfig) (runConfig, error) {
 		config.OutputPrice = "0"
 		config.HTTPTimeout = defaultHTTPTimeoutMS
 		return config, nil
-	case providerOpenAI:
-		if err := requireRemoteIdentity(config); err != nil {
-			return runConfig{}, err
-		}
-		if hasResolvedRuntimeOptions(config) {
-			return config, nil
-		}
-		pricing, ok := openAIPricingByModel[config.Model]
-		if !ok {
-			return runConfig{}, fmt.Errorf("no OpenAI pricing profile for model %q", config.Model)
-		}
-		return applyResolvedPricing(config, pricing), nil
-	case providerOpenRouter:
-		if err := requireRemoteIdentity(config); err != nil {
-			return runConfig{}, err
-		}
-		if hasResolvedRuntimeOptions(config) {
-			return config, nil
-		}
-		pricing, err := openRouterPricingLookup(config.Model)
-		if err != nil {
-			return runConfig{}, err
-		}
-		return applyResolvedPricing(config, pricing), nil
 	default:
-		return runConfig{}, fmt.Errorf("unsupported provider: %s", config.Provider)
+		if err := requireRemoteIdentity(config); err != nil {
+			return runConfig{}, err
+		}
+		if hasResolvedRuntimeOptions(config) {
+			return config, nil
+		}
+		return runConfig{}, fmt.Errorf("pricing is missing for model %q; load models through /models reload or configure explicit pricing", config.Model)
 	}
 }
 
@@ -4924,30 +4967,16 @@ func requireRemoteIdentity(config runConfig) error {
 	if config.Model == "" {
 		return errors.New("model must not be empty for remote providers")
 	}
-	if config.APIKey == "" {
-		return fmt.Errorf("%s must not be empty", apiKeyName(config.Provider))
-	}
-	return nil
-}
-
-func applyResolvedPricing(config runConfig, pricing modelPricing) runConfig {
-	config.InputPrice = formatPrice(pricing.InputPerMillion)
-	config.OutputPrice = formatPrice(pricing.OutputPerMillion)
-	config.HTTPTimeout = defaultHTTPTimeoutMS
-	return config
+	return validateProviderSetup(config)
 }
 
 func parseProvider(value string) (provider, error) {
-	switch strings.ToLower(value) {
-	case "echo":
-		return providerEcho, nil
-	case "openai", "chatgpt", "gpt":
-		return providerOpenAI, nil
-	case "openrouter":
-		return providerOpenRouter, nil
-	default:
-		return "", fmt.Errorf("unsupported provider: %s", value)
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	candidate := provider(normalized)
+	if _, ok := providerSetups[candidate]; ok {
+		return candidate, nil
 	}
+	return "", fmt.Errorf("unsupported provider: %s", value)
 }
 
 func parseWorkflow(value string) (runWorkflow, error) {
@@ -4966,32 +4995,75 @@ func parseWorkflow(value string) (runWorkflow, error) {
 }
 
 func (p provider) Label() string {
-	switch p {
-	case providerEcho:
-		return "Echo"
-	case providerOpenAI:
-		return "OpenAI"
-	case providerOpenRouter:
-		return "OpenRouter"
-	default:
-		return string(p)
+	if setup, ok := providerSetups[p]; ok && strings.TrimSpace(setup.Label) != "" {
+		return setup.Label
 	}
+	return string(p)
 }
 
 func apiKeyName(provider provider) string {
-	switch provider {
-	case providerOpenAI:
-		return "OPENAI_API_KEY"
-	case providerOpenRouter:
-		return "OPENROUTER_API_KEY"
-	default:
-		return ""
+	for _, field := range providerSecretFields(provider) {
+		if field.Name == "api_key" {
+			return field.Env
+		}
 	}
+	return ""
+}
+
+func providerSecretFields(provider provider) []providerField {
+	return providerSetups[provider].SecretFields
+}
+
+func providerOptionFields(provider provider) []providerField {
+	return providerSetups[provider].OptionFields
+}
+
+func providerHasSecretField(provider provider, name string) bool {
+	for _, field := range providerSecretFields(provider) {
+		if field.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func providerHasOptionField(provider provider, name string) bool {
+	for _, field := range providerOptionFields(provider) {
+		if field.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func keyStatus(apiKey string) string {
 	if strings.TrimSpace(apiKey) == "" {
 		return "missing"
+	}
+	return "saved"
+}
+
+func (m model) providerSetupStatus() string {
+	if !m.providerSet {
+		return "missing"
+	}
+	if m.provider == providerEcho {
+		return "not required"
+	}
+	missing := []string{}
+	for _, field := range providerSecretFields(m.provider) {
+		if strings.TrimSpace(m.savedConfig.providerSecret(m.provider, field.Name)) == "" {
+			missing = append(missing, field.Name)
+		}
+	}
+	options := m.savedConfig.providerOptionsFor(m.provider)
+	for _, field := range providerOptionFields(m.provider) {
+		if strings.TrimSpace(options[field.Name]) == "" {
+			missing = append(missing, field.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return "missing " + strings.Join(missing, ",")
 	}
 	return "saved"
 }
@@ -5317,33 +5389,74 @@ func stringSliceContains(values []string, value string) bool {
 }
 
 func (config savedConfig) apiKeyFor(provider provider) string {
-	switch provider {
-	case providerOpenAI:
-		return config.OpenAIAPIKey
-	case providerOpenRouter:
-		return config.OpenRouterAPIKey
-	default:
-		return ""
+	return config.providerSecret(provider, "api_key")
+}
+
+func (config savedConfig) providerSecret(provider provider, field string) string {
+	if config.ProviderSecrets != nil {
+		if value := strings.TrimSpace(config.ProviderSecrets[string(provider)][field]); value != "" {
+			return value
+		}
 	}
+	if field == "api_key" {
+		switch provider {
+		case providerOpenAI:
+			return strings.TrimSpace(config.OpenAIAPIKey)
+		case providerOpenRouter:
+			return strings.TrimSpace(config.OpenRouterAPIKey)
+		}
+	}
+	return ""
+}
+
+func (config savedConfig) providerSecretsFor(provider provider) map[string]string {
+	if config.ProviderSecrets == nil {
+		return nil
+	}
+	return copyStringMap(config.ProviderSecrets[string(provider)])
+}
+
+func (config savedConfig) providerOptionsFor(provider provider) map[string]string {
+	if config.ProviderOptions == nil {
+		return nil
+	}
+	return copyStringMap(config.ProviderOptions[string(provider)])
 }
 
 func (config savedConfig) modelFor(provider provider) string {
+	if config.ProviderModels == nil {
+		switch provider {
+		case providerOpenAI:
+			return strings.TrimSpace(config.OpenAIModel)
+		case providerOpenRouter:
+			return strings.TrimSpace(config.OpenRouterModel)
+		default:
+			return ""
+		}
+	}
+	if model := strings.TrimSpace(config.ProviderModels[string(provider)]); model != "" {
+		return model
+	}
 	switch provider {
 	case providerOpenAI:
-		return config.OpenAIModel
+		return strings.TrimSpace(config.OpenAIModel)
 	case providerOpenRouter:
-		return config.OpenRouterModel
+		return strings.TrimSpace(config.OpenRouterModel)
 	default:
 		return ""
 	}
 }
 
 func (config *savedConfig) rememberModel(provider provider, model string) {
+	if config.ProviderModels == nil {
+		config.ProviderModels = map[string]string{}
+	}
+	config.ProviderModels[string(provider)] = model
 	switch provider {
 	case providerOpenAI:
-		config.OpenAIModel = model
+		config.OpenAIModel = ""
 	case providerOpenRouter:
-		config.OpenRouterModel = model
+		config.OpenRouterModel = ""
 	}
 }
 

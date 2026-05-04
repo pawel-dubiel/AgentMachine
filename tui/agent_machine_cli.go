@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,7 +209,7 @@ func compactInputMessages(messages []chatMessage) []map[string]string {
 }
 
 func buildCompactArgs(config runConfig, inputFile string) []string {
-	return []string{
+	args := []string{
 		"agent_machine.compact",
 		"--provider", string(config.Provider),
 		"--model", config.Model,
@@ -218,6 +219,11 @@ func buildCompactArgs(config runConfig, inputFile string) []string {
 		"--input-file", inputFile,
 		"--json",
 	}
+	for _, key := range sortedStringMapKeys(config.ProviderOptions) {
+		value := config.ProviderOptions[key]
+		args = append(args, "--provider-option", key+"="+value)
+	}
+	return args
 }
 
 func startAgentMachineStream(config runConfig) (*streamSession, error) {
@@ -392,6 +398,9 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 			return nil, err
 		}
 		run["model"] = config.Model
+		if len(config.ProviderOptions) > 0 {
+			run["provider_options"] = config.ProviderOptions
+		}
 		run["http_timeout_ms"] = httpTimeout
 		run["pricing"] = map[string]any{
 			"input_per_million":  inputPrice,
@@ -618,6 +627,10 @@ func buildRunArgs(config runConfig) []string {
 			"--input-price-per-million", config.InputPrice,
 			"--output-price-per-million", config.OutputPrice,
 		)
+		for _, key := range sortedStringMapKeys(config.ProviderOptions) {
+			value := config.ProviderOptions[key]
+			args = append(args, "--provider-option", key+"="+value)
+		}
 	}
 
 	if config.ToolHarness != "" || strings.TrimSpace(config.MCPConfig) != "" {
@@ -833,8 +846,30 @@ func closeStreamSession(session *streamSession) {
 
 func sessionReusable(previous runConfig, next runConfig) bool {
 	return previous.Provider == next.Provider &&
-		previous.APIKey == next.APIKey &&
+		stringMapsEqual(previous.ProviderSecrets, next.ProviderSecrets) &&
+		stringMapsEqual(previous.ProviderOptions, next.ProviderOptions) &&
 		previous.EventSessionID == next.EventSessionID
+}
+
+func stringMapsEqual(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedStringMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func maxSteps(workflow runWorkflow) string {

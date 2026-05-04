@@ -4,35 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const (
-	openAIModelsURL     = "https://api.openai.com/v1/models"
-	openRouterModelsURL = "https://openrouter.ai/api/v1/models"
-)
-
-var openAIPricingByModel = map[string]modelPricing{
-	"gpt-4.1":       {InputPerMillion: 2.00, OutputPerMillion: 8.00},
-	"gpt-4.1-mini":  {InputPerMillion: 0.40, OutputPerMillion: 1.60},
-	"gpt-4.1-nano":  {InputPerMillion: 0.10, OutputPerMillion: 0.40},
-	"gpt-4o":        {InputPerMillion: 2.50, OutputPerMillion: 10.00},
-	"gpt-4o-mini":   {InputPerMillion: 0.15, OutputPerMillion: 0.60},
-	"gpt-5.4":       {InputPerMillion: 2.50, OutputPerMillion: 15.00},
-	"gpt-5.4-mini":  {InputPerMillion: 0.75, OutputPerMillion: 4.50},
-	"gpt-5.4-nano":  {InputPerMillion: 0.20, OutputPerMillion: 1.25},
-	"gpt-5.2":       {InputPerMillion: 1.75, OutputPerMillion: 14.00},
-	"gpt-5.2-codex": {InputPerMillion: 1.75, OutputPerMillion: 14.00},
-}
-
 var providerModelLookup = fetchProviderModelOptions
-var openRouterPricingLookup = fetchOpenRouterPricing
 
 type modelPricing struct {
 	InputPerMillion  float64
@@ -51,126 +32,92 @@ type modelListMsg struct {
 	Err      error
 }
 
-type openRouterModelsResponse struct {
-	Data []openRouterModel `json:"data"`
+type providerModelsResponse struct {
+	Provider string                 `json:"provider"`
+	Models   []providerModelPayload `json:"models"`
 }
 
-type openRouterModel struct {
-	ID            string            `json:"id"`
-	Pricing       openRouterPricing `json:"pricing"`
-	ContextLength int               `json:"context_length"`
+type providerModelPayload struct {
+	ID                  string                  `json:"id"`
+	Pricing             *providerPricingPayload `json:"pricing"`
+	ContextWindowTokens *int                    `json:"context_window_tokens"`
 }
 
-type openRouterPricing struct {
-	Prompt     string `json:"prompt"`
-	Completion string `json:"completion"`
+type providerPricingPayload struct {
+	InputPerMillion  float64 `json:"input_per_million"`
+	OutputPerMillion float64 `json:"output_per_million"`
 }
 
-type openAIModelsResponse struct {
-	Data []openAIModel `json:"data"`
-}
-
-type openAIModel struct {
-	ID string `json:"id"`
-}
-
-func loadModelsCommand(provider provider, apiKey string) tea.Cmd {
+func loadModelsCommand(config runConfig) tea.Cmd {
 	return func() tea.Msg {
-		models, err := providerModelLookup(provider, apiKey)
-		return modelListMsg{Provider: provider, Models: models, Err: err}
+		models, err := providerModelLookup(config)
+		return modelListMsg{Provider: config.Provider, Models: models, Err: err}
 	}
 }
 
-func fetchProviderModelOptions(provider provider, apiKey string) ([]modelOption, error) {
-	switch provider {
-	case providerOpenAI:
-		return fetchOpenAIModelOptions(apiKey)
-	case providerOpenRouter:
-		return fetchOpenRouterModelOptions()
-	default:
-		return nil, fmt.Errorf("unsupported provider for model loading: %s", provider)
+func fetchProviderModelOptions(config runConfig) ([]modelOption, error) {
+	if config.Provider == providerEcho {
+		return nil, errors.New("echo does not load remote models")
 	}
-}
-
-func fetchOpenAIModelOptions(apiKey string) ([]modelOption, error) {
-	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("OPENAI_API_KEY must not be empty to load OpenAI models")
+	if err := validateProviderSetup(config); err != nil {
+		return nil, err
 	}
 
-	request, err := http.NewRequest(http.MethodGet, openAIModelsURL, nil)
+	root, err := projectRoot()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build OpenAI models request: %w", err)
+		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Do(request)
+	args := []string{"agent_machine.providers", "models", "--json", "--provider", string(config.Provider)}
+	for _, key := range sortedStringMapKeys(config.ProviderOptions) {
+		value := config.ProviderOptions[key]
+		args = append(args, "--provider-option", key+"="+value)
+	}
+
+	cmd := exec.Command("mix", args...)
+	cmd.Dir = root
+	cmd.Env = commandEnv(os.Environ(), config)
+
+	output, err := cmd.CombinedOutput()
+	raw := strings.TrimSpace(string(output))
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OpenAI models: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("failed to fetch OpenAI models: HTTP %d", response.StatusCode)
+		if raw != "" {
+			return nil, fmt.Errorf("mix command failed: %w\n%s", err, raw)
+		}
+		return nil, fmt.Errorf("mix command failed: %w", err)
 	}
 
-	var payload openAIModelsResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI models: %w", err)
+	var payload providerModelsResponse
+	if err := json.Unmarshal([]byte(lastJSONLine(raw)), &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse provider model list: %w", err)
 	}
-
-	options := openAIModelOptions(payload.Data)
+	options := providerModelOptions(payload.Models)
 	if len(options) == 0 {
-		return nil, errors.New("OpenAI returned no models with known TUI pricing profiles")
+		return nil, fmt.Errorf("%s returned no models with usable pricing", config.Provider.Label())
 	}
 	return options, nil
 }
 
-func openAIModelOptions(models []openAIModel) []modelOption {
+func providerModelOptions(models []providerModelPayload) []modelOption {
 	options := make([]modelOption, 0, len(models))
 	for _, model := range models {
-		pricing, ok := openAIPricingByModel[model.ID]
-		if ok {
-			options = append(options, modelOption{ID: model.ID, Pricing: pricing})
+		if strings.TrimSpace(model.ID) == "" || model.Pricing == nil {
+			continue
 		}
+		option := modelOption{
+			ID: model.ID,
+			Pricing: modelPricing{
+				InputPerMillion:  model.Pricing.InputPerMillion,
+				OutputPerMillion: model.Pricing.OutputPerMillion,
+			},
+		}
+		if model.ContextWindowTokens != nil {
+			option.ContextWindowTokens = *model.ContextWindowTokens
+		}
+		options = append(options, option)
 	}
 	sortModelOptions(options)
 	return options
-}
-
-func fetchOpenRouterModelOptions() ([]modelOption, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Get(openRouterModelsURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OpenRouter models: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("failed to fetch OpenRouter models: HTTP %d", response.StatusCode)
-	}
-
-	var payload openRouterModelsResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenRouter models: %w", err)
-	}
-
-	options := make([]modelOption, 0, len(payload.Data))
-	for _, model := range payload.Data {
-		pricing, err := openRouterModelPricing(model)
-		if err == nil {
-			options = append(options, modelOption{
-				ID:                  model.ID,
-				Pricing:             pricing,
-				ContextWindowTokens: model.ContextLength,
-			})
-		}
-	}
-	sortModelOptions(options)
-	if len(options) == 0 {
-		return nil, errors.New("OpenRouter returned no models with usable pricing")
-	}
-	return options, nil
 }
 
 func sortModelOptions(options []modelOption) {
@@ -186,40 +133,6 @@ func selectedModelIndex(models []modelOption, selected string) int {
 		}
 	}
 	return 0
-}
-
-func fetchOpenRouterPricing(model string) (modelPricing, error) {
-	if strings.TrimSpace(model) == "" {
-		return modelPricing{}, errors.New("model must not be empty for remote providers")
-	}
-
-	models, err := fetchOpenRouterModelOptions()
-	if err != nil {
-		return modelPricing{}, err
-	}
-	for _, candidate := range models {
-		if candidate.ID == model {
-			return candidate.Pricing, nil
-		}
-	}
-	return modelPricing{}, fmt.Errorf("no OpenRouter pricing found for model %q", model)
-}
-
-func openRouterModelPricing(model openRouterModel) (modelPricing, error) {
-	inputPerToken, err := strconv.ParseFloat(model.Pricing.Prompt, 64)
-	if err != nil {
-		return modelPricing{}, fmt.Errorf("invalid OpenRouter prompt price for model %q", model.ID)
-	}
-
-	outputPerToken, err := strconv.ParseFloat(model.Pricing.Completion, 64)
-	if err != nil {
-		return modelPricing{}, fmt.Errorf("invalid OpenRouter completion price for model %q", model.ID)
-	}
-
-	return modelPricing{
-		InputPerMillion:  inputPerToken * 1_000_000,
-		OutputPerMillion: outputPerToken * 1_000_000,
-	}, nil
 }
 
 func validateNonNegativeFloat(value string, label string) error {
