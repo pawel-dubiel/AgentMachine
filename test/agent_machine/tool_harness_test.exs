@@ -3,20 +3,22 @@ defmodule AgentMachine.ToolHarnessTest do
 
   alias AgentMachine.{MCP.Config, ToolHarness}
 
-  test "builds OpenAI tool definitions from allowed tools" do
-    body =
-      ToolHarness.put_openai_tools!(%{"model" => "test"}, allowed_tools: [AgentMachine.Tools.Now])
+  test "builds ReqLLM tool definitions from allowed tools" do
+    tools = ToolHarness.req_llm_tools!(allowed_tools: [AgentMachine.Tools.Now])
 
-    assert %{
-             "tools" => [
-               %{
-                 "type" => "function",
-                 "name" => "now",
-                 "description" => _description,
-                 "parameters" => %{"type" => "object"}
-               }
-             ]
-           } = body
+    assert [
+             %ReqLLM.Tool{
+               name: "now",
+               description: description,
+               parameter_schema: %{"type" => "object"}
+             }
+           ] =
+             tools
+
+    assert is_binary(description)
+
+    assert {:error, "AgentMachine executes tools outside ReqLLM"} =
+             tools |> List.first() |> ReqLLM.Tool.execute(%{})
   end
 
   test "built-in local files harness exposes constrained file tools" do
@@ -184,100 +186,71 @@ defmodule AgentMachine.ToolHarnessTest do
     assert names == ["mcp_docs_search"]
   end
 
-  test "builds OpenRouter tool definitions from allowed tools" do
-    body =
-      ToolHarness.put_openrouter_tools!(%{"model" => "test"},
-        allowed_tools: [AgentMachine.Tools.Now]
-      )
+  test "builds ReqLLM budget tool schemas from allowed tools" do
+    groups = ToolHarness.req_llm_tool_groups!(allowed_tools: [AgentMachine.Tools.Now])
 
     assert %{
-             "tools" => [
+             tools: [
                %{
-                 "type" => "function",
-                 "function" => %{
-                   "name" => "now",
-                   "description" => _description,
-                   "parameters" => %{"type" => "object"}
-                 }
+                 "name" => "now",
+                 "description" => _description,
+                 "parameters" => %{"type" => "object"}
                }
-             ]
-           } = body
+             ],
+             mcp_tools: []
+           } = groups
   end
 
   test "builds command tool schemas with the configured timeout maximum" do
-    body =
-      ToolHarness.put_openrouter_tools!(%{"model" => "test"},
+    groups =
+      ToolHarness.req_llm_tool_groups!(
         allowed_tools: [AgentMachine.Tools.RunShellCommand],
         tool_timeout_ms: 120_000
       )
 
     assert %{
-             "tools" => [
+             tools: [
                %{
-                 "function" => %{
-                   "parameters" => %{
-                     "properties" => %{
-                       "timeout_ms" => %{
-                         "maximum" => 120_000,
-                         "description" => description
-                       }
+                 "parameters" => %{
+                   "properties" => %{
+                     "timeout_ms" => %{
+                       "maximum" => 120_000,
+                       "description" => description
                      }
                    }
                  }
                }
              ]
-           } = body
+           } = groups
 
     assert description =~ "120000"
   end
 
-  test "parses OpenAI Responses function calls into runtime tool calls" do
-    response = %{
-      "output" => [
-        %{
-          "type" => "function_call",
-          "call_id" => "call-1",
-          "name" => "now",
-          "arguments" => "{}"
-        }
-      ]
-    }
+  test "parses ReqLLM tool calls into runtime tool calls" do
+    calls = [
+      %{
+        id: "call-1",
+        name: "now",
+        arguments: "{}"
+      }
+    ]
 
     assert [
              %{id: "call-1", tool: AgentMachine.Tools.Now, input: %{}}
-           ] = ToolHarness.openai_tool_calls!(response, allowed_tools: [AgentMachine.Tools.Now])
-  end
-
-  test "parses OpenRouter chat tool calls into runtime tool calls" do
-    message = %{
-      "tool_calls" => [
-        %{
-          "id" => "call-1",
-          "function" => %{"name" => "now", "arguments" => "{}"}
-        }
-      ]
-    }
-
-    assert [
-             %{id: "call-1", tool: AgentMachine.Tools.Now, input: %{}}
-           ] =
-             ToolHarness.openrouter_tool_calls!(message, allowed_tools: [AgentMachine.Tools.Now])
+           ] = ToolHarness.req_llm_tool_calls!(calls, allowed_tools: [AgentMachine.Tools.Now])
   end
 
   test "fails fast when a provider asks for an unknown tool" do
-    response = %{
-      "output" => [
-        %{
-          "type" => "function_call",
-          "call_id" => "call-1",
-          "name" => "missing",
-          "arguments" => "{}"
-        }
-      ]
-    }
+    calls = [
+      %{
+        id: "call-1",
+        name: "missing",
+        arguments: "{}"
+      }
+    ]
 
     assert_raise ArgumentError, ~r/provider requested unknown tool/, fn ->
-      ToolHarness.openai_tool_calls!(response, allowed_tools: [AgentMachine.Tools.Now])
+      ToolHarness.req_llm_tool_calls!(calls, allowed_tools: [AgentMachine.Tools.Now])
     end
   end
 end

@@ -41,7 +41,7 @@ defmodule AgentMachine.ClientRunnerTest do
     end
 
     assert_raise ArgumentError,
-                 ~r/run spec :provider must be :echo, :openai, or :openrouter/,
+                 ~r/run spec :provider must be :echo or a supported ReqLLM provider id/,
                  fn ->
                    RunSpec.new!(%{
                      task: "do work",
@@ -266,12 +266,12 @@ defmodule AgentMachine.ClientRunnerTest do
                  end
   end
 
-  test "builds the basic workflow with OpenRouter provider options" do
+  test "builds the basic workflow with ReqLLM provider options" do
     spec =
       RunSpec.new!(%{
         task: "do work",
         workflow: :basic,
-        provider: :openrouter,
+        provider: "openrouter",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
         max_steps: 2,
@@ -282,14 +282,14 @@ defmodule AgentMachine.ClientRunnerTest do
 
     {agents, opts} = Basic.build!(spec)
 
-    assert [%{provider: AgentMachine.Providers.OpenRouterChat, model: "openai/gpt-4o-mini"}] =
+    assert [%{provider: AgentMachine.Providers.ReqLLM, model: "openrouter:openai/gpt-4o-mini"}] =
              agents
 
     assert Keyword.fetch!(opts, :http_timeout_ms) == 25_000
 
     assert %{
-             provider: AgentMachine.Providers.OpenRouterChat,
-             model: "openai/gpt-4o-mini"
+             provider: AgentMachine.Providers.ReqLLM,
+             model: "openrouter:openai/gpt-4o-mini"
            } = Keyword.fetch!(opts, :finalizer)
   end
 
@@ -750,7 +750,7 @@ defmodule AgentMachine.ClientRunnerTest do
       RunSpec.new!(%{
         task: "do work",
         workflow: :agentic,
-        provider: :openrouter,
+        provider: "openrouter",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
         max_steps: 6,

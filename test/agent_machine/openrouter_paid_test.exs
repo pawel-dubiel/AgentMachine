@@ -3,7 +3,8 @@ defmodule AgentMachine.OpenRouterPaidTest do
 
   import ExUnit.CaptureIO
 
-  alias AgentMachine.{Agent, ClientRunner, JSON, Orchestrator, Providers.OpenRouterChat, SSE}
+  alias AgentMachine.{Agent, ClientRunner, JSON, Orchestrator}
+  alias AgentMachine.Providers.ReqLLM, as: ReqLLMProvider
   alias Mix.Tasks.AgentMachine.Run
   alias Mix.Tasks.AgentMachine.Skills, as: SkillsTask
 
@@ -31,8 +32,8 @@ defmodule AgentMachine.OpenRouterPaidTest do
     agent =
       Agent.new!(%{
         id: "openrouter-paid-provider",
-        provider: OpenRouterChat,
-        model: model,
+        provider: ReqLLMProvider,
+        model: openrouter_model(model),
         pricing: @pricing,
         instructions:
           "Reply with one short sentence. Do not call tools. Include the word AgentMachine.",
@@ -40,7 +41,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       })
 
     assert {:ok, payload} =
-             OpenRouterChat.complete(agent,
+             ReqLLMProvider.complete(agent,
                http_timeout_ms: 120_000,
                run_context: empty_run_context()
              )
@@ -59,8 +60,8 @@ defmodule AgentMachine.OpenRouterPaidTest do
     agent =
       Agent.new!(%{
         id: "openrouter-paid-direct-stream",
-        provider: OpenRouterChat,
-        model: model,
+        provider: ReqLLMProvider,
+        model: openrouter_model(model),
         pricing: @pricing,
         instructions:
           "Reply with one short sentence. Do not call tools. Include the word AgentMachine.",
@@ -70,7 +71,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
     started_ms = System.monotonic_time(:millisecond)
 
     result =
-      OpenRouterChat.stream_complete(agent,
+      ReqLLMProvider.stream_complete(agent,
         http_timeout_ms: 120_000,
         run_context: empty_run_context(agent.id),
         stream_context: %{
@@ -105,51 +106,12 @@ defmodule AgentMachine.OpenRouterPaidTest do
     assert payload.usage.total_tokens > 0
   end
 
-  @tag :openrouter_gun_stream_probe
-  test "OpenRouter paid model streams directly through Gun without workflow runtime" do
-    model = paid_model()
-
-    agent =
-      Agent.new!(%{
-        id: "openrouter-paid-gun-direct-stream",
-        provider: OpenRouterChat,
-        model: model,
-        pricing: @pricing,
-        instructions:
-          "Reply with one short sentence. Do not call tools. Include the word AgentMachine.",
-        input:
-          "Say that this direct OpenRouter Gun streaming probe is working. Probe id: #{unique_probe_id("gun")}."
-      })
-
-    result = gun_openrouter_stream!(agent, 120_000)
-
-    IO.puts(
-      "OpenRouter Gun direct stream probe model=#{model} " <>
-        "status=ok " <>
-        "protocol=#{result.protocol} " <>
-        "headers_ms=#{result.headers_ms} " <>
-        "first_raw_chunk_ms=#{inspect(result.first_raw_chunk_ms)} " <>
-        "first_sse_event_ms=#{inspect(result.first_sse_event_ms)} " <>
-        "first_content_delta_ms=#{inspect(result.first_content_delta_ms)} " <>
-        "duration_ms=#{result.duration_ms} " <>
-        "delta_count=#{result.delta_count}"
-    )
-
-    assert is_integer(result.headers_ms)
-    assert is_integer(result.first_raw_chunk_ms)
-    assert is_integer(result.first_sse_event_ms)
-    assert is_integer(result.first_content_delta_ms)
-    assert result.delta_count > 0
-    assert result.delta_chars > 0
-    assert is_map(result.usage)
-  end
-
   test "ClientRunner completes a basic run through the OpenRouter paid model" do
     summary =
       ClientRunner.run!(%{
         task: "Reply with one concise sentence that includes AgentMachine.",
         workflow: :basic,
-        provider: :openrouter,
+        provider: "openrouter",
         model: paid_model(),
         timeout_ms: 120_000,
         max_steps: 2,
@@ -282,7 +244,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
         task:
           "You have access to an MCP tool named mcp_paid_lookup. Call that tool once with arguments {\"query\":\"agent-machine\"}. Then answer with the exact marker returned by the tool. Do not answer without using the tool.",
         workflow: :basic,
-        provider: :openrouter,
+        provider: "openrouter",
         model: paid_model(),
         timeout_ms: 120_000,
         max_steps: 2,
@@ -318,7 +280,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
         task:
           "research me in google the latest news in poland. If the browser results contain an uppercase marker string, include it exactly in your answer.",
         workflow: :auto,
-        provider: :openrouter,
+        provider: "openrouter",
         model: paid_model(),
         timeout_ms: 180_000,
         max_steps: 6,
@@ -464,7 +426,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
           task:
             "Use the MCP tools mcp_playwright_browser_navigate and mcp_playwright_browser_snapshot. First call mcp_playwright_browser_navigate with arguments {\"arguments\":{\"url\":\"#{url}\"}}. Then call mcp_playwright_browser_snapshot with arguments {\"arguments\":{}}. Reply with the exact marker text from the page and nothing else.",
           workflow: :basic,
-          provider: :openrouter,
+          provider: "openrouter",
           model: paid_model(),
           timeout_ms: 240_000,
           max_steps: 2,
@@ -492,7 +454,8 @@ defmodule AgentMachine.OpenRouterPaidTest do
   defmodule PaidSwarmPlanner do
     @behaviour AgentMachine.Provider
 
-    alias AgentMachine.{Agent, Providers.OpenRouterChat}
+    alias AgentMachine.Agent
+    alias AgentMachine.Providers.ReqLLM, as: ReqLLMProvider
 
     @variants ["minimal", "robust", "experimental"]
 
@@ -510,8 +473,8 @@ defmodule AgentMachine.OpenRouterPaidTest do
              [
                %{
                  id: "swarm-evaluator",
-                 provider: OpenRouterChat,
-                 model: agent.model,
+                 provider: ReqLLMProvider,
+                 model: AgentMachine.OpenRouterPaidTest.openrouter_model(agent.model),
                  instructions:
                    "Compare the variant outputs. Do not call tools. Recommend one variant and explain correctness, simplicity, maintainability, testability, and risk.",
                  input:
@@ -753,6 +716,9 @@ defmodule AgentMachine.OpenRouterPaidTest do
     end
   end
 
+  def openrouter_model("openrouter:" <> _model = model), do: model
+  def openrouter_model(model) when is_binary(model), do: "openrouter:" <> model
+
   defp paid_tmp_root!(prefix) do
     root =
       Path.join(
@@ -827,186 +793,6 @@ defmodule AgentMachine.OpenRouterPaidTest do
 
   defp stream_status({:ok, _payload}), do: "ok"
   defp stream_status({:error, reason}), do: "error:#{inspect(reason)}"
-
-  defp unique_probe_id(prefix) do
-    "#{prefix}-#{System.system_time(:millisecond)}-#{System.unique_integer([:positive])}"
-  end
-
-  defp gun_openrouter_stream!(%Agent{} = agent, timeout_ms) do
-    api_key = System.fetch_env!("OPENROUTER_API_KEY")
-    started_ms = System.monotonic_time(:millisecond)
-
-    body =
-      agent
-      |> OpenRouterChat.request_body_for_test!(run_context: empty_run_context(agent.id))
-      |> Map.put("stream", true)
-      |> Map.put("stream_options", %{"include_usage" => true})
-      |> JSON.encode!()
-
-    Application.ensure_all_started(:gun)
-
-    {:ok, conn} =
-      :gun.open(~c"openrouter.ai", 443, %{
-        transport: :tls,
-        protocols:
-          AgentMachine.HTTPSSE.https_protocols_for_test(
-            System.get_env("AGENT_MACHINE_HTTP_PROTOCOL")
-          ),
-        tls_opts: [
-          server_name_indication: ~c"openrouter.ai",
-          verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
-          customize_hostname_check: [
-            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-          ]
-        ]
-      })
-
-    try do
-      {:ok, protocol} = :gun.await_up(conn, timeout_ms)
-
-      stream_ref =
-        :gun.post(
-          conn,
-          "/api/v1/chat/completions",
-          [
-            {"authorization", "Bearer #{api_key}"},
-            {"content-type", "application/json"},
-            {"x-openrouter-title", "AgentMachine Gun Probe"}
-          ],
-          body
-        )
-
-      conn
-      |> collect_gun_stream!(stream_ref, timeout_ms, started_ms)
-      |> Map.put(:protocol, protocol)
-    after
-      :gun.close(conn)
-    end
-  end
-
-  defp collect_gun_stream!(conn, stream_ref, timeout_ms, started_ms) do
-    state = %{
-      sse: SSE.new(),
-      started_ms: started_ms,
-      headers_ms: nil,
-      first_raw_chunk_ms: nil,
-      first_sse_event_ms: nil,
-      first_content_delta_ms: nil,
-      delta_count: 0,
-      delta_chars: 0,
-      usage: nil
-    }
-
-    state = collect_gun_stream_loop!(conn, stream_ref, timeout_ms, state)
-
-    %{
-      headers_ms: require_metric!(state.headers_ms, :headers_ms),
-      first_raw_chunk_ms: require_metric!(state.first_raw_chunk_ms, :first_raw_chunk_ms),
-      first_sse_event_ms: require_metric!(state.first_sse_event_ms, :first_sse_event_ms),
-      first_content_delta_ms:
-        require_metric!(state.first_content_delta_ms, :first_content_delta_ms),
-      duration_ms: System.monotonic_time(:millisecond) - started_ms,
-      delta_count: state.delta_count,
-      delta_chars: state.delta_chars,
-      usage: state.usage
-    }
-  end
-
-  defp collect_gun_stream_loop!(conn, stream_ref, timeout_ms, state) do
-    receive do
-      {:gun_response, ^conn, ^stream_ref, fin, status, _headers} when status in 200..299 ->
-        state = put_metric(state, :headers_ms)
-
-        case fin do
-          :fin -> flush_gun_sse_state!(state)
-          :nofin -> collect_gun_stream_loop!(conn, stream_ref, timeout_ms, state)
-        end
-
-      {:gun_response, ^conn, ^stream_ref, _fin, status, _headers} ->
-        raise "Gun OpenRouter request failed with status #{status}"
-
-      {:gun_data, ^conn, ^stream_ref, fin, chunk} ->
-        state =
-          state
-          |> put_metric(:first_raw_chunk_ms)
-          |> parse_gun_sse_chunk!(chunk)
-
-        case fin do
-          :fin -> flush_gun_sse_state!(state)
-          :nofin -> collect_gun_stream_loop!(conn, stream_ref, timeout_ms, state)
-        end
-
-      {:gun_error, ^conn, ^stream_ref, reason} ->
-        raise "Gun OpenRouter stream failed: #{inspect(reason)}"
-
-      {:gun_error, ^conn, reason} ->
-        raise "Gun OpenRouter connection failed: #{inspect(reason)}"
-    after
-      timeout_ms ->
-        raise "Gun OpenRouter stream timed out after #{timeout_ms}ms"
-    end
-  end
-
-  defp parse_gun_sse_chunk!(state, chunk) do
-    {sse, events} = SSE.parse_chunk(state.sse, chunk)
-
-    state
-    |> Map.put(:sse, sse)
-    |> handle_gun_sse_events!(events)
-  end
-
-  defp flush_gun_sse_state!(state) do
-    {_sse, events} = SSE.flush(state.sse)
-    handle_gun_sse_events!(state, events)
-  end
-
-  defp handle_gun_sse_events!(state, events) do
-    Enum.reduce(events, state, fn
-      "[DONE]", acc ->
-        acc
-
-      event, acc ->
-        acc
-        |> put_metric(:first_sse_event_ms)
-        |> handle_gun_sse_event!(event)
-    end)
-  end
-
-  defp handle_gun_sse_event!(state, event) do
-    decoded = JSON.decode!(event)
-
-    if is_map(decoded["usage"]) do
-      %{state | usage: decoded["usage"]}
-    else
-      decoded
-      |> Map.get("choices", [])
-      |> Enum.reduce(state, &handle_gun_choice!/2)
-    end
-  end
-
-  defp handle_gun_choice!(%{"delta" => %{"content" => content}}, state)
-       when is_binary(content) and content != "" do
-    state
-    |> put_metric(:first_content_delta_ms)
-    |> Map.update!(:delta_count, &(&1 + 1))
-    |> Map.update!(:delta_chars, &(&1 + String.length(content)))
-  end
-
-  defp handle_gun_choice!(_choice, state), do: state
-
-  defp put_metric(state, key) do
-    case Map.fetch!(state, key) do
-      nil -> Map.put(state, key, System.monotonic_time(:millisecond) - state.started_ms)
-      _value -> state
-    end
-  end
-
-  defp require_metric!(value, _field) when is_integer(value), do: value
-
-  defp require_metric!(_value, field) do
-    raise "Gun OpenRouter stream did not produce required #{field}"
-  end
 
   defp event_with?(events, key, value) do
     Enum.any?(events, &(Map.get(&1, key) == value))

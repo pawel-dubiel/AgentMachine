@@ -1,14 +1,189 @@
 defmodule AgentMachine.ProviderToolContinuationTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias AgentMachine.Agent
-  alias AgentMachine.Providers.{OpenAIResponses, OpenRouterChat}
+  alias AgentMachine.Providers.ReqLLM, as: ReqLLMProvider
+
+  defmodule FakeReqLLMClient do
+    def generate_text(model, context, opts) do
+      send(self(), {:req_llm_generate_text, model, context, opts})
+
+      {:ok,
+       %ReqLLM.Response{
+         id: "resp-1",
+         model: inspect(model),
+         context: context,
+         usage: %{input_tokens: 3, output_tokens: 2, total_tokens: 5},
+         finish_reason: :tool_calls
+       }}
+    end
+
+    def stream_text(model, context, opts) do
+      send(self(), {:req_llm_stream_text, model, context, opts})
+      {:ok, %{model: model, context: context}}
+    end
+
+    def process_stream(stream_response, opts) do
+      Keyword.fetch!(opts, :on_result).("hel")
+      Keyword.fetch!(opts, :on_result).("lo")
+
+      {:ok,
+       %ReqLLM.Response{
+         id: "resp-stream",
+         model: inspect(stream_response.model),
+         context: stream_response.context,
+         usage: %{input_tokens: 4, output_tokens: 2, total_tokens: 6},
+         finish_reason: :stop
+       }}
+    end
+
+    def classify_response(%ReqLLM.Response{id: "resp-1"}) do
+      %{
+        text: "",
+        tool_calls: [%{id: "call-1", name: "now", arguments: %{}}],
+        finish_reason: :tool_calls
+      }
+    end
+
+    def classify_response(%ReqLLM.Response{id: "resp-stream"}) do
+      %{
+        text: "hello",
+        tool_calls: [],
+        finish_reason: :stop
+      }
+    end
+  end
+
+  setup do
+    original_openrouter = System.get_env("OPENROUTER_API_KEY")
+    System.put_env("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    on_exit(fn ->
+      restore_env("OPENROUTER_API_KEY", original_openrouter)
+    end)
+
+    :ok
+  end
+
+  test "ReqLLM completion maps normalized tool calls without executing callbacks" do
+    assert {:ok, payload} =
+             ReqLLMProvider.complete(
+               agent(),
+               Keyword.merge(
+                 [
+                   req_llm_client: FakeReqLLMClient,
+                   http_timeout_ms: 1_000,
+                   allowed_tools: [AgentMachine.Tools.Now],
+                   run_context: run_context(),
+                   runtime_facts: false
+                 ],
+                 time_tool_opts()
+               )
+             )
+
+    assert_receive {:req_llm_generate_text, "openrouter:test-model", context, opts}
+    assert %ReqLLM.Context{} = context
+    assert Keyword.fetch!(opts, :api_key) == "test-openrouter-key"
+    assert Keyword.fetch!(opts, :receive_timeout) == 1_000
+    refute Keyword.has_key?(opts, :stream_receive_timeout)
+    refute Keyword.has_key?(opts, :metadata_timeout)
+    refute Keyword.has_key?(opts, :response_format)
+    assert [%ReqLLM.Tool{name: "now"} = req_llm_tool] = Keyword.fetch!(opts, :tools)
+
+    assert {:error, "AgentMachine executes tools outside ReqLLM"} =
+             ReqLLM.Tool.execute(req_llm_tool, %{})
+
+    assert payload.output == "requested 1 ReqLLM tool call(s)"
+    assert payload.tool_calls == [%{id: "call-1", tool: AgentMachine.Tools.Now, input: %{}}]
+    assert payload.usage == %{input_tokens: 3, output_tokens: 2, total_tokens: 5}
+    assert %{context: ^context, calls_by_id: %{"call-1" => "now"}} = payload.tool_state
+  end
+
+  test "ReqLLM continuation appends tool result messages and resends schemas" do
+    state = %{
+      context:
+        ReqLLM.Context.new([
+          ReqLLM.Context.system("Use tools when needed."),
+          ReqLLM.Context.user("what time is it?")
+        ]),
+      calls_by_id: %{"call-1" => "now"}
+    }
+
+    context =
+      ReqLLMProvider.context_for_test!(agent(),
+        tool_continuation: %{
+          state: state,
+          results: [%{id: "call-1", result: %{ok: true}}]
+        }
+      )
+
+    assert %ReqLLM.Message{role: :tool, name: "now", tool_call_id: "call-1"} =
+             context.messages |> List.last()
+
+    assert [%ReqLLM.Tool{name: "now"}] =
+             ReqLLMProvider.request_opts_for_test!(agent(),
+               http_timeout_ms: 1_000,
+               allowed_tools: [AgentMachine.Tools.Now]
+             )
+             |> Keyword.fetch!(:tools)
+  end
+
+  test "ReqLLM budget request separates prompt, tools, and continuation context" do
+    opts =
+      [
+        http_timeout_ms: 1_000,
+        allowed_tools: [AgentMachine.Tools.Now],
+        run_context: run_context(),
+        runtime_facts: false
+      ]
+      |> Keyword.merge(time_tool_opts())
+
+    assert {:ok, budget} = ReqLLMProvider.context_budget_request(agent(), opts)
+    assert budget.provider == :req_llm
+    assert budget.request.model == "\"openrouter:test-model\""
+    assert budget.request.opts[:receive_timeout] == 1_000
+    refute Keyword.has_key?(budget.request.opts, :stream_receive_timeout)
+    refute Keyword.has_key?(budget.request.opts, :metadata_timeout)
+    refute Keyword.has_key?(budget.request.opts, :response_format)
+    refute Keyword.has_key?(budget.request.opts, :api_key)
+    assert budget.breakdown.instructions == "Use tools when needed."
+    assert budget.breakdown.task_input == "write a file"
+    assert budget.breakdown.run_context =~ "plan output"
+    assert [%{"name" => "now"}] = budget.breakdown.tools
+    assert budget.breakdown.mcp_tools == []
+  end
+
+  test "ReqLLM streaming emits assistant deltas and final done event" do
+    parent = self()
+
+    assert {:ok, payload} =
+             ReqLLMProvider.stream_complete(agent(),
+               req_llm_client: FakeReqLLMClient,
+               http_timeout_ms: 1_000,
+               run_context: run_context(),
+               runtime_facts: false,
+               stream_context: %{run_id: "run-provider-budget", agent_id: "assistant", attempt: 1},
+               stream_event_sink: fn event -> send(parent, {:stream_event, event}) end
+             )
+
+    assert_receive {:req_llm_stream_text, "openrouter:test-model", %ReqLLM.Context{}, opts}
+    assert Keyword.fetch!(opts, :api_key) == "test-openrouter-key"
+    assert Keyword.fetch!(opts, :receive_timeout) == 1_000
+    refute Keyword.has_key?(opts, :stream_receive_timeout)
+    refute Keyword.has_key?(opts, :metadata_timeout)
+    refute Keyword.has_key?(opts, :response_format)
+    assert_receive {:stream_event, %{type: :assistant_delta, delta: "hel"}}
+    assert_receive {:stream_event, %{type: :assistant_delta, delta: "lo"}}
+    assert_receive {:stream_event, %{type: :assistant_done, run_id: "run-provider-budget"}}
+    assert payload.output == "hello"
+    assert payload.usage.total_tokens == 6
+  end
 
   defp agent do
     Agent.new!(%{
       id: "assistant",
-      provider: OpenRouterChat,
-      model: "test-model",
+      provider: ReqLLMProvider,
+      model: "openrouter:test-model",
       instructions: "Use tools when needed.",
       input: "write a file",
       pricing: %{input_per_million: 0.0, output_per_million: 0.0}
@@ -24,9 +199,8 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     }
   end
 
-  defp time_tool_budget_opts do
+  defp time_tool_opts do
     [
-      allowed_tools: [AgentMachine.Tools.Now],
       tool_policy: AgentMachine.ToolHarness.builtin_policy!(:time),
       tool_approval_mode: :read_only,
       tool_timeout_ms: 1_000,
@@ -34,196 +208,6 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     ]
   end
 
-  test "OpenRouter continuation appends tool result messages and resends tools" do
-    state = %{
-      messages: [
-        %{"role" => "system", "content" => "Use tools when needed."},
-        %{"role" => "user", "content" => "write a file"},
-        %{
-          "role" => "assistant",
-          "content" => nil,
-          "tool_calls" => [
-            %{"id" => "call-1", "function" => %{"name" => "now", "arguments" => "{}"}}
-          ]
-        }
-      ]
-    }
-
-    body =
-      OpenRouterChat.request_body_for_test!(agent(),
-        allowed_tools: [AgentMachine.Tools.Now],
-        tool_continuation: %{state: state, results: [%{id: "call-1", result: %{ok: true}}]}
-      )
-
-    assert %{"role" => "tool", "tool_call_id" => "call-1", "content" => "{\"ok\":true}"} =
-             List.last(body["messages"])
-
-    assert [%{"type" => "function", "function" => %{"name" => "now"}}] = body["tools"]
-  end
-
-  test "OpenRouter request includes explicit response format when provided" do
-    body =
-      OpenRouterChat.request_body_for_test!(
-        agent(),
-        provider_opts(response_format: %{"type" => "json_object"})
-      )
-
-    assert body["response_format"] == %{"type" => "json_object"}
-  end
-
-  test "OpenRouter request rejects invalid response format option" do
-    assert_raise ArgumentError, ~r/OpenRouter response_format must be a map/, fn ->
-      OpenRouterChat.request_body_for_test!(agent(), provider_opts(response_format: "json"))
-    end
-  end
-
-  test "OpenAI continuation sends function_call_output with previous response id and resends tools" do
-    body =
-      OpenAIResponses.request_body_for_test!(%{agent() | provider: OpenAIResponses},
-        allowed_tools: [AgentMachine.Tools.Now],
-        tool_continuation: %{
-          state: %{response_id: "resp-1"},
-          results: [%{id: "call-1", result: %{ok: true}}]
-        }
-      )
-
-    assert body["previous_response_id"] == "resp-1"
-
-    assert [
-             %{
-               "type" => "function_call_output",
-               "call_id" => "call-1",
-               "output" => "{\"ok\":true}"
-             }
-           ] = body["input"]
-
-    assert [%{"type" => "function", "name" => "now"}] = body["tools"]
-    assert body["instructions"] == "Use tools when needed."
-  end
-
-  test "OpenAI request includes explicit response format when provided" do
-    body =
-      OpenAIResponses.request_body_for_test!(
-        %{agent() | provider: OpenAIResponses},
-        provider_opts(response_format: %{"type" => "json_object"})
-      )
-
-    assert body["response_format"] == %{"type" => "json_object"}
-  end
-
-  test "OpenAI request rejects invalid response format option" do
-    assert_raise ArgumentError, ~r/OpenAI response_format must be a map/, fn ->
-      OpenAIResponses.request_body_for_test!(
-        %{agent() | provider: OpenAIResponses},
-        provider_opts(response_format: "json")
-      )
-    end
-  end
-
-  test "OpenRouter budget request uses the provider request body and separates components" do
-    opts =
-      [
-        run_context: run_context(),
-        runtime_facts: false
-      ] ++ time_tool_budget_opts()
-
-    assert {:ok, budget} = OpenRouterChat.context_budget_request_for_test!(agent(), opts)
-    assert budget.provider == :openrouter_chat
-    assert budget.request == OpenRouterChat.request_body_for_test!(agent(), opts)
-    assert budget.breakdown.instructions == "Use tools when needed."
-    assert budget.breakdown.task_input == "write a file"
-    assert budget.breakdown.run_context =~ "plan output"
-    assert [%{"type" => "function", "function" => %{"name" => "now"}}] = budget.breakdown.tools
-    assert budget.breakdown.mcp_tools == []
-  end
-
-  test "OpenAI budget request uses the provider request body and separates components" do
-    agent = %{agent() | provider: OpenAIResponses}
-
-    opts =
-      [
-        run_context: run_context(),
-        runtime_facts: false
-      ] ++ time_tool_budget_opts()
-
-    assert {:ok, budget} = OpenAIResponses.context_budget_request_for_test!(agent, opts)
-    assert budget.provider == :openai_responses
-    assert budget.request == OpenAIResponses.request_body_for_test!(agent, opts)
-    assert budget.breakdown.instructions == "Use tools when needed."
-    assert budget.breakdown.task_input == "write a file"
-    assert budget.breakdown.run_context =~ "plan output"
-    assert [%{"type" => "function", "name" => "now"}] = budget.breakdown.tools
-    assert budget.breakdown.mcp_tools == []
-  end
-
-  test "provider budget continuation components match continuation payloads" do
-    openrouter_state = %{
-      messages: [%{"role" => "user", "content" => "write a file"}]
-    }
-
-    continuation = %{state: openrouter_state, results: [%{id: "call-1", result: %{ok: true}}]}
-
-    assert {:ok, budget} =
-             OpenRouterChat.context_budget_request_for_test!(agent(),
-               allowed_tools: [AgentMachine.Tools.Now],
-               tool_continuation: continuation
-             )
-
-    assert budget.breakdown.tool_continuation == budget.request["messages"]
-
-    openai_agent = %{agent() | provider: OpenAIResponses}
-
-    openai_continuation = %{
-      state: %{response_id: "resp-1"},
-      results: [%{id: "call-1", result: %{ok: true}}]
-    }
-
-    assert {:ok, budget} =
-             OpenAIResponses.context_budget_request_for_test!(openai_agent,
-               allowed_tools: [AgentMachine.Tools.Now],
-               tool_continuation: openai_continuation
-             )
-
-    assert budget.breakdown.tool_continuation == budget.request["input"]
-  end
-
-  test "OpenRouter stream handler halts on done marker" do
-    {:ok, state} =
-      Elixir.Agent.start_link(fn -> %{content: "", usage: nil, tool_calls: %{}, error: nil} end)
-
-    assert :halt = OpenRouterChat.handle_stream_data_for_test(state, [], "[DONE]")
-
-    Elixir.Agent.stop(state)
-  end
-
-  test "OpenAI stream handler halts on completed response" do
-    parent = self()
-
-    {:ok, state} = Elixir.Agent.start_link(fn -> %{response: nil, error: nil} end)
-
-    data =
-      AgentMachine.JSON.encode!(%{
-        "type" => "response.completed",
-        "response" => %{"id" => "resp-1", "output_text" => "done"}
-      })
-
-    assert :halt =
-             OpenAIResponses.handle_stream_data_for_test(state, stream_opts(parent), data)
-
-    assert %{response: %{"id" => "resp-1"}} = Elixir.Agent.get(state, & &1)
-    assert_receive %{type: :assistant_done, run_id: "run-provider-budget", agent_id: "assistant"}
-
-    Elixir.Agent.stop(state)
-  end
-
-  defp stream_opts(parent) do
-    [
-      stream_context: %{run_id: "run-provider-budget", agent_id: "assistant", attempt: 1},
-      stream_event_sink: fn event -> send(parent, event) end
-    ]
-  end
-
-  defp provider_opts(extra) do
-    Keyword.merge([run_context: run_context(), runtime_facts: false], extra)
-  end
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end

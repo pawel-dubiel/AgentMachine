@@ -78,7 +78,7 @@ defmodule AgentMachine.WorkflowRouterTest do
       RunSpec.new!(%{
         task: "explain the project",
         workflow: :auto,
-        provider: :openrouter,
+        provider: "openrouter",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
         max_steps: 6,
@@ -1270,7 +1270,7 @@ defmodule AgentMachine.WorkflowRouterTest do
       test_commands: Keyword.get(attrs, :test_commands, []),
       mcp_config: Keyword.get(attrs, :mcp_config),
       router_mode: :llm,
-      provider: :openrouter,
+      provider: "openrouter",
       model: "openai/gpt-4o-mini",
       pricing: %{input_per_million: 0.15, output_per_million: 0.60},
       http_timeout_ms: 1_000,

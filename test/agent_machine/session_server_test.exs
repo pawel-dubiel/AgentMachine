@@ -141,7 +141,7 @@ defmodule AgentMachine.SessionServerTest do
                  "msg-1",
                  "create a react app file src/main.js with hello world",
                  workflow: :auto,
-                 provider: :openrouter,
+                 provider: "openrouter",
                  model: "openai/gpt-4o-mini",
                  http_timeout_ms: 1_000,
                  pricing: %{input_per_million: 0.15, output_per_million: 0.60},

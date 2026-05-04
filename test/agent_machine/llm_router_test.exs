@@ -2,7 +2,6 @@ defmodule AgentMachine.LLMRouterTest do
   use ExUnit.Case, async: false
 
   alias AgentMachine.{JSON, LLMRouter}
-  alias AgentMachine.Providers.OpenRouterChat
 
   defmodule ValidProvider do
     def complete(agent, opts) do
@@ -25,10 +24,9 @@ defmodule AgentMachine.LLMRouterTest do
 
   defmodule ProviderContractProvider do
     def complete(agent, opts) do
-      body = OpenRouterChat.request_body_for_test!(agent, opts)
-
-      if Keyword.fetch!(opts, :response_format) == %{"type" => "json_object"} and
-           body["response_format"] == %{"type" => "json_object"} do
+      if Keyword.fetch!(opts, :run_context) == %{agent_graph: %{}, results: %{}, artifacts: %{}} and
+           not Keyword.has_key?(opts, :response_format) and
+           agent.model == "test-router-model" do
         {:ok,
          %{
            output:
@@ -42,7 +40,7 @@ defmodule AgentMachine.LLMRouterTest do
            usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
          }}
       else
-        {:error, :missing_router_response_format}
+        {:error, :missing_router_contract}
       end
     end
   end
@@ -217,6 +215,24 @@ defmodule AgentMachine.LLMRouterTest do
 
     assert result.intent == :file_mutation
     assert result.reason == "provider contract satisfied"
+  end
+
+  test "ReqLLM LLM routing uses explicit provider options without provider atoms" do
+    opts = LLMRouter.provider_opts_for_test!("openrouter", 1_000)
+
+    refute Keyword.has_key?(opts, :response_format)
+    assert Keyword.fetch!(opts, :http_timeout_ms) == 1_000
+    assert Keyword.fetch!(opts, :run_context) == %{agent_graph: %{}, results: %{}, artifacts: %{}}
+  end
+
+  test "LLM routing rejects old remote provider atoms" do
+    assert_raise ArgumentError, ~r/does not support provider :openrouter/, fn ->
+      LLMRouter.provider_opts_for_test!(:openrouter, 1_000)
+    end
+
+    assert_raise ArgumentError, ~r/does not support provider :openai/, fn ->
+      LLMRouter.provider_opts_for_test!(:openai, 1_000)
+    end
   end
 
   test "fails fast on provider output without a JSON object" do

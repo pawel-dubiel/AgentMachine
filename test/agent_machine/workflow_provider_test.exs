@@ -20,27 +20,30 @@ defmodule AgentMachine.WorkflowProviderTest do
     assert WorkflowProvider.put_http_opts([timeout: 1_000], spec) == [timeout: 1_000]
   end
 
-  test "returns OpenRouter runtime values and explicit HTTP option" do
+  test "returns ReqLLM runtime values and explicit HTTP/provider options" do
     pricing = %{input_per_million: 0.15, output_per_million: 0.60}
+    provider_options = %{"project_id" => "project-1", "region" => "us-central1"}
 
     spec =
       RunSpec.new!(%{
         task: "hello",
         workflow: :basic,
-        provider: :openrouter,
+        provider: "google_vertex",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
         max_steps: 2,
         max_attempts: 1,
         http_timeout_ms: 25_000,
-        pricing: pricing
+        pricing: pricing,
+        provider_options: provider_options
       })
 
-    assert WorkflowProvider.provider_module(spec) == AgentMachine.Providers.OpenRouterChat
-    assert WorkflowProvider.model(spec) == "openai/gpt-4o-mini"
+    assert WorkflowProvider.provider_module(spec) == AgentMachine.Providers.ReqLLM
+    assert WorkflowProvider.model(spec) == "google_vertex:openai/gpt-4o-mini"
     assert WorkflowProvider.pricing(spec) == pricing
 
     assert WorkflowProvider.put_http_opts([timeout: 1_000], spec) == [
+             provider_options: provider_options,
              http_timeout_ms: 25_000,
              timeout: 1_000
            ]

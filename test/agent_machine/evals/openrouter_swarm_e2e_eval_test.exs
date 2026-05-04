@@ -65,7 +65,7 @@ defmodule AgentMachine.OpenRouterSwarmE2EEvalTest do
            %{
              task: swarm_task(),
              workflow: :agentic,
-             provider: :openrouter,
+             provider: "openrouter",
              model: model,
              timeout_ms: 480_000,
              max_steps: 8,
