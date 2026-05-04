@@ -33,6 +33,7 @@ defmodule AgentMachine.MixProject do
       {:gun, "~> 2.2"},
       {:jason, "~> 1.4"},
       {:ortex, "~> 0.1.10"},
+      {:req_llm, "~> 1.11"},
       {:telemetry, "~> 1.0"},
       {:tokenizers, "~> 0.5.1"},
       {:yamerl, "~> 0.10"},
