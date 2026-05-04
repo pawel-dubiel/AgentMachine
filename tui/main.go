@@ -278,7 +278,61 @@ const (
 	providerOpenRouter provider = "openrouter"
 )
 
-var providers = []provider{providerEcho, providerOpenAI, providerOpenRouter}
+var providers = []provider{
+	providerEcho,
+	"alibaba",
+	"alibaba_cn",
+	"anthropic",
+	providerOpenAI,
+	"google",
+	"google_vertex",
+	"amazon_bedrock",
+	"azure",
+	"groq",
+	"xai",
+	providerOpenRouter,
+	"cerebras",
+	"meta",
+	"zai",
+	"zai_coder",
+	"zenmux",
+	"venice",
+	"vllm",
+}
+
+type providerField struct {
+	Name  string
+	Label string
+	Env   string
+}
+
+type providerSetup struct {
+	Label        string
+	SecretFields []providerField
+	OptionFields []providerField
+}
+
+var providerSetups = map[provider]providerSetup{
+	providerEcho:       {Label: "Echo"},
+	"alibaba":          {Label: "Alibaba Cloud Bailian", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ALIBABA_API_KEY"}}},
+	"alibaba_cn":       {Label: "Alibaba Cloud Bailian China", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ALIBABA_CN_API_KEY"}}},
+	"anthropic":        {Label: "Anthropic", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ANTHROPIC_API_KEY"}}},
+	providerOpenAI:     {Label: "OpenAI", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "OPENAI_API_KEY"}}},
+	"google":           {Label: "Google Gemini", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_GOOGLE_API_KEY"}}},
+	"google_vertex":    {Label: "Google Vertex AI", SecretFields: []providerField{{Name: "access_token", Label: "Access token", Env: "AGENT_MACHINE_GOOGLE_VERTEX_ACCESS_TOKEN"}}, OptionFields: []providerField{{Name: "project_id", Label: "Project ID"}, {Name: "region", Label: "Region"}}},
+	"amazon_bedrock":   {Label: "Amazon Bedrock", SecretFields: []providerField{{Name: "access_key_id", Label: "Access key ID", Env: "AGENT_MACHINE_AMAZON_BEDROCK_ACCESS_KEY_ID"}, {Name: "secret_access_key", Label: "Secret access key", Env: "AGENT_MACHINE_AMAZON_BEDROCK_SECRET_ACCESS_KEY"}}, OptionFields: []providerField{{Name: "region", Label: "Region"}}},
+	"azure":            {Label: "Azure OpenAI", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_AZURE_API_KEY"}}, OptionFields: []providerField{{Name: "base_url", Label: "Azure OpenAI base URL"}, {Name: "deployment", Label: "Deployment"}, {Name: "api_version", Label: "API version"}}},
+	"groq":             {Label: "Groq", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_GROQ_API_KEY"}}},
+	"xai":              {Label: "xAI", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_XAI_API_KEY"}}},
+	providerOpenRouter: {Label: "OpenRouter", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "OPENROUTER_API_KEY"}}},
+	"cerebras":         {Label: "Cerebras", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_CEREBRAS_API_KEY"}}},
+	"meta":             {Label: "Meta Llama", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_META_API_KEY"}}},
+	"zai":              {Label: "Z.AI", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ZAI_API_KEY"}}},
+	"zai_coder":        {Label: "Z.AI Coder", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ZAI_CODER_API_KEY"}}},
+	"zenmux":           {Label: "Zenmux", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_ZENMUX_API_KEY"}}},
+	"venice":           {Label: "Venice", SecretFields: []providerField{{Name: "api_key", Label: "API key", Env: "AGENT_MACHINE_VENICE_API_KEY"}}},
+	"vllm":             {Label: "vLLM", SecretFields: []providerField{{Name: "api_key", Label: "API key or placeholder token", Env: "AGENT_MACHINE_VLLM_API_KEY"}}, OptionFields: []providerField{{Name: "base_url", Label: "Base URL"}}},
+}
 
 type runWorkflow string
 
@@ -310,6 +364,8 @@ type runConfig struct {
 	Workflow                  runWorkflow
 	Provider                  provider
 	APIKey                    string
+	ProviderSecrets           map[string]string
+	ProviderOptions           map[string]string
 	Model                     string
 	InputPrice                string
 	OutputPrice               string
@@ -347,40 +403,43 @@ type runConfig struct {
 }
 
 type savedConfig struct {
-	OpenAIAPIKey               string   `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey           string   `json:"openrouter_api_key,omitempty"`
-	Workflow                   string   `json:"workflow,omitempty"`
-	Provider                   string   `json:"provider,omitempty"`
-	OpenAIModel                string   `json:"openai_model,omitempty"`
-	OpenRouterModel            string   `json:"openrouter_model,omitempty"`
-	Theme                      string   `json:"theme,omitempty"`
-	ToolHarness                string   `json:"tool_harness,omitempty"`
-	ToolRoot                   string   `json:"tool_root,omitempty"`
-	ToolTimeout                string   `json:"tool_timeout_ms,omitempty"`
-	ToolMaxRounds              string   `json:"tool_max_rounds,omitempty"`
-	ToolApproval               string   `json:"tool_approval_mode,omitempty"`
-	TestCommands               []string `json:"test_commands,omitempty"`
-	MCPConfig                  string   `json:"mcp_config,omitempty"`
-	AgenticPersistenceRounds   string   `json:"agentic_persistence_rounds,omitempty"`
-	AgenticPersistenceMaxSteps string   `json:"agentic_persistence_max_steps,omitempty"`
-	AgenticPersistenceTimeout  string   `json:"agentic_persistence_timeout_ms,omitempty"`
-	PlannerReviewMaxRevisions  string   `json:"planner_review_max_revisions,omitempty"`
-	RouterMode                 string   `json:"router_mode,omitempty"`
-	RouterModelDir             string   `json:"router_model_dir,omitempty"`
-	RouterTimeout              string   `json:"router_timeout_ms,omitempty"`
-	RouterConfidence           string   `json:"router_confidence_threshold,omitempty"`
-	SkillsMode                 string   `json:"skills_mode,omitempty"`
-	SkillsDir                  string   `json:"skills_dir,omitempty"`
-	SkillNames                 []string `json:"skill_names,omitempty"`
-	AllowSkillScripts          bool     `json:"allow_skill_scripts,omitempty"`
-	ContextWindow              string   `json:"context_window_tokens,omitempty"`
-	ContextWarning             string   `json:"context_warning_percent,omitempty"`
-	ContextTokenizer           string   `json:"context_tokenizer_path,omitempty"`
-	ReservedOutput             string   `json:"reserved_output_tokens,omitempty"`
-	RunContextCompact          string   `json:"run_context_compaction,omitempty"`
-	ContextCompactPct          string   `json:"run_context_compact_percent,omitempty"`
-	MaxContextCompact          string   `json:"max_context_compactions,omitempty"`
-	ProgressObserver           bool     `json:"progress_observer,omitempty"`
+	OpenAIAPIKey               string                       `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey           string                       `json:"openrouter_api_key,omitempty"`
+	Workflow                   string                       `json:"workflow,omitempty"`
+	Provider                   string                       `json:"provider,omitempty"`
+	OpenAIModel                string                       `json:"openai_model,omitempty"`
+	OpenRouterModel            string                       `json:"openrouter_model,omitempty"`
+	ProviderSecrets            map[string]map[string]string `json:"provider_secrets,omitempty"`
+	ProviderOptions            map[string]map[string]string `json:"provider_options,omitempty"`
+	ProviderModels             map[string]string            `json:"provider_models,omitempty"`
+	Theme                      string                       `json:"theme,omitempty"`
+	ToolHarness                string                       `json:"tool_harness,omitempty"`
+	ToolRoot                   string                       `json:"tool_root,omitempty"`
+	ToolTimeout                string                       `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds              string                       `json:"tool_max_rounds,omitempty"`
+	ToolApproval               string                       `json:"tool_approval_mode,omitempty"`
+	TestCommands               []string                     `json:"test_commands,omitempty"`
+	MCPConfig                  string                       `json:"mcp_config,omitempty"`
+	AgenticPersistenceRounds   string                       `json:"agentic_persistence_rounds,omitempty"`
+	AgenticPersistenceMaxSteps string                       `json:"agentic_persistence_max_steps,omitempty"`
+	AgenticPersistenceTimeout  string                       `json:"agentic_persistence_timeout_ms,omitempty"`
+	PlannerReviewMaxRevisions  string                       `json:"planner_review_max_revisions,omitempty"`
+	RouterMode                 string                       `json:"router_mode,omitempty"`
+	RouterModelDir             string                       `json:"router_model_dir,omitempty"`
+	RouterTimeout              string                       `json:"router_timeout_ms,omitempty"`
+	RouterConfidence           string                       `json:"router_confidence_threshold,omitempty"`
+	SkillsMode                 string                       `json:"skills_mode,omitempty"`
+	SkillsDir                  string                       `json:"skills_dir,omitempty"`
+	SkillNames                 []string                     `json:"skill_names,omitempty"`
+	AllowSkillScripts          bool                         `json:"allow_skill_scripts,omitempty"`
+	ContextWindow              string                       `json:"context_window_tokens,omitempty"`
+	ContextWarning             string                       `json:"context_warning_percent,omitempty"`
+	ContextTokenizer           string                       `json:"context_tokenizer_path,omitempty"`
+	ReservedOutput             string                       `json:"reserved_output_tokens,omitempty"`
+	RunContextCompact          string                       `json:"run_context_compaction,omitempty"`
+	ContextCompactPct          string                       `json:"run_context_compact_percent,omitempty"`
+	MaxContextCompact          string                       `json:"max_context_compactions,omitempty"`
+	ProgressObserver           bool                         `json:"progress_observer,omitempty"`
 }
 
 type startupOptions struct {

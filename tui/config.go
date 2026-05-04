@@ -26,12 +26,19 @@ type tuiConfigResolution struct {
 }
 
 func commandEnv(base []string, config runConfig) []string {
-	keyName := apiKeyName(config.Provider)
-	if keyName == "" {
-		return base
+	env := base
+	for _, field := range providerSecretFields(config.Provider) {
+		value := strings.TrimSpace(config.ProviderSecrets[field.Name])
+		if value == "" && field.Name == "api_key" {
+			value = strings.TrimSpace(config.APIKey)
+		}
+		if value == "" {
+			continue
+		}
+		env = removeEnv(env, field.Env)
+		env = append(env, field.Env+"="+value)
 	}
-	env := removeEnv(base, keyName)
-	return append(env, keyName+"="+config.APIKey)
+	return env
 }
 
 func removeEnv(env []string, name string) []string {
@@ -262,7 +269,7 @@ func loadUserSavedConfig(userPath string, legacyPath string) (savedConfig, bool,
 }
 
 func normalizeProjectSavedConfig(config savedConfig, projectRoot string, projectPath string) (savedConfig, error) {
-	if strings.TrimSpace(config.OpenAIAPIKey) != "" || strings.TrimSpace(config.OpenRouterAPIKey) != "" {
+	if strings.TrimSpace(config.OpenAIAPIKey) != "" || strings.TrimSpace(config.OpenRouterAPIKey) != "" || len(config.ProviderSecrets) > 0 {
 		return savedConfig{}, fmt.Errorf("project TUI config %s must not contain API keys; keep provider secrets in ~/.agent-machine/tui-config.json", projectPath)
 	}
 
@@ -351,6 +358,8 @@ func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
 	overlayString(&base.Provider, override.Provider)
 	overlayString(&base.OpenAIModel, override.OpenAIModel)
 	overlayString(&base.OpenRouterModel, override.OpenRouterModel)
+	overlayStringMapMap(&base.ProviderOptions, override.ProviderOptions)
+	overlayStringMap(&base.ProviderModels, override.ProviderModels)
 	overlayString(&base.Theme, override.Theme)
 	overlayString(&base.ToolHarness, override.ToolHarness)
 	overlayString(&base.ToolRoot, override.ToolRoot)
@@ -384,6 +393,41 @@ func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
 		base.ProgressObserver = true
 	}
 	return base
+}
+
+func overlayStringMapMap(target *map[string]map[string]string, values map[string]map[string]string) {
+	if len(values) == 0 {
+		return
+	}
+	if *target == nil {
+		*target = map[string]map[string]string{}
+	}
+	for key, value := range values {
+		(*target)[key] = copyStringMap(value)
+	}
+}
+
+func overlayStringMap(target *map[string]string, values map[string]string) {
+	if len(values) == 0 {
+		return
+	}
+	if *target == nil {
+		*target = map[string]string{}
+	}
+	for key, value := range values {
+		(*target)[key] = value
+	}
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func overlayString(target *string, value string) {
@@ -476,6 +520,48 @@ func migrateLegacyLocalRouterDefault(config *savedConfig, configPath string) boo
 	config.RouterTimeout = ""
 	config.RouterConfidence = ""
 	return true
+}
+
+func migrateLegacyProviderSettings(config *savedConfig) bool {
+	changed := false
+	if strings.TrimSpace(config.OpenAIAPIKey) != "" {
+		rememberProviderSecret(&config.ProviderSecrets, string(providerOpenAI), "api_key", config.OpenAIAPIKey)
+		config.OpenAIAPIKey = ""
+		changed = true
+	}
+	if strings.TrimSpace(config.OpenRouterAPIKey) != "" {
+		rememberProviderSecret(&config.ProviderSecrets, string(providerOpenRouter), "api_key", config.OpenRouterAPIKey)
+		config.OpenRouterAPIKey = ""
+		changed = true
+	}
+	if strings.TrimSpace(config.OpenAIModel) != "" {
+		rememberProviderModel(&config.ProviderModels, string(providerOpenAI), config.OpenAIModel)
+		config.OpenAIModel = ""
+		changed = true
+	}
+	if strings.TrimSpace(config.OpenRouterModel) != "" {
+		rememberProviderModel(&config.ProviderModels, string(providerOpenRouter), config.OpenRouterModel)
+		config.OpenRouterModel = ""
+		changed = true
+	}
+	return changed
+}
+
+func rememberProviderSecret(secrets *map[string]map[string]string, providerID string, field string, value string) {
+	if *secrets == nil {
+		*secrets = map[string]map[string]string{}
+	}
+	if (*secrets)[providerID] == nil {
+		(*secrets)[providerID] = map[string]string{}
+	}
+	(*secrets)[providerID][field] = value
+}
+
+func rememberProviderModel(models *map[string]string, providerID string, model string) {
+	if *models == nil {
+		*models = map[string]string{}
+	}
+	(*models)[providerID] = model
 }
 
 func saveSavedConfig(path string, config savedConfig) error {
