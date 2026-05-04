@@ -14,8 +14,9 @@ defmodule AgentMachine.Skills.Generator do
     description =
       opts |> fetch_required!(:description) |> require_non_empty_binary!("description")
 
-    provider = opts |> fetch_required!(:provider) |> provider_module!()
-    model = opts |> fetch_required!(:model) |> require_non_empty_binary!("model")
+    provider_id = fetch_required!(opts, :provider)
+    provider = provider_module!(provider_id)
+    model = model!(provider_id, fetch_required!(opts, :model))
 
     http_timeout_ms =
       opts |> fetch_required!(:http_timeout_ms) |> require_positive_integer!("http timeout ms")
@@ -30,7 +31,7 @@ defmodule AgentMachine.Skills.Generator do
     payload =
       name
       |> generator_agent(description, provider, model, pricing)
-      |> complete_provider!(http_timeout_ms)
+      |> complete_provider!(http_timeout_ms, Keyword.get(opts, :provider_options, %{}))
       |> parse_payload!(name)
 
     write_skill!(root, payload)
@@ -52,8 +53,8 @@ defmodule AgentMachine.Skills.Generator do
     })
   end
 
-  defp complete_provider!(%Agent{} = agent, http_timeout_ms) do
-    case agent.provider.complete(agent, provider_opts(http_timeout_ms)) do
+  defp complete_provider!(%Agent{} = agent, http_timeout_ms, provider_options) do
+    case agent.provider.complete(agent, provider_opts(http_timeout_ms, provider_options)) do
       {:ok, %{output: output}} when is_binary(output) ->
         output
 
@@ -66,9 +67,10 @@ defmodule AgentMachine.Skills.Generator do
     end
   end
 
-  defp provider_opts(http_timeout_ms) do
+  defp provider_opts(http_timeout_ms, provider_options) do
     [
       http_timeout_ms: http_timeout_ms,
+      provider_options: provider_options,
       run_context: %{results: %{}, artifacts: %{}},
       runtime_facts: false
     ]
@@ -148,12 +150,21 @@ defmodule AgentMachine.Skills.Generator do
   end
 
   defp provider_module!(:echo), do: AgentMachine.Providers.Echo
-  defp provider_module!(:openai), do: AgentMachine.Providers.OpenAIResponses
-  defp provider_module!(:openrouter), do: AgentMachine.Providers.OpenRouterChat
+
+  defp provider_module!(provider) when is_binary(provider) do
+    AgentMachine.ProviderCatalog.fetch!(provider)
+    AgentMachine.Providers.ReqLLM
+  end
 
   defp provider_module!(provider) do
     raise ArgumentError,
-          "skill generator provider must be :echo, :openai, or :openrouter, got: #{inspect(provider)}"
+          "skill generator provider must be :echo or a supported ReqLLM provider id, got: #{inspect(provider)}"
+  end
+
+  defp model!(:echo, model), do: require_non_empty_binary!(model, "model")
+
+  defp model!(provider, model) when is_binary(provider) do
+    provider <> ":" <> require_non_empty_binary!(model, "model")
   end
 
   defp fetch_required!(opts, key) do
