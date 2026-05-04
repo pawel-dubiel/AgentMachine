@@ -40,6 +40,12 @@ defmodule AgentMachine.LLMRouter do
     def clear_test_classifier do
       GenServer.call(__MODULE__, :clear_test_classifier)
     end
+
+    def provider_opts_for_test!(provider, http_timeout_ms) do
+      provider
+      |> provider_module!()
+      |> provider_opts(http_timeout_ms, %{})
+    end
   end
 
   @impl true
@@ -108,8 +114,10 @@ defmodule AgentMachine.LLMRouter do
 
   defp classify_input!(input, nil) do
     provider = input |> required_provider!() |> provider_module!()
-    model = required_model!(input)
+    provider_id = required_provider!(input)
+    model = model!(provider_id, required_model!(input))
     pricing = required_pricing!(input)
+    provider_options = Map.get(input, :provider_options, %{})
 
     http_timeout_ms =
       required_positive_integer!(Map.get(input, :http_timeout_ms), :http_timeout_ms)
@@ -124,7 +132,7 @@ defmodule AgentMachine.LLMRouter do
         input: prompt(input)
       })
 
-    case provider.complete(agent, provider_opts(http_timeout_ms)) do
+    case provider.complete(agent, provider_opts(provider, http_timeout_ms, provider_options)) do
       {:ok, %{output: output}} ->
         output
         |> decode_response!()
@@ -138,15 +146,24 @@ defmodule AgentMachine.LLMRouter do
     end
   end
 
-  defp provider_opts(http_timeout_ms) do
+  defp provider_opts(provider, http_timeout_ms, provider_options) do
+    base_provider_opts(provider, http_timeout_ms, provider_options)
+  end
+
+  defp base_provider_opts(AgentMachine.Providers.ReqLLM, http_timeout_ms, provider_options) do
     [
       http_timeout_ms: http_timeout_ms,
-      response_format: router_response_format(),
+      provider_options: provider_options,
       run_context: %{agent_graph: %{}, results: %{}, artifacts: %{}}
     ]
   end
 
-  defp router_response_format, do: %{"type" => "json_object"}
+  defp base_provider_opts(_provider, http_timeout_ms, _provider_options) do
+    [
+      http_timeout_ms: http_timeout_ms,
+      run_context: %{agent_graph: %{}, results: %{}, artifacts: %{}}
+    ]
+  end
 
   defp decode_response!(output) when is_binary(output) do
     if not String.contains?(output, "{") do
@@ -440,8 +457,10 @@ defmodule AgentMachine.LLMRouter do
           "llm router #{inspect(field)} must be a positive integer, got: #{inspect(value)}"
   end
 
-  defp provider_module!(:openai), do: AgentMachine.Providers.OpenAIResponses
-  defp provider_module!(:openrouter), do: AgentMachine.Providers.OpenRouterChat
+  defp provider_module!(provider) when is_binary(provider) do
+    AgentMachine.ProviderCatalog.fetch!(provider)
+    AgentMachine.Providers.ReqLLM
+  end
 
   defp provider_module!(provider) when is_atom(provider) do
     if Code.ensure_loaded?(provider) and function_exported?(provider, :complete, 2) do
@@ -452,8 +471,13 @@ defmodule AgentMachine.LLMRouter do
   end
 
   defp provider_module!(provider) do
-    raise ArgumentError, "llm router provider must be an atom, got: #{inspect(provider)}"
+    raise ArgumentError,
+          "llm router provider must be a string or provider module, got: #{inspect(provider)}"
   end
+
+  defp model!(:echo, model), do: model
+  defp model!(provider, model) when is_binary(provider), do: provider <> ":" <> model
+  defp model!(_provider, model), do: model
 
   defp call_timeout_ms(input) do
     case Map.get(input, :http_timeout_ms) do

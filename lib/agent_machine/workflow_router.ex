@@ -20,6 +20,7 @@ defmodule AgentMachine.WorkflowRouter do
     :provider,
     :model,
     :pricing,
+    :provider_options,
     :http_timeout_ms,
     :approval_mode,
     :test_commands,
@@ -43,6 +44,7 @@ defmodule AgentMachine.WorkflowRouter do
       provider: spec.provider,
       model: spec.model,
       pricing: spec.pricing,
+      provider_options: spec.provider_options || %{},
       http_timeout_ms: spec.http_timeout_ms,
       approval_mode: spec.tool_approval_mode,
       test_commands: spec.test_commands || [],
@@ -348,6 +350,7 @@ defmodule AgentMachine.WorkflowRouter do
       provider: input.provider,
       model: input.model,
       pricing: input.pricing,
+      provider_options: input.provider_options || %{},
       http_timeout_ms: input.http_timeout_ms
     })
     |> validate_classifier_result!()

@@ -93,7 +93,8 @@ defmodule AgentMachine.ContextCompactor do
 
   defp conversation_agent!(opts) do
     provider = provider_module!(Keyword.fetch!(opts, :provider))
-    model = require_non_empty_binary!(Keyword.fetch!(opts, :model), :model)
+    provider_id = Keyword.fetch!(opts, :provider)
+    model = model!(provider_id, Keyword.fetch!(opts, :model))
     pricing = Keyword.fetch!(opts, :pricing)
 
     Agent.new!(%{
@@ -121,17 +122,20 @@ defmodule AgentMachine.ContextCompactor do
       runtime_facts: false
     ]
     |> maybe_put_http_timeout(provider, opts)
+    |> maybe_put_provider_options(provider, opts)
   end
 
-  defp maybe_put_http_timeout(opts, provider, source_opts)
-       when provider in [
-              AgentMachine.Providers.OpenAIResponses,
-              AgentMachine.Providers.OpenRouterChat
-            ] do
+  defp maybe_put_http_timeout(opts, AgentMachine.Providers.ReqLLM, source_opts) do
     Keyword.put(opts, :http_timeout_ms, Keyword.fetch!(source_opts, :http_timeout_ms))
   end
 
   defp maybe_put_http_timeout(opts, _provider, _source_opts), do: opts
+
+  defp maybe_put_provider_options(opts, AgentMachine.Providers.ReqLLM, source_opts) do
+    Keyword.put(opts, :provider_options, Keyword.get(source_opts, :provider_options, %{}))
+  end
+
+  defp maybe_put_provider_options(opts, _provider, _source_opts), do: opts
 
   defp compaction_instructions("conversation") do
     """
@@ -262,11 +266,20 @@ defmodule AgentMachine.ContextCompactor do
   end
 
   defp provider_module!(:echo), do: AgentMachine.Providers.Echo
-  defp provider_module!(:openai), do: AgentMachine.Providers.OpenAIResponses
-  defp provider_module!(:openrouter), do: AgentMachine.Providers.OpenRouterChat
+
+  defp provider_module!(provider) when is_binary(provider) do
+    AgentMachine.ProviderCatalog.fetch!(provider)
+    AgentMachine.Providers.ReqLLM
+  end
 
   defp provider_module!(provider) do
     raise ArgumentError, "unsupported compaction provider: #{inspect(provider)}"
+  end
+
+  defp model!(:echo, model), do: require_non_empty_binary!(model, :model)
+
+  defp model!(provider, model) when is_binary(provider) do
+    provider <> ":" <> require_non_empty_binary!(model, :model)
   end
 
   defp require_non_empty_binary!(value, _field) when is_binary(value) and byte_size(value) > 0,
