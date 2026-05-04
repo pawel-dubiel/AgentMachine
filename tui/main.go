@@ -481,6 +481,8 @@ type model struct {
 	workflowSet                bool
 	provider                   provider
 	providerSet                bool
+	providerPickerOpen         bool
+	providerPickerIndex        int
 	theme                      tuiTheme
 	savedConfig                savedConfig
 	configPath                 string
@@ -564,6 +566,7 @@ func initialModelWithArgs(args []string) (model, error) {
 		return model{}, err
 	}
 	migratedRouterDefault := migrateLegacyLocalRouterDefault(&savedConfig, configPath)
+	migratedProviderSettings := migrateLegacyProviderSettings(&savedConfig)
 	migratedToolRoot, err := migrateSavedToolRootToWorkingDir(&savedConfig, configResolution.WorkingDir)
 	if err != nil {
 		return model{}, err
@@ -578,7 +581,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() || migratedRouterDefault || migratedToolRoot || loadedLegacyConfig || initializedSkillsDir {
+	if startup.hasOverrides() || migratedRouterDefault || migratedProviderSettings || migratedToolRoot || loadedLegacyConfig || initializedSkillsDir {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}
@@ -711,6 +714,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		if m.providerPickerOpen {
+			switch msg.String() {
+			case "esc":
+				m.providerPickerOpen = false
+				m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider picker canceled"})
+				return m, nil
+			case "up":
+				m.moveProviderPicker(-1)
+				return m, nil
+			case "down":
+				m.moveProviderPicker(1)
+				return m, nil
+			case "enter":
+				return m.selectProviderFromPicker()
+			}
+			return m, nil
 		}
 
 		if m.modelPickerOpen {
@@ -1523,6 +1544,10 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleThemeCommand(args)
 	case "key":
 		return m.handleKeyCommand(args)
+	case "provider-secret":
+		return m.handleProviderSecretCommand(args)
+	case "provider-option":
+		return m.handleProviderOptionCommand(args)
 	case "compact":
 		return m.handleCompactCommand(args)
 	case "context":
@@ -2590,11 +2615,12 @@ func (m model) handleRouterStatusCommand(args []string) (tea.Model, tea.Cmd) {
 
 func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider: " + string(m.provider)})
+		m.openProviderPicker()
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "open provider picker, use Up/Down and Enter to select"})
 		return m, nil
 	}
 	if len(args) != 1 {
-		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /provider echo|openai|openrouter"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /provider [<provider-id>]"})
 		return m, nil
 	}
 
@@ -2604,25 +2630,63 @@ func (m model) handleProviderCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	return m.applyProvider(nextProvider, true)
+}
+
+func (m *model) openProviderPicker() {
+	m.providerPickerOpen = true
+	m.modelPickerOpen = false
+	m.skillPickerOpen = false
+	m.view = viewChat
+	if m.providerSet {
+		m.providerPickerIndex = providerListIndex(m.provider)
+	} else {
+		m.providerPickerIndex = 0
+	}
+}
+
+func (m model) selectProviderFromPicker() (tea.Model, tea.Cmd) {
+	if len(providers) == 0 {
+		m.providerPickerOpen = false
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "no providers available"})
+		return m, nil
+	}
+	if m.providerPickerIndex < 0 || m.providerPickerIndex >= len(providers) {
+		m.providerPickerIndex = 0
+	}
+	nextProvider := providers[m.providerPickerIndex]
+	resetModel := !m.providerSet || m.provider != nextProvider
+	m.providerPickerOpen = false
+	return m.applyProvider(nextProvider, resetModel)
+}
+
+func (m model) applyProvider(nextProvider provider, resetModel bool) (tea.Model, tea.Cmd) {
 	m.provider = nextProvider
 	m.providerSet = true
 	m.savedConfig.Provider = string(nextProvider)
-	m.savedConfig.rememberModel(nextProvider, "")
-	m.modelOptions = nil
-	m.modelIndex = 0
-	m.selectedModel = ""
-	m.modelStatus = ""
+	if resetModel {
+		m.savedConfig.rememberModel(nextProvider, "")
+		m.modelOptions = nil
+		m.modelIndex = 0
+		m.selectedModel = ""
+		m.modelStatus = ""
+	}
+	m.providerPickerOpen = false
 	m.modelPickerOpen = false
 	m.modelPickerPending = false
 	m.modelPickerQuery = ""
 	m.view = viewChat
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider set to " + m.provider.Label()})
+	if resetModel {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider set to " + m.provider.Label()})
+	} else {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider kept as " + m.provider.Label()})
+	}
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 		return m, nil
 	}
 
-	if m.provider != providerEcho {
+	if resetModel && m.provider != providerEcho {
 		return m, m.loadModelsCommand()
 	}
 	return m, nil
@@ -2638,6 +2702,10 @@ func (m model) handleKeyCommand(args []string) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "Echo does not use an API key"})
 		return m, nil
 	}
+	if apiKeyName(m.provider) == "" {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "provider does not have an api_key field; use /provider-secret <field> <value>"})
+		return m, nil
+	}
 	if len(args) == 0 {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /key <api-key>"})
 		return m, nil
@@ -2650,6 +2718,57 @@ func (m model) handleKeyCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved " + apiKeyName(m.provider)})
+	return m, m.loadModelsCommand()
+}
+
+func (m model) handleProviderSecretCommand(args []string) (tea.Model, tea.Cmd) {
+	if !m.providerSet || m.provider == providerEcho {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a remote provider before saving provider secrets"})
+		m.view = viewSetup
+		return m, nil
+	}
+	if len(args) < 2 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /provider-secret <field> <value>"})
+		return m, nil
+	}
+	field := args[0]
+	if !providerHasSecretField(m.provider, field) {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown secret field for " + m.provider.Label() + ": " + field})
+		return m, nil
+	}
+	m.rememberProviderSecret(m.provider, field, strings.Join(args[1:], " "))
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved provider secret " + field})
+	return m, m.loadModelsCommand()
+}
+
+func (m model) handleProviderOptionCommand(args []string) (tea.Model, tea.Cmd) {
+	if !m.providerSet || m.provider == providerEcho {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a remote provider before saving provider options"})
+		m.view = viewSetup
+		return m, nil
+	}
+	if len(args) < 2 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /provider-option <field> <value>"})
+		return m, nil
+	}
+	field := args[0]
+	if !providerHasOptionField(m.provider, field) {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "unknown option field for " + m.provider.Label() + ": " + field})
+		return m, nil
+	}
+	m.rememberProviderOption(m.provider, field, strings.Join(args[1:], " "))
+	m.modelOptions = nil
+	m.selectedModel = ""
+	m.savedConfig.rememberModel(m.provider, "")
+	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+		return m, nil
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "saved provider option " + field})
 	return m, m.loadModelsCommand()
 }
 

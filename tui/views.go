@@ -31,6 +31,13 @@ func (m model) View() string {
 	b.WriteString(styles.Hint.Render(wrapText(m.statusLine(), m.viewWidth())))
 	b.WriteString("\n\n")
 
+	if m.providerPickerOpen {
+		b.WriteString(m.providerPickerView())
+		b.WriteString("\n\n")
+		b.WriteString(styles.Hint.Render("Provider picker is active. Enter selects; Esc closes."))
+		return b.String()
+	}
+
 	if m.modelPickerOpen {
 		b.WriteString(m.modelPickerView())
 		b.WriteString("\n\n")
@@ -89,7 +96,7 @@ func (m model) statusLine() string {
 	parts = append(parts, "provider="+string(m.provider))
 	if m.provider != providerEcho {
 		parts = append(parts, "model="+emptyAsNone(m.selectedModel))
-		parts = append(parts, apiKeyName(m.provider)+"="+keyStatus(m.apiKey()))
+		parts = append(parts, "setup="+m.providerSetupStatus())
 	}
 	if m.running {
 		parts = append(parts, "run=running")
@@ -1134,7 +1141,7 @@ func (m model) setupView() string {
 		"theme: " + string(m.activeTheme()),
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
-		"key: " + keyStatus(m.apiKey()),
+		"provider setup: " + m.providerSetupStatus(),
 		m.routerStatus(),
 		m.toolsStatus(),
 		m.agenticPersistenceStatus(),
@@ -1150,9 +1157,11 @@ func (m model) setupView() string {
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
 		"Commands",
-		"/provider echo|openai|openrouter",
+		"/provider [<provider-id>]",
 		"/theme classic|matrix",
 		"/key <api-key>",
+		"/provider-secret <field> <value>",
+		"/provider-option <field> <value>",
 		"/router deterministic",
 		"/router llm",
 		"/router local <model-dir>",
@@ -1192,6 +1201,39 @@ func (m model) setupView() string {
 		"/model",
 		"/back",
 	}, "\n")
+}
+
+func (m model) providerPickerView() string {
+	styles := m.styles()
+	current := "(missing)"
+	if m.providerSet {
+		current = fmt.Sprintf("%s (%s)", m.provider.Label(), m.provider)
+	}
+	lines := []string{
+		styles.Label.Render("Select provider"),
+		"",
+		"Current: " + current,
+		"Use Up / Down, Enter to select, Esc to cancel",
+		"",
+	}
+
+	for index, option := range providers {
+		prefix := "  "
+		if index == m.providerPickerIndex {
+			prefix = "> "
+		}
+		currentMarker := " "
+		if m.providerSet && option == m.provider {
+			currentMarker = "*"
+		}
+		lines = append(lines, fmt.Sprintf("%s[%s] %-16s %s", prefix, currentMarker, option, option.Label()))
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(styles.Border).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
 }
 
 func (m model) modelPickerView() string {
@@ -1580,15 +1622,17 @@ func helpTextForTheme(theme tuiTheme) string {
 		"Tab / Shift+Tab: switch views",
 		"Esc: back",
 		"Enter: submit or open selected agent",
-		"Up / Down: command history / model picker / agent selection in Agents",
+		"Up / Down: command history / provider/model picker / agent selection in Agents",
 		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
 		"Ctrl+C: quit",
 		"",
 		"Commands:",
 		"/setup",
-		"/provider echo|openai|openrouter",
+		"/provider [<provider-id>]",
 		"/theme classic|matrix",
 		"/key <api-key>",
+		"/provider-secret <field> <value>",
+		"/provider-option <field> <value>",
 		"/router deterministic|llm|local <model-dir>",
 		"/router-timeout <ms>",
 		"/router-confidence <float>",
