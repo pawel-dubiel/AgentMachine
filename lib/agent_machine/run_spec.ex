@@ -19,6 +19,7 @@ defmodule AgentMachine.RunSpec do
     :max_attempts,
     :http_timeout_ms,
     :pricing,
+    :provider_options,
     :tool_harness,
     :tool_harnesses,
     :tool_timeout_ms,
@@ -53,13 +54,14 @@ defmodule AgentMachine.RunSpec do
   @type t :: %__MODULE__{
           task: binary(),
           workflow: :chat | :basic | :agentic | :auto,
-          provider: :echo | :openai | :openrouter,
+          provider: :echo | binary(),
           model: binary() | nil,
           timeout_ms: pos_integer(),
           max_steps: pos_integer(),
           max_attempts: pos_integer(),
           http_timeout_ms: pos_integer() | nil,
           pricing: map() | nil,
+          provider_options: map() | nil,
           tool_harness: :demo | :time | :local_files | :code_edit | :mcp | :skills | nil,
           tool_harnesses: [:demo | :time | :local_files | :code_edit | :mcp | :skills] | nil,
           tool_timeout_ms: pos_integer() | nil,
@@ -95,6 +97,7 @@ defmodule AgentMachine.RunSpec do
   def new!(attrs) when is_map(attrs) do
     attrs
     |> atomize_keys!()
+    |> normalize_provider!()
     |> normalize_skills!()
     |> normalize_tool_harnesses!()
     |> then(&struct!(__MODULE__, &1))
@@ -133,10 +136,11 @@ defmodule AgentMachine.RunSpec do
   defp validate_provider_options!(%__MODULE__{provider: :echo}), do: :ok
 
   defp validate_provider_options!(%__MODULE__{provider: provider} = spec)
-       when provider in [:openai, :openrouter] do
+       when is_binary(provider) do
     require_non_empty_binary!(spec.model, :model)
     require_positive_integer!(spec.http_timeout_ms, :http_timeout_ms)
     AgentMachine.Pricing.validate!(spec.pricing)
+    AgentMachine.ProviderCatalog.validate_options!(provider, spec.provider_options || %{})
   end
 
   defp atomize_keys!(attrs) do
@@ -149,6 +153,13 @@ defmodule AgentMachine.RunSpec do
     end)
   end
 
+  defp normalize_provider!(attrs) do
+    Map.update(attrs, :provider, nil, fn
+      :echo -> :echo
+      provider -> provider
+    end)
+  end
+
   defp require_workflow!(workflow) when workflow in [:chat, :basic, :agentic, :auto], do: :ok
 
   defp require_workflow!(workflow) do
@@ -156,11 +167,16 @@ defmodule AgentMachine.RunSpec do
           "run spec :workflow must be :chat, :basic, :agentic, or :auto, got: #{inspect(workflow)}"
   end
 
-  defp require_provider!(provider) when provider in [:echo, :openai, :openrouter], do: :ok
+  defp require_provider!(:echo), do: :ok
+
+  defp require_provider!(provider) when is_binary(provider) do
+    AgentMachine.ProviderCatalog.fetch!(provider)
+    :ok
+  end
 
   defp require_provider!(provider) do
     raise ArgumentError,
-          "run spec :provider must be :echo, :openai, or :openrouter, got: #{inspect(provider)}"
+          "run spec :provider must be :echo or a supported ReqLLM provider id, got: #{inspect(provider)}"
   end
 
   defp validate_tool_options!(%__MODULE__{

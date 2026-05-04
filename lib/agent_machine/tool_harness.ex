@@ -184,64 +184,39 @@ defmodule AgentMachine.ToolHarness do
     Enum.map(tools, &definition!(&1, opts))
   end
 
-  def put_openai_tools!(body, opts) when is_map(body) do
-    case allowed_tools(opts) do
-      [] -> body
-      tools -> Map.put(body, "tools", Enum.map(definitions!(tools, opts), &openai_tool/1))
-    end
-  end
-
-  def openai_tool_groups!(opts) when is_list(opts) do
+  def req_llm_tools!(opts) when is_list(opts) do
     opts
     |> allowed_tools()
     |> definitions!(opts)
-    |> split_provider_tool_groups(&openai_tool/1)
+    |> Enum.map(&req_llm_tool!/1)
   end
 
-  def put_openrouter_tools!(body, opts) when is_map(body) do
-    case allowed_tools(opts) do
-      [] -> body
-      tools -> Map.put(body, "tools", Enum.map(definitions!(tools, opts), &openrouter_tool/1))
-    end
-  end
-
-  def openrouter_tool_groups!(opts) when is_list(opts) do
+  def req_llm_tool_groups!(opts) when is_list(opts) do
     opts
     |> allowed_tools()
     |> definitions!(opts)
-    |> split_provider_tool_groups(&openrouter_tool/1)
+    |> split_provider_tool_groups(&req_llm_tool_schema/1)
   end
 
-  def openai_tool_calls!(response, opts) do
+  def req_llm_tool_calls!(calls, opts) when is_list(calls) do
     tools_by_name = tools_by_name(opts)
 
-    response
-    |> Map.get("output", [])
-    |> Enum.flat_map(fn
-      %{"type" => "function_call"} = call -> [provider_tool_call!(call, tools_by_name)]
-      _other -> []
+    Enum.map(calls, fn call ->
+      id = fetch_tool_call_field!(call, :id)
+      name = fetch_tool_call_field!(call, :name)
+      arguments = fetch_tool_call_field!(call, :arguments)
+
+      %{
+        id: id,
+        tool: tool_by_name!(tools_by_name, name),
+        input: decode_arguments!(arguments)
+      }
     end)
   end
 
-  def openrouter_tool_calls!(message, opts) when is_map(message) do
-    tools_by_name = tools_by_name(opts)
-
-    message
-    |> Map.get("tool_calls", [])
-    |> Enum.map(fn
-      %{"id" => id, "function" => %{"name" => name, "arguments" => arguments}} ->
-        %{
-          id: id,
-          tool: tool_by_name!(tools_by_name, name),
-          input: decode_arguments!(arguments)
-        }
-
-      call ->
-        raise ArgumentError, "invalid OpenRouter tool call: #{inspect(call)}"
-    end)
+  def req_llm_tool_calls!(calls, _opts) do
+    raise ArgumentError, "ReqLLM tool calls must be a list, got: #{inspect(calls)}"
   end
-
-  def openrouter_tool_calls!(_message, _opts), do: []
 
   defp definition!(tool, opts) when is_atom(tool) do
     unless Code.ensure_loaded?(tool) and function_exported?(tool, :run, 2) do
@@ -291,23 +266,20 @@ defmodule AgentMachine.ToolHarness do
           "tool #{inspect(tool)} definition/0 must return a map, got: #{inspect(definition)}"
   end
 
-  defp openai_tool(definition) do
+  defp req_llm_tool!(definition) do
+    ReqLLM.Tool.new!(
+      name: definition.name,
+      description: definition.description,
+      parameter_schema: definition.input_schema,
+      callback: fn _input -> {:error, "AgentMachine executes tools outside ReqLLM"} end
+    )
+  end
+
+  defp req_llm_tool_schema(definition) do
     %{
-      "type" => "function",
       "name" => definition.name,
       "description" => definition.description,
       "parameters" => definition.input_schema
-    }
-  end
-
-  defp openrouter_tool(definition) do
-    %{
-      "type" => "function",
-      "function" => %{
-        "name" => definition.name,
-        "description" => definition.description,
-        "parameters" => definition.input_schema
-      }
     }
   end
 
@@ -329,15 +301,24 @@ defmodule AgentMachine.ToolHarness do
 
   defp mcp_definition?(_definition), do: false
 
-  defp provider_tool_call!(call, tools_by_name) do
-    name = Map.fetch!(call, "name")
-    id = Map.get(call, "call_id") || Map.fetch!(call, "id")
+  defp fetch_tool_call_field!(call, field) when is_map(call) do
+    string_field = Atom.to_string(field)
 
-    %{
-      id: id,
-      tool: tool_by_name!(tools_by_name, name),
-      input: call |> Map.fetch!("arguments") |> decode_arguments!()
-    }
+    cond do
+      Map.has_key?(call, field) ->
+        Map.fetch!(call, field)
+
+      Map.has_key?(call, string_field) ->
+        Map.fetch!(call, string_field)
+
+      true ->
+        raise ArgumentError,
+              "invalid ReqLLM tool call missing #{inspect(field)}: #{inspect(call)}"
+    end
+  end
+
+  defp fetch_tool_call_field!(call, _field) do
+    raise ArgumentError, "invalid ReqLLM tool call: #{inspect(call)}"
   end
 
   defp decode_arguments!(arguments) when is_binary(arguments) do

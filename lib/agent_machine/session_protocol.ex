@@ -9,6 +9,7 @@ defmodule AgentMachine.SessionProtocol do
     "task" => :task,
     "workflow" => :workflow,
     "provider" => :provider,
+    "provider_options" => :provider_options,
     "log_file" => :log_file,
     "model" => :model,
     "timeout_ms" => :timeout_ms,
@@ -49,8 +50,6 @@ defmodule AgentMachine.SessionProtocol do
   }
 
   @workflow_values %{"chat" => :chat, "basic" => :basic, "agentic" => :agentic, "auto" => :auto}
-  @provider_values %{"echo" => :echo, "openai" => :openai, "openrouter" => :openrouter}
-
   @harness_values %{
     "demo" => :demo,
     "time" => :time,
@@ -177,7 +176,7 @@ defmodule AgentMachine.SessionProtocol do
   defp normalize_run_attrs!(attrs) do
     attrs
     |> normalize_atom_value!(:workflow, @workflow_values)
-    |> normalize_atom_value!(:provider, @provider_values)
+    |> normalize_provider!()
     |> normalize_optional_atom_value!(:tool_harness, @harness_values)
     |> normalize_optional_atom_list!(:tool_harnesses, @harness_values)
     |> normalize_optional_atom_value!(:tool_approval_mode, @approval_values)
@@ -186,6 +185,21 @@ defmodule AgentMachine.SessionProtocol do
     |> normalize_optional_atom_value!(:router_mode, @router_values)
     |> normalize_optional_atom_value!(:planner_review_mode, @planner_review_values)
     |> normalize_pricing!()
+    |> normalize_provider_options!()
+  end
+
+  defp normalize_provider!(attrs) do
+    Map.update!(attrs, :provider, fn
+      "echo" ->
+        :echo
+
+      provider when is_binary(provider) ->
+        AgentMachine.ProviderCatalog.fetch!(provider)
+        provider
+
+      provider ->
+        raise ArgumentError, "run :provider must be a string, got: #{inspect(provider)}"
+    end)
   end
 
   defp normalize_atom_value!(attrs, key, values) do
@@ -244,6 +258,30 @@ defmodule AgentMachine.SessionProtocol do
   end
 
   defp normalize_pricing!(attrs), do: attrs
+
+  defp normalize_provider_options!(%{provider_options: provider_options} = attrs)
+       when is_map(provider_options) do
+    provider_options =
+      Map.new(provider_options, fn
+        {key, value} when is_binary(key) and is_binary(value) ->
+          {key, value}
+
+        {key, _value} ->
+          raise ArgumentError, "unsupported provider_options entry: #{inspect(key)}"
+      end)
+
+    Map.put(attrs, :provider_options, provider_options)
+  end
+
+  defp normalize_provider_options!(%{provider_options: nil} = attrs),
+    do: Map.delete(attrs, :provider_options)
+
+  defp normalize_provider_options!(%{provider_options: provider_options}) do
+    raise ArgumentError,
+          "run :provider_options must be an object, got: #{inspect(provider_options)}"
+  end
+
+  defp normalize_provider_options!(attrs), do: attrs
 
   defp agent_ref_from_payload!(payload) do
     agent_id = Map.get(payload, "agent_id")
