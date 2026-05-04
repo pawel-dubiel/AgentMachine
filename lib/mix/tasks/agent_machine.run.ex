@@ -10,6 +10,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
   @switches [
     workflow: :string,
     provider: :string,
+    provider_option: :keep,
     model: :string,
     timeout_ms: :integer,
     max_steps: :integer,
@@ -315,6 +316,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
       task: task_from_positional!(positional),
       workflow: workflow,
       provider: provider_from_opts!(opts),
+      provider_options: provider_options_from_opts!(opts),
       model: Keyword.get(opts, :model),
       timeout_ms: fetch_required_option!(opts, :timeout_ms),
       max_steps: fetch_required_option!(opts, :max_steps),
@@ -406,17 +408,30 @@ defmodule Mix.Tasks.AgentMachine.Run do
       {:ok, "echo"} ->
         :echo
 
-      {:ok, "openai"} ->
-        :openai
-
-      {:ok, "openrouter"} ->
-        :openrouter
-
       {:ok, provider} ->
-        Mix.raise("--provider must be echo, openai, or openrouter, got: #{inspect(provider)}")
+        AgentMachine.ProviderCatalog.fetch!(provider)
+        provider
 
       :error ->
         Mix.raise("missing required --provider option")
+    end
+  end
+
+  defp provider_options_from_opts!(opts) do
+    opts
+    |> Keyword.get_values(:provider_option)
+    |> Map.new(&provider_option_pair!/1)
+  end
+
+  defp provider_option_pair!(value) when is_binary(value) do
+    case String.split(value, "=", parts: 2) do
+      [key, option_value] when key != "" and option_value != "" ->
+        {key, option_value}
+
+      _other ->
+        Mix.raise(
+          "--provider-option must be key=value with non-empty key and value, got: #{inspect(value)}"
+        )
     end
   end
 

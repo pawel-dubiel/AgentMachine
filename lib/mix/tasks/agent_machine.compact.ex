@@ -12,6 +12,7 @@ defmodule Mix.Tasks.AgentMachine.Compact do
 
   @switches [
     provider: :string,
+    provider_option: :keep,
     model: :string,
     http_timeout_ms: :integer,
     input_price_per_million: :float,
@@ -47,6 +48,7 @@ defmodule Mix.Tasks.AgentMachine.Compact do
       |> conversation_messages!()
       |> ContextCompactor.compact_conversation!(
         provider: provider_from_opts!(opts),
+        provider_options: provider_options_from_opts!(opts),
         model: model_from_opts!(opts),
         http_timeout_ms: http_timeout_ms_from_opts!(opts),
         pricing: pricing_from_opts!(opts)
@@ -93,17 +95,30 @@ defmodule Mix.Tasks.AgentMachine.Compact do
       {:ok, "echo"} ->
         :echo
 
-      {:ok, "openai"} ->
-        :openai
-
-      {:ok, "openrouter"} ->
-        :openrouter
-
       {:ok, provider} ->
-        Mix.raise("--provider must be echo, openai, or openrouter, got: #{inspect(provider)}")
+        AgentMachine.ProviderCatalog.fetch!(provider)
+        provider
 
       :error ->
         Mix.raise("missing required --provider option")
+    end
+  end
+
+  defp provider_options_from_opts!(opts) do
+    opts
+    |> Keyword.get_values(:provider_option)
+    |> Map.new(&provider_option_pair!/1)
+  end
+
+  defp provider_option_pair!(value) when is_binary(value) do
+    case String.split(value, "=", parts: 2) do
+      [key, option_value] when key != "" and option_value != "" ->
+        {key, option_value}
+
+      _other ->
+        Mix.raise(
+          "--provider-option must be key=value with non-empty key and value, got: #{inspect(value)}"
+        )
     end
   end
 

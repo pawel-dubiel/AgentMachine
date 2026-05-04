@@ -26,6 +26,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
     path: :string,
     description: :string,
     provider: :string,
+    provider_option: :keep,
     model: :string,
     input_price_per_million: :float,
     output_price_per_million: :float,
@@ -249,6 +250,7 @@ defmodule Mix.Tasks.AgentMachine.Skills do
         skills_dir: skills_dir!(opts),
         description: fetch_required_option!(opts, :description),
         provider: provider_from_opts!(opts),
+        provider_options: provider_options_from_opts!(opts),
         model: fetch_required_option!(opts, :model),
         http_timeout_ms: fetch_required_value!(opts, :http_timeout_ms),
         pricing: pricing_from_opts!(opts)
@@ -358,14 +360,27 @@ defmodule Mix.Tasks.AgentMachine.Skills do
       "echo" ->
         :echo
 
-      "openai" ->
-        :openai
-
-      "openrouter" ->
-        :openrouter
-
       provider ->
-        Mix.raise("--provider must be echo, openai, or openrouter, got: #{inspect(provider)}")
+        AgentMachine.ProviderCatalog.fetch!(provider)
+        provider
+    end
+  end
+
+  defp provider_options_from_opts!(opts) do
+    opts
+    |> Keyword.get_values(:provider_option)
+    |> Map.new(&provider_option_pair!/1)
+  end
+
+  defp provider_option_pair!(value) when is_binary(value) do
+    case String.split(value, "=", parts: 2) do
+      [key, option_value] when key != "" and option_value != "" ->
+        {key, option_value}
+
+      _other ->
+        Mix.raise(
+          "--provider-option must be key=value with non-empty key and value, got: #{inspect(value)}"
+        )
     end
   end
 
