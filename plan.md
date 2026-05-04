@@ -4,6 +4,9 @@ Keep postponed work here. Add new items at the top of the list and include the d
 
 ## Deferred Work
 
+- [2026-05-04] Add MiniMax support only after ReqLLM exposes a documented
+  MiniMax provider ID, or after an explicitly approved narrow ReqLLM-compatible
+  adapter is planned.
 - [2026-05-03] Add a TUI skills picker/modal backed by
   `agent_machine.skills list` JSON output so installed skills can be browsed,
   filtered, and selected like models while keeping manifest parsing in Elixir.
@@ -20,7 +23,6 @@ Keep postponed work here. Add new items at the top of the list and include the d
 - [2026-04-26] Add TUI rendering for approvals, checkpoints, changed-file summaries, and rollback status while keeping the TUI thin.
 - [2026-04-19] Add cancellation and retry commands to the TUI after event streaming exists.
 - [2026-04-19] Replace plaintext TUI API key config with OS keychain integration.
-- [2026-04-19] Add a documented process for keeping built-in OpenAI TUI pricing profiles current.
 - [2026-04-18] Add durable run state so runs can be resumed after a node restart or crash.
 - [2026-04-18] Add durable retry checkpoints so retry state can survive node restarts.
 - [2026-04-18] Add long-term memory after the run-scoped artifact model is stable.

@@ -2279,8 +2279,8 @@ func TestAgentsViewRendersWorkChecklistToolRows(t *testing.T) {
 	}
 }
 
-func TestResolveConfigUsesOpenAIPricingProfileAndTimeoutDefault(t *testing.T) {
-	resolved, err := resolveConfig(runConfig{
+func TestResolveConfigRequiresExplicitRemotePricing(t *testing.T) {
+	_, err := resolveConfig(runConfig{
 		Task:     "review this project",
 		Workflow: workflowBasic,
 		Provider: providerOpenAI,
@@ -2288,42 +2288,24 @@ func TestResolveConfigUsesOpenAIPricingProfileAndTimeoutDefault(t *testing.T) {
 		Model:    "gpt-4o-mini",
 	})
 
-	if err != nil {
-		t.Fatalf("expected resolve to succeed, got %v", err)
+	if err == nil {
+		t.Fatal("expected missing pricing to fail")
 	}
-
-	if resolved.InputPrice != "0.15" {
-		t.Fatalf("unexpected input price: %q", resolved.InputPrice)
-	}
-
-	if resolved.OutputPrice != "0.6" {
-		t.Fatalf("unexpected output price: %q", resolved.OutputPrice)
-	}
-
-	if resolved.HTTPTimeout != defaultHTTPTimeoutMS {
-		t.Fatalf("unexpected HTTP timeout: %q", resolved.HTTPTimeout)
+	if !strings.Contains(err.Error(), "pricing is missing") {
+		t.Fatalf("expected pricing error, got %v", err)
 	}
 }
 
-func TestResolveConfigUsesOpenRouterPricingLookup(t *testing.T) {
-	originalLookup := openRouterPricingLookup
-	openRouterPricingLookup = func(model string) (modelPricing, error) {
-		if model != "openai/gpt-4o-mini" {
-			t.Fatalf("unexpected model lookup: %q", model)
-		}
-
-		return modelPricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}, nil
-	}
-	t.Cleanup(func() {
-		openRouterPricingLookup = originalLookup
-	})
-
+func TestResolveConfigAcceptsExplicitRemotePricingAndTimeout(t *testing.T) {
 	resolved, err := resolveConfig(runConfig{
-		Task:     "review this project",
-		Workflow: workflowBasic,
-		Provider: providerOpenRouter,
-		APIKey:   "test-key",
-		Model:    "openai/gpt-4o-mini",
+		Task:        "review this project",
+		Workflow:    workflowBasic,
+		Provider:    providerOpenRouter,
+		APIKey:      "test-key",
+		Model:       "openai/gpt-4o-mini",
+		InputPrice:  "0.15",
+		OutputPrice: "0.6",
+		HTTPTimeout: defaultHTTPTimeoutMS,
 	})
 
 	if err != nil {
@@ -2340,28 +2322,6 @@ func TestResolveConfigUsesOpenRouterPricingLookup(t *testing.T) {
 
 	if resolved.HTTPTimeout != defaultHTTPTimeoutMS {
 		t.Fatalf("unexpected HTTP timeout: %q", resolved.HTTPTimeout)
-	}
-}
-
-func TestOpenRouterModelPricingConvertsPerTokenPricesToPerMillion(t *testing.T) {
-	pricing, err := openRouterModelPricing(openRouterModel{
-		ID: "test/model",
-		Pricing: openRouterPricing{
-			Prompt:     "0.00000015",
-			Completion: "0.00000060",
-		},
-	})
-
-	if err != nil {
-		t.Fatalf("expected pricing conversion to succeed, got %v", err)
-	}
-
-	if pricing.InputPerMillion != 0.15 {
-		t.Fatalf("unexpected input price: %f", pricing.InputPerMillion)
-	}
-
-	if pricing.OutputPerMillion != 0.60 {
-		t.Fatalf("unexpected output price: %f", pricing.OutputPerMillion)
 	}
 }
 
@@ -2524,22 +2484,30 @@ func TestTaskContextIncludesCompactedSummaryAndNewerUserMessages(t *testing.T) {
 	}
 }
 
-func TestOpenAIModelOptionsKeepOnlyKnownPricingProfiles(t *testing.T) {
-	options := openAIModelOptions([]openAIModel{
-		{ID: "unknown-model"},
-		{ID: "gpt-4o-mini"},
+func TestProviderModelOptionsKeepOnlyCatalogModelsWithPricing(t *testing.T) {
+	contextWindow := 128000
+	options := providerModelOptions([]providerModelPayload{
+		{ID: "missing-pricing"},
+		{
+			ID:                  "openai/gpt-4o-mini",
+			Pricing:             &providerPricingPayload{InputPerMillion: 0.15, OutputPerMillion: 0.60},
+			ContextWindowTokens: &contextWindow,
+		},
 	})
 
 	if len(options) != 1 {
 		t.Fatalf("expected one priced option, got %#v", options)
 	}
 
-	if options[0].ID != "gpt-4o-mini" {
+	if options[0].ID != "openai/gpt-4o-mini" {
 		t.Fatalf("unexpected model id: %q", options[0].ID)
 	}
 
 	if options[0].Pricing.InputPerMillion != 0.15 {
 		t.Fatalf("unexpected pricing: %#v", options[0].Pricing)
+	}
+	if options[0].ContextWindowTokens != contextWindow {
+		t.Fatalf("unexpected context window: %d", options[0].ContextWindowTokens)
 	}
 }
 
@@ -2564,6 +2532,104 @@ func TestProviderCommandSwitchesSessionProvider(t *testing.T) {
 
 	if result.selectedModel != "" {
 		t.Fatalf("expected selected model to reset, got %q", result.selectedModel)
+	}
+}
+
+func TestProviderCommandOpensProviderPickerWithCurrentProvider(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+	}
+
+	updated, cmd := m.handleCommand("/provider")
+	result := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected no command when opening provider picker")
+	}
+	if !result.providerPickerOpen {
+		t.Fatal("expected provider picker to open")
+	}
+	if result.providerPickerIndex != providerListIndex(providerOpenRouter) {
+		t.Fatalf("expected picker index to follow current provider, got %d", result.providerPickerIndex)
+	}
+
+	view := stripANSI(result.providerPickerView())
+	if !strings.Contains(view, "Current: OpenRouter (openrouter)") {
+		t.Fatalf("expected current provider in picker, got %q", view)
+	}
+	if !strings.Contains(view, "[*] openrouter") {
+		t.Fatalf("expected selected provider marker in picker, got %q", view)
+	}
+	if !strings.Contains(view, "openai") || !strings.Contains(view, "anthropic") || !strings.Contains(view, "vllm") {
+		t.Fatalf("expected picker to list providers, got %q", view)
+	}
+}
+
+func TestProviderPickerSelectsProviderWithArrowAndEnter(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		configPath:  configPath,
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			Provider: string(providerEcho),
+		},
+		providerPickerOpen:  true,
+		providerPickerIndex: providerListIndex(providerEcho),
+		selectedModel:       "echo",
+		modelOptions:        []modelOption{{ID: "echo"}},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, cmd := updated.(model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if result.providerPickerOpen {
+		t.Fatal("expected provider picker to close")
+	}
+	if result.provider != "alibaba" {
+		t.Fatalf("expected selected provider to be alibaba, got %q", result.provider)
+	}
+	if result.selectedModel != "" {
+		t.Fatalf("expected selected model reset, got %q", result.selectedModel)
+	}
+	if cmd == nil {
+		t.Fatal("expected model loading command after choosing remote provider")
+	}
+}
+
+func TestProviderPickerSelectingCurrentProviderKeepsModel(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		configPath:  configPath,
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			Provider:       string(providerOpenRouter),
+			ProviderModels: map[string]string{string(providerOpenRouter): "openai/gpt-4o-mini"},
+		},
+		providerPickerOpen:  true,
+		providerPickerIndex: providerListIndex(providerOpenRouter),
+		selectedModel:       "openai/gpt-4o-mini",
+		modelOptions:        []modelOption{{ID: "openai/gpt-4o-mini"}},
+		modelIndex:          0,
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(model)
+
+	if result.providerPickerOpen {
+		t.Fatal("expected provider picker to close")
+	}
+	if result.provider != providerOpenRouter {
+		t.Fatalf("expected provider to remain openrouter, got %q", result.provider)
+	}
+	if result.selectedModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected current provider selection to keep model, got %q", result.selectedModel)
+	}
+	if cmd != nil {
+		t.Fatal("expected no model reload command when selecting current provider")
 	}
 }
 
@@ -4696,8 +4762,11 @@ func TestModelCommandSelectsLoadedModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected saved config to load, got %v", err)
 	}
-	if loaded.OpenRouterModel != "openai/gpt-4o-mini" {
-		t.Fatalf("expected model to persist, got %q", loaded.OpenRouterModel)
+	if loaded.ProviderModels[string(providerOpenRouter)] != "openai/gpt-4o-mini" {
+		t.Fatalf("expected provider model to persist, got %#v", loaded.ProviderModels)
+	}
+	if loaded.OpenRouterModel != "" {
+		t.Fatalf("expected legacy model field to stay empty, got %q", loaded.OpenRouterModel)
 	}
 }
 

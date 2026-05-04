@@ -45,9 +45,8 @@ the opposite stance: the useful path should still be explicit.
 - **Visible workflow routing.** Auto mode can choose chat, read-only tool use,
   or agentic planner/worker execution, and the selected route is emitted as a
   runtime event.
-- **Provider boundaries stay clean.** Providers translate runtime requests into
-  OpenAI/OpenRouter calls. They do not own orchestration, tools, retries, or UI
-  behavior.
+- **Provider boundaries stay clean.** Remote providers flow through ReqLLM.
+  They do not own orchestration, tools, retries, or UI behavior.
 - **Local project work is scoped.** File and code tools operate under an
   explicit root. Root escapes fail instead of being rewritten into relative
   paths.
@@ -175,8 +174,11 @@ Useful first commands:
 
 ```text
 /setup
-/provider echo|openai|openrouter
+/provider
+/provider <provider-id>
 /key <api-key>
+/provider-secret <field> <value>
+/provider-option <field> <value>
 /models reload
 /model
 /router llm
@@ -189,8 +191,8 @@ Useful first commands:
 
 The TUI supports:
 
-- provider-specific model selection for OpenAI and OpenRouter;
-- saved API keys in the local user config;
+- provider-specific model selection loaded through the Elixir provider catalog;
+- saved provider secrets and non-secret setup fields in the local user config;
 - automatic route display for chat, tool, basic, and agentic runs;
 - interactive permission prompts for write, command, delete, and network risk;
 - planner review with approve, decline, and revise decisions;
@@ -308,7 +310,8 @@ Every run requires:
 
 - exactly one non-empty task;
 - `--workflow chat|basic|agentic|auto`;
-- `--provider echo|openai|openrouter`;
+- `--provider echo` or a supported ReqLLM provider ID such as `openai`,
+  `anthropic`, `google_vertex`, `openrouter`, or `vllm`;
 - `--timeout-ms <positive-int>`;
 - `--max-steps <positive-int>`;
 - `--max-attempts <positive-int>`.
@@ -317,9 +320,12 @@ Remote providers also require:
 
 - `--model <id>`;
 - `--http-timeout-ms <positive-int>`;
+- repeated `--provider-option key=value` for providers such as Azure OpenAI,
+  Google Vertex AI, Amazon Bedrock, and vLLM;
 - `--input-price-per-million <number>`;
 - `--output-price-per-million <number>`;
-- the provider API key in the environment or saved TUI config.
+- required provider secrets in environment variables named by
+  `mix agent_machine.providers --json` or saved TUI config.
 
 Tool-enabled runs require the full tool budget:
 
@@ -350,9 +356,10 @@ Auto routing supports three router modes:
 --router-mode local --router-model-dir <dir> --router-timeout-ms <ms> --router-confidence-threshold <float>
 ```
 
-LLM routing asks the selected provider/model for strict JSON classification,
-then Elixir validates capabilities before any workflow starts. Deterministic
-guards still protect obvious tool, file, test, browser, and mutation intents.
+LLM routing asks the selected provider/model through ReqLLM for JSON
+classification, then Elixir strictly parses the response and validates
+capabilities before any workflow starts. Deterministic guards still protect
+obvious tool, file, test, browser, and mutation intents.
 
 Agentic extras are opt-in:
 
@@ -580,35 +587,88 @@ More detail is in [docs/skills.md](docs/skills.md).
 
 ## Providers
 
-AgentMachine currently supports:
+AgentMachine keeps `echo` as the local offline provider. Every remote provider
+uses the shared `AgentMachine.Providers.ReqLLM` runtime boundary.
 
-| Provider | Runtime module | API key |
-| --- | --- | --- |
-| `echo` | `AgentMachine.Providers.Echo` | None |
-| `openai` | `AgentMachine.Providers.OpenAIResponses` | `OPENAI_API_KEY` |
-| `openrouter` | `AgentMachine.Providers.OpenRouterChat` | `OPENROUTER_API_KEY` |
-
-### OpenAI
+List supported providers and required setup fields:
 
 ```sh
-export OPENAI_API_KEY="sk-..."
+mix agent_machine.providers --json --include-unsupported
 ```
 
-OpenAI runs use the Responses API and require an explicit model, HTTP timeout,
-and input/output pricing when called from the CLI.
+List priced models for one configured provider:
 
-### OpenRouter
+```sh
+mix agent_machine.providers models --provider openrouter --json
+```
+
+Supported ReqLLM provider IDs are:
+
+| Provider ID | Label |
+| --- | --- |
+| `alibaba` | Alibaba Cloud Bailian |
+| `alibaba_cn` | Alibaba Cloud Bailian China |
+| `anthropic` | Anthropic |
+| `openai` | OpenAI |
+| `google` | Google Gemini |
+| `google_vertex` | Google Vertex AI |
+| `amazon_bedrock` | Amazon Bedrock |
+| `azure` | Azure OpenAI |
+| `groq` | Groq |
+| `xai` | xAI |
+| `openrouter` | OpenRouter |
+| `cerebras` | Cerebras |
+| `meta` | Meta Llama |
+| `zai` | Z.AI |
+| `zai_coder` | Z.AI Coder |
+| `zenmux` | Zenmux |
+| `venice` | Venice |
+| `vllm` | vLLM |
+
+`minimax` is intentionally not exposed because ReqLLM 1.11 does not document a
+MiniMax provider ID.
+
+Remote runs require explicit model, HTTP timeout, pricing, provider setup, and
+required secrets. Secrets are read from environment variables or injected by the
+TUI; they are not passed as CLI arguments or session payload fields.
+
+Examples:
 
 ```sh
 export OPENROUTER_API_KEY="..."
+mix agent_machine.run \
+  --workflow basic \
+  --provider openrouter \
+  --model openai/gpt-4o-mini \
+  --http-timeout-ms 120000 \
+  --input-price-per-million 0.15 \
+  --output-price-per-million 0.60 \
+  --timeout-ms 120000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  "Reply with one concise sentence."
 ```
 
-OpenRouter runs use Chat Completions and require an explicit model, HTTP
-timeout, and input/output pricing when called from the CLI.
+```sh
+export AGENT_MACHINE_GOOGLE_VERTEX_ACCESS_TOKEN="..."
+mix agent_machine.run \
+  --workflow basic \
+  --provider google_vertex \
+  --provider-option project_id=my-project \
+  --provider-option region=us-central1 \
+  --model gemini-2.5-flash \
+  --http-timeout-ms 120000 \
+  --input-price-per-million <input-price> \
+  --output-price-per-million <output-price> \
+  --timeout-ms 120000 \
+  --max-steps 2 \
+  --max-attempts 1 \
+  "Reply with one concise sentence."
+```
 
-The TUI can load model lists and pricing for OpenAI/OpenRouter, save selected
-models provider-by-provider, and inject saved API keys into the Mix child
-process.
+The TUI provider picker renders the catalog fields provider-by-provider, saves
+selected models in a provider-keyed map, and injects configured secrets into the
+Mix child process environment.
 
 ## Context And Long Runs
 

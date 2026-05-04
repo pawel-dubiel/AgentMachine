@@ -56,14 +56,15 @@ the public docs and the main implementation boundaries for each area.
 - [Echo provider](README.md#providers) through
   [`AgentMachine.Providers.Echo`](lib/agent_machine/providers/echo.ex) for local
   no-API testing.
-- [OpenAI Responses provider](README.md#openai) through
-  [`AgentMachine.Providers.OpenAIResponses`](lib/agent_machine/providers/openai_responses.ex).
-- [OpenRouter Chat Completions provider](README.md#openrouter) through
-  [`AgentMachine.Providers.OpenRouterChat`](lib/agent_machine/providers/openrouter_chat.ex).
+- [ReqLLM remote provider boundary](README.md#providers) through
+  [`AgentMachine.Providers.ReqLLM`](lib/agent_machine/providers/req_llm.ex).
+- [Provider catalog](lib/agent_machine/provider_catalog.ex) for supported
+  provider IDs, setup fields, model metadata, and unsupported requested
+  providers.
 - [Provider contract](lib/agent_machine/provider.ex) that keeps providers at
   the model/API boundary.
-- [Provider-native tool-call adapters](lib/agent_machine/tool_harness.ex) for
-  OpenAI and OpenRouter function/tool calling.
+- [ReqLLM tool schemas](lib/agent_machine/tool_harness.ex) that expose
+  provider-facing definitions while keeping tool execution in AgentRunner.
 
 ## CLI
 
@@ -141,8 +142,8 @@ the public docs and the main implementation boundaries for each area.
   `mix agent_machine.run` boundary.
 - [Config persistence](tui/config.go) for workflow, provider, selected models,
   API keys, tool setup, MCP config path, and command/test-command state.
-- [Provider model and pricing lookup](tui/provider_models.go) for OpenAI and
-  OpenRouter.
+- [Provider model and pricing lookup](tui/provider_models.go) through
+  `mix agent_machine.providers`.
 - [Slash commands](README.md#terminal-ui) for workflow, provider, API key,
   model loading/selection, tool harness setup, test commands, MCP config,
   settings, agent inspection, history, and clearing/quitting.

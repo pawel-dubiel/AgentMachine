@@ -4,6 +4,23 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added a TUI provider picker opened by `/provider`, listing all providers and
+  marking the currently selected provider while preserving direct
+  `/provider <provider-id>` selection.
+- Fixed ReqLLM provider requests to pass only supported ReqLLM timeout options,
+  avoiding OpenAI/OpenRouter failures from stale direct-provider timeout keys.
+- Integrated ReqLLM as the single remote provider boundary, added an explicit
+  provider catalog and `mix agent_machine.providers`, and removed the old direct
+  OpenAI/OpenRouter provider modules.
+- Reworked the TUI provider setup around provider-keyed secrets, options, and
+  model selections loaded through the Elixir catalog instead of direct
+  OpenAI/OpenRouter model APIs.
+- Added ReqLLM catalog, session protocol, tool continuation, streaming, and TUI
+  provider setup tests, with MiniMax explicitly deferred because ReqLLM 1.11
+  does not expose a documented provider ID.
+- Changed LLM auto-routing to use the ReqLLM provider boundary without
+  provider-specific JSON mode assumptions, preserving strict Elixir JSON
+  validation across remote providers.
 - Added a minimal Next.js website under `html/` for the project landing page.
 - Tightened provider-facing code-edit tool schemas so shell command tools expose
   the configured timeout maximum and `apply_edits` advertises required fields
@@ -22,9 +39,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 - Added TUI fail-fast validation for command-capable code-edit configs that
   still have the legacy 1s/6-round budget, with an explicit `/tools` command to
   fix the saved setup before starting another run.
-- Strengthened LLM router JSON classification by passing provider response
-  format JSON mode for OpenRouter/OpenAI router calls, clarifying the router
-  prompt contract, and reporting non-JSON router output explicitly.
+- Strengthened LLM router JSON classification by clarifying the router prompt
+  contract and reporting non-JSON router output explicitly.
 - Added TUI validation that fails fast when a task names an absolute filesystem
   path outside the selected local-files or code-edit tool root, with an explicit
   `/tools` command to correct the root before the run reaches the router.
