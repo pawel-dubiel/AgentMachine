@@ -376,6 +376,12 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 		"session_tool_timeout_ms": sessionToolTimeout,
 		"session_tool_max_rounds": sessionToolMaxRounds,
 	}
+	if strings.TrimSpace(config.RecentContext) != "" {
+		run["recent_context"] = strings.TrimSpace(config.RecentContext)
+	}
+	if strings.TrimSpace(config.PendingAction) != "" {
+		run["pending_action"] = strings.TrimSpace(config.PendingAction)
+	}
 	if strings.TrimSpace(config.LogFile) != "" {
 		run["log_file"] = config.LogFile
 	}
@@ -630,6 +636,13 @@ func buildRunArgs(config runConfig) []string {
 			value := config.ProviderOptions[key]
 			args = append(args, "--provider-option", key+"="+value)
 		}
+	}
+
+	if strings.TrimSpace(config.RecentContext) != "" {
+		args = append(args, "--recent-context", strings.TrimSpace(config.RecentContext))
+	}
+	if strings.TrimSpace(config.PendingAction) != "" {
+		args = append(args, "--pending-action", strings.TrimSpace(config.PendingAction))
 	}
 
 	if config.ToolHarness != "" || strings.TrimSpace(config.MCPConfig) != "" {

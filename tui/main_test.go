@@ -236,6 +236,20 @@ func TestBuildRunArgsIncludesPlannerReviewWhenEnabled(t *testing.T) {
 	assertContainsSequence(t, args, []string{"--planner-review", "jsonl-stdio", "--planner-review-max-revisions", "2", "review this project"})
 }
 
+func TestBuildRunArgsPassesStructuredConversationContext(t *testing.T) {
+	args := buildRunArgs(runConfig{
+		Task:          "inside this dir create index.html",
+		Workflow:      workflowAgentic,
+		Provider:      providerEcho,
+		RecentContext: "user created myproj1; assistant confirmed completion",
+		PendingAction: "continue in myproj1",
+	})
+
+	assertContainsSequence(t, args, []string{"--recent-context", "user created myproj1; assistant confirmed completion"})
+	assertContainsSequence(t, args, []string{"--pending-action", "continue in myproj1"})
+	assertContainsSequence(t, args, []string{"inside this dir create index.html"})
+}
+
 func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "run.jsonl")
 	payload, err := sessionRunPayload(runConfig{
@@ -243,6 +257,7 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 		Workflow:          workflowAgentic,
 		Provider:          providerOpenRouter,
 		Model:             "moonshotai/kimi-k2.6",
+		RecentContext:     "user created myproj1; assistant confirmed completion",
 		LogFile:           logFile,
 		InputPrice:        "1.00",
 		OutputPrice:       "3.00",
@@ -263,6 +278,9 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 
 	if payload["task"] != "review this project" || payload["provider"] != "openrouter" {
 		t.Fatalf("unexpected basic payload: %#v", payload)
+	}
+	if payload["recent_context"] != "user created myproj1; assistant confirmed completion" {
+		t.Fatalf("expected recent context in payload, got %#v", payload)
 	}
 	if _, ok := payload["workflow"]; ok {
 		t.Fatalf("session payload must omit workflow, got %#v", payload["workflow"])
@@ -1974,7 +1992,7 @@ func TestProgressCommentaryRendersOutsideConversationMessages(t *testing.T) {
 	if !strings.Contains(view, "Observer progress") || !strings.Contains(view, "broad skill surface") {
 		t.Fatalf("expected progress commentary in chat view, got %q", view)
 	}
-	if strings.Contains(updated.taskWithConversationContext("next request"), "broad skill surface") {
+	if strings.Contains(updated.conversationContextForTask("continue").RecentContext, "broad skill surface") {
 		t.Fatalf("expected progress commentary to stay out of next LLM task context")
 	}
 	if compacted := compactableConversationMessages(updated.messages); len(compacted) != 0 {
@@ -2593,7 +2611,7 @@ func TestCompactCommandCallsCompactCLIAndReplacesActiveMessages(t *testing.T) {
 	}
 }
 
-func TestTaskContextIncludesCompactedSummaryAndNewerUserMessages(t *testing.T) {
+func TestConversationContextIncludesCompactedSummaryAndNewerMessagesForFollowUp(t *testing.T) {
 	m := model{
 		messages: []chatMessage{
 			{Role: "summary", Text: "Compacted conversation summary:\nUser wants Poland news."},
@@ -2602,16 +2620,16 @@ func TestTaskContextIncludesCompactedSummaryAndNewerUserMessages(t *testing.T) {
 		},
 	}
 
-	task := m.taskWithConversationContext("current request")
+	context := m.conversationContextForTask("continue from there")
 
-	if !strings.Contains(task, "Compacted conversation summary: User wants Poland news.") {
-		t.Fatalf("expected compacted summary in task context, got %q", task)
+	if !strings.Contains(context.RecentContext, "summary: User wants Poland news.") {
+		t.Fatalf("expected compacted summary in recent context, got %#v", context)
 	}
-	if !strings.Contains(task, "user: newer follow-up") {
-		t.Fatalf("expected newer user message in task context, got %q", task)
+	if !strings.Contains(context.RecentContext, "user: newer follow-up") {
+		t.Fatalf("expected newer user message in recent context, got %#v", context)
 	}
-	if !strings.Contains(task, "Current user request:\ncurrent request") {
-		t.Fatalf("expected current request in task context, got %q", task)
+	if !strings.Contains(context.RecentContext, "assistant: previous answer") {
+		t.Fatalf("expected assistant completion in recent context, got %#v", context)
 	}
 }
 
@@ -4799,7 +4817,43 @@ func TestDenyToolsClearsPendingFilesystemRun(t *testing.T) {
 	}
 }
 
-func TestStartRunIncludesRecentConversationContext(t *testing.T) {
+func TestStartRunKeepsIndependentRequestSeparateFromPriorContext(t *testing.T) {
+	t.Setenv("HOME", "/tmp/agent-machine-home")
+
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness:   "local-files",
+			ToolRoot:      "/tmp/agent-machine-home",
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "2",
+			ToolApproval:  "auto-approved-safe",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "create me in home folder directory myproj1"},
+			{Role: "assistant", Text: "Created directory myproj1."},
+		},
+	}
+
+	updated, cmd := m.startRun("research latest AI papers")
+	result := updated.(model)
+
+	if cmd == nil {
+		t.Fatal("expected run command")
+	}
+	if result.activeConfig.Task != "research latest AI papers" {
+		t.Fatalf("expected current task only, got %q", result.activeConfig.Task)
+	}
+	if result.activeConfig.RecentContext != "" || result.activeConfig.PendingAction != "" {
+		t.Fatalf("expected no prior context for independent request, got %#v", result.activeConfig)
+	}
+	if result.activeConfig.LogFile == "" {
+		t.Fatal("expected active run log file")
+	}
+}
+
+func TestStartRunAddsRecentContextOnlyForReferentialFollowUp(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
 	m := model{
@@ -4824,27 +4878,22 @@ func TestStartRunIncludesRecentConversationContext(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command")
 	}
-	if !strings.Contains(result.activeConfig.Task, "Conversation context:") {
-		t.Fatalf("expected conversation context, got %q", result.activeConfig.Task)
+	if result.activeConfig.Task != "inside this dir create index.html" {
+		t.Fatalf("expected current task only, got %q", result.activeConfig.Task)
 	}
-	if result.activeConfig.LogFile == "" {
-		t.Fatal("expected active run log file")
-	}
-	if !strings.Contains(result.activeConfig.Task, "myproj1") {
-		t.Fatalf("expected previous directory reference, got %q", result.activeConfig.Task)
-	}
-	if !strings.Contains(result.activeConfig.Task, "Current user request:\ninside this dir create index.html") {
-		t.Fatalf("expected current request marker, got %q", result.activeConfig.Task)
+	if !strings.Contains(result.activeConfig.RecentContext, "myproj1") ||
+		!strings.Contains(result.activeConfig.RecentContext, "Created directory myproj1.") {
+		t.Fatalf("expected prior user and assistant context, got %#v", result.activeConfig)
 	}
 }
 
 func TestTaskWithoutHistoryDoesNotAddConversationContext(t *testing.T) {
 	m := model{}
 
-	task := m.taskWithConversationContext("create index.html")
+	context := m.conversationContextForTask("create index.html")
 
-	if task != "create index.html" {
-		t.Fatalf("expected unchanged task, got %q", task)
+	if context.RecentContext != "" || context.PendingAction != "" {
+		t.Fatalf("expected no context, got %#v", context)
 	}
 }
 
@@ -4933,7 +4982,7 @@ func TestRecentConversationMessagesSkipsSystemMessages(t *testing.T) {
 
 	selected := recentConversationMessages(messages, 6)
 
-	if len(selected) != 2 || selected[0].Text != "one" || selected[1].Text != "three" {
+	if len(selected) != 3 || selected[0].Text != "one" || selected[1].Text != "two" || selected[2].Text != "three" {
 		t.Fatalf("unexpected selected messages: %#v", selected)
 	}
 }
@@ -4946,13 +4995,13 @@ func TestTaskConversationContextOmitsAssistantRefusals(t *testing.T) {
 		},
 	}
 
-	task := m.taskWithConversationContext("you playwright mcp")
+	context := m.conversationContextForTask("continue with that")
 
-	if strings.Contains(task, "chat route") || strings.Contains(task, "use agents") {
-		t.Fatalf("expected assistant refusal to be omitted from context, got %q", task)
+	if strings.Contains(context.RecentContext, "chat route") || strings.Contains(context.RecentContext, "use agents") {
+		t.Fatalf("expected assistant refusal to be omitted from context, got %#v", context)
 	}
-	if !strings.Contains(task, "research me in google the latest news in poland") {
-		t.Fatalf("expected prior user request in context, got %q", task)
+	if !strings.Contains(context.RecentContext, "research me in google the latest news in poland") {
+		t.Fatalf("expected prior user request in context, got %#v", context)
 	}
 }
 

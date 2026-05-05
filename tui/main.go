@@ -362,6 +362,8 @@ const (
 
 type runConfig struct {
 	Task                      string
+	RecentContext             string
+	PendingAction             string
 	Workflow                  runWorkflow
 	Provider                  provider
 	APIKey                    string
@@ -1228,9 +1230,11 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	permissionTask := m.taskWithConversationContext(task)
-	runTask := permissionTask
-	config, err := resolveConfig(m.runConfig(runTask))
+	conversationContext := m.conversationContextForTask(task)
+	runConfig := m.runConfig(task)
+	runConfig.RecentContext = conversationContext.RecentContext
+	runConfig.PendingAction = conversationContext.PendingAction
+	config, err := resolveConfig(runConfig)
 	if err != nil {
 		if m.shouldLoadModelsForMissingPricing(err) {
 			m.pendingRunAfterModelLoad = task
@@ -1491,21 +1495,109 @@ func (m model) latestUserTask() string {
 	return ""
 }
 
-func (m model) taskWithConversationContext(task string) string {
-	history := recentConversationMessages(m.messages, 6)
-	if len(history) == 0 {
-		return task
+type conversationContext struct {
+	RecentContext string
+	PendingAction string
+}
+
+func (m model) conversationContextForTask(task string) conversationContext {
+	if !contextualFollowUp(task) && !affirmativeFollowUp(task) {
+		return conversationContext{}
 	}
 
-	lines := []string{"Conversation context:"}
-	for _, message := range history {
-		if message.Role == "summary" {
-			lines = append(lines, "Compacted conversation summary: "+compactContextText(stripCompactedConversationPrefix(message.Text)))
-			continue
-		}
-		lines = append(lines, message.Role+": "+compactContextText(message.Text))
+	recentContext := recentConversationContext(m.messages, 6)
+	if strings.TrimSpace(recentContext) == "" {
+		return conversationContext{}
 	}
-	lines = append(lines, "", "Current user request:", task)
+
+	context := conversationContext{RecentContext: recentContext}
+	if affirmativeFollowUp(task) {
+		context.PendingAction = latestPriorUserTask(m.messages)
+	}
+	return context
+}
+
+func contextualFollowUp(task string) bool {
+	normalized := normalizeConversationText(task)
+	if normalized == "" {
+		return false
+	}
+	if affirmativeFollowUp(task) {
+		return true
+	}
+
+	for _, phrase := range []string{
+		"this file",
+		"that file",
+		"this dir",
+		"that dir",
+		"this directory",
+		"that directory",
+		"this folder",
+		"that folder",
+		"inside this",
+		"inside that",
+		"same thing",
+		"do the same",
+		"continue",
+		"follow up",
+		"previous",
+		"earlier",
+	} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+
+	words := conversationWordSet(normalized)
+	for _, word := range []string{"this", "that", "it", "there", "same", "above"} {
+		if words[word] {
+			return true
+		}
+	}
+	return false
+}
+
+func affirmativeFollowUp(task string) bool {
+	normalized := normalizeConversationText(task)
+	switch normalized {
+	case "yes", "yes do it", "yes please", "do it", "go ahead", "ok", "okay", "please do it", "yep", "sure":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeConversationText(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	replacer := strings.NewReplacer("\n", " ", "\t", " ", ",", " ", ".", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\"", " ", "'", " ")
+	return strings.Join(strings.Fields(replacer.Replace(lower)), " ")
+}
+
+func conversationWordSet(normalized string) map[string]bool {
+	words := map[string]bool{}
+	for _, word := range strings.Fields(normalized) {
+		words[word] = true
+	}
+	return words
+}
+
+func recentConversationContext(messages []chatMessage, limit int) string {
+	history := recentConversationMessages(messages, limit)
+	if len(history) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(history))
+	for _, message := range history {
+		text := compactContextText(stripCompactedConversationPrefix(message.Text))
+		switch message.Role {
+		case "summary":
+			lines = append(lines, "summary: "+text)
+		case "user", "assistant":
+			lines = append(lines, message.Role+": "+text)
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -1527,21 +1619,15 @@ func sessionEventLogPath(configPath string, sessionID string) string {
 
 func recentConversationMessages(messages []chatMessage, limit int) []chatMessage {
 	selected := make([]chatMessage, 0, limit)
-	var latestSummary *chatMessage
-	for i := len(messages) - 1; i >= 0; i-- {
-		message := messages[i]
-		if message.Role == "summary" && strings.TrimSpace(message.Text) != "" {
-			copied := message
-			latestSummary = &copied
-			break
-		}
-	}
 	for i := len(messages) - 1; i >= 0 && len(selected) < limit; i-- {
 		message := messages[i]
-		if message.Role != "user" {
+		if message.Role != "user" && message.Role != "assistant" && message.Role != "summary" {
 			continue
 		}
 		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		if message.Role == "assistant" && assistantRefusalContext(message.Text) {
 			continue
 		}
 		selected = append(selected, message)
@@ -1549,10 +1635,24 @@ func recentConversationMessages(messages []chatMessage, limit int) []chatMessage
 	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
 		selected[left], selected[right] = selected[right], selected[left]
 	}
-	if latestSummary != nil {
-		selected = append([]chatMessage{*latestSummary}, selected...)
-	}
 	return selected
+}
+
+func latestPriorUserTask(messages []chatMessage) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role == "user" && strings.TrimSpace(message.Text) != "" {
+			return strings.TrimSpace(message.Text)
+		}
+	}
+	return ""
+}
+
+func assistantRefusalContext(text string) bool {
+	normalized := strings.ToLower(text)
+	return strings.Contains(normalized, "this chat route itself has no tools") ||
+		strings.Contains(normalized, "use agents to gather") ||
+		strings.Contains(normalized, "this direct run cannot perform")
 }
 
 func compactContextText(text string) string {
