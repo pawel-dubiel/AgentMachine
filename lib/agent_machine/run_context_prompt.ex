@@ -47,6 +47,7 @@ defmodule AgentMachine.RunContextPrompt do
     }
     |> maybe_put_execution_strategy(strategy)
     |> maybe_put_workflow_route(strategy)
+    |> maybe_put_conversation_context(Keyword.get(opts, :conversation_context))
     |> maybe_put_run_context_facts(run_context)
   end
 
@@ -146,7 +147,8 @@ defmodule AgentMachine.RunContextPrompt do
         runtime_facts(
           execution_strategy: Keyword.get(opts, :execution_strategy),
           workflow_route: Keyword.get(opts, :workflow_route),
-          run_context: Keyword.get(opts, :run_context)
+          run_context: Keyword.get(opts, :run_context),
+          conversation_context: Keyword.get(opts, :conversation_context)
         )
 
       other ->
@@ -165,6 +167,29 @@ defmodule AgentMachine.RunContextPrompt do
 
   defp maybe_put_workflow_route(facts, route) when is_map(route) do
     Map.put(facts, :workflow_route, strategy_facts(route))
+  end
+
+  defp maybe_put_conversation_context(facts, nil), do: facts
+
+  defp maybe_put_conversation_context(facts, context) when is_map(context) do
+    conversation_context =
+      %{
+        recent_context: Map.get(context, :recent_context) || Map.get(context, "recent_context"),
+        pending_action: Map.get(context, :pending_action) || Map.get(context, "pending_action"),
+        instruction:
+          "Current task is authoritative. Treat recent_context as reference material only. Treat pending_action as actionable only for affirmative follow-up requests. Do not redo prior completed work."
+      }
+      |> reject_nil_values()
+
+    if map_size(conversation_context) == 1 do
+      facts
+    else
+      Map.put(facts, :conversation_context, conversation_context)
+    end
+  end
+
+  defp maybe_put_conversation_context(_facts, context) do
+    raise ArgumentError, ":conversation_context must be a map, got: #{inspect(context)}"
   end
 
   defp strategy_facts(strategy) do

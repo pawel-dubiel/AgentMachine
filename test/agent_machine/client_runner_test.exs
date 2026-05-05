@@ -1670,6 +1670,42 @@ defmodule AgentMachine.ClientRunnerTest do
     assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
+  test "mix agent_machine.run accepts structured conversation context without rewriting task" do
+    previous_shell = Mix.shell()
+    Mix.shell(Mix.Shell.Process)
+
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+    end)
+
+    Mix.Task.reenable("agent_machine.run")
+
+    Run.run([
+      "--provider",
+      "echo",
+      "--router-mode",
+      "deterministic",
+      "--recent-context",
+      "user: in home folder create mdp1 folder",
+      "--pending-action",
+      "create mdp1 folder",
+      "--timeout-ms",
+      "1000",
+      "--max-steps",
+      "6",
+      "--max-attempts",
+      "1",
+      "--json",
+      "hello"
+    ])
+
+    assert_receive {:mix_shell, :info, [json]}
+
+    decoded = JSON.decode!(json)
+    assert decoded["execution_strategy"]["selected"] == "direct"
+    assert decoded["final_output"] == "agent assistant: hello"
+  end
+
   test "client runner returns structured capability requirement before runtime starts" do
     summary =
       ClientRunner.run!(%{

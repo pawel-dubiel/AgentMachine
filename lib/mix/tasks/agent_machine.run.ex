@@ -9,6 +9,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   @switches [
     workflow: :string,
+    recent_context: :string,
+    pending_action: :string,
     provider: :string,
     provider_option: :keep,
     model: :string,
@@ -314,6 +316,8 @@ defmodule Mix.Tasks.AgentMachine.Run do
     %{
       task: task_from_positional!(positional),
       workflow: workflow,
+      recent_context: Keyword.get(opts, :recent_context),
+      pending_action: Keyword.get(opts, :pending_action),
       provider: provider_from_opts!(opts),
       provider_options: provider_options_from_opts!(opts),
       model: Keyword.get(opts, :model),

@@ -87,6 +87,30 @@ defmodule AgentMachine.RunContextPromptTest do
            } = JSON.decode!(text)
   end
 
+  test "includes structured conversation context only when supplied" do
+    text =
+      RunContextPrompt.text(
+        run_context: %{results: %{}, artifacts: %{}},
+        conversation_context: %{
+          recent_context: "user created mdp1; assistant confirmed completion",
+          pending_action: "continue in mdp1"
+        }
+      )
+
+    assert %{
+             "runtime" => %{
+               "conversation_context" => %{
+                 "recent_context" => "user created mdp1; assistant confirmed completion",
+                 "pending_action" => "continue in mdp1",
+                 "instruction" => instruction
+               }
+             }
+           } = JSON.decode!(text)
+
+    assert instruction =~ "Current task is authoritative"
+    assert instruction =~ "Do not redo prior completed work"
+  end
+
   test "includes safe current agent facts from run context" do
     text =
       RunContextPrompt.text(

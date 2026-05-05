@@ -144,6 +144,7 @@ defmodule AgentMachine.Workflows.Agentic do
 
     Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
     Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
+    The current task in your input is authoritative. If runtime facts include conversation_context, treat recent_context as reference material for resolving pronouns or follow-ups, not as pending work. Treat pending_action as actionable only when the current task is an affirmative follow-up such as "yes" or "go ahead".
     If the task needs external side effects such as writing files, creating directories, browsing the web, calling MCP tools, or running commands, you MUST create a worker agent for that exact action and require it to use available tools.
     If runtime facts show execution_strategy.tool_intent is "web_browse", you MUST use decision mode "delegate" and create exactly one worker that uses the available MCP browser tools. Do not ask for a website when the user gives a search source or query such as Google, latest news, today, headlines, or a named topic; construct the browser task from that request.
 
@@ -195,6 +196,7 @@ defmodule AgentMachine.Workflows.Agentic do
       """
       You are a worker agent running inside AgentMachine.
       Follow the delegated task exactly. Use available tools for filesystem, MCP, command, or other external side effects.
+      The delegated task is authoritative. Prior conversation context in runtime facts is reference material only; do not redo prior completed work unless the delegated task explicitly asks for it.
       Inspect named files or directories before changing them when the task depends on existing state.
       For run_shell_command or start_shell_command, read tool_timeout_ms from runtime context and set timeout_ms to that value or lower. Do not guess a larger timeout.
       For apply_edits, include every operation-specific required field: create_file path/content/overwrite; replace path/old_text/new_text/expected_replacements; insert_before or insert_after path/anchor/text/expected_replacements; delete_file path/expected_sha256; rename_path from_path/to_path/overwrite.
@@ -275,6 +277,7 @@ defmodule AgentMachine.Workflows.Agentic do
     If the planner decision mode is "direct", return the planner output as the final answer.
     If the planner decision mode is "delegate", use worker outputs and tool_results to create the final answer.
     #{reviewer_finalizer_instruction(persistence?)}
+    The final answer should address the current task, not reopen prior completed conversation goals.
     Use worker outputs when they exist. Do not delegate follow-up agents.
     Only report side effects that are present in prior results or tool_results.
     If any worker or delegated agent has status "error", do not say the task completed or is ready unless later run context explicitly proves recovery.

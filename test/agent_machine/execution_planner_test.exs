@@ -47,6 +47,27 @@ defmodule AgentMachine.ExecutionPlannerTest do
     assert reason == "planner_review_requires_planned_strategy"
   end
 
+  test "recent context does not turn an independent current request into stale work" do
+    assert %{selected: "direct", strategy: "direct"} =
+             plan!(%{
+               task: "hello",
+               recent_context: "user: in home folder create mdp1 folder"
+             })
+  end
+
+  test "pending action is actionable only for affirmative follow-up" do
+    assert %{selected: "planned", strategy: "planned", tool_intent: "file_mutation"} =
+             plan!(%{
+               task: "yes do it",
+               pending_action: "create reports directory",
+               tool_harness: :local_files,
+               tool_root: "/tmp/home",
+               tool_timeout_ms: 100,
+               tool_max_rounds: 2,
+               tool_approval_mode: :auto_approved_safe
+             })
+  end
+
   defp plan!(attrs) do
     %{
       provider: :echo,

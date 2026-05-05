@@ -12,7 +12,21 @@ defmodule AgentMachine.WorkflowOptions do
     |> maybe_put(:run_context_compaction, enabled_compaction(spec.run_context_compaction))
     |> maybe_put(:run_context_compact_percent, spec.run_context_compact_percent)
     |> maybe_put(:max_context_compactions, spec.max_context_compactions)
+    |> maybe_put(:conversation_context, conversation_context(spec))
   end
+
+  defp conversation_context(%RunSpec{} = spec) do
+    %{}
+    |> maybe_put_context(:recent_context, spec.recent_context)
+    |> maybe_put_context(:pending_action, spec.pending_action)
+    |> then(fn
+      context when map_size(context) == 0 -> nil
+      context -> context
+    end)
+  end
+
+  defp maybe_put_context(context, _key, nil), do: context
+  defp maybe_put_context(context, key, value), do: Map.put(context, key, value)
 
   defp enabled_compaction(:on), do: :on
   defp enabled_compaction(_other), do: nil
