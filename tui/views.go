@@ -76,11 +76,11 @@ func (m model) View() string {
 	} else if _, ok := m.currentPendingPermission(); ok && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
 		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Runtime permission pending. Up/Down selects. Enter accepts. a=approve, d=deny."), m.viewWidth())))
 	} else if m.running {
-		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Running. Enter queues message. /queue edits queue. Tab navigates."), m.viewWidth())))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine(m.withChatScrollHint("Running. Enter queues message. /queue edits queue. Tab navigates.")), m.viewWidth())))
 	} else if m.pendingToolTask != "" && m.view == viewChat && strings.TrimSpace(m.input.Value()) == "" {
 		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Tool permission pending. Up/Down selects. Enter accepts. Type a command to override."), m.viewWidth())))
 	} else {
-		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine("Type a message or /help. Tab changes view. Esc goes back."), m.viewWidth())))
+		b.WriteString(styles.Hint.Render(wrapText(m.inputStatusLine(m.withChatScrollHint("Type a message or /help. Tab changes view. Esc goes back.")), m.viewWidth())))
 	}
 	return b.String()
 }
@@ -130,6 +130,13 @@ func (m model) inputStatusLine(prompt string) string {
 	return strings.Join(parts, " | ")
 }
 
+func (m model) withChatScrollHint(prompt string) string {
+	if m.view != viewChat || m.maxChatScroll() == 0 {
+		return prompt
+	}
+	return prompt + " Ctrl+B/F scroll response; Ctrl+P/N line; /scroll works too."
+}
+
 func (m model) sessionRuntimeStatusParts() []string {
 	return []string{
 		"session_tokens=" + formatTokenCount(m.sessionUsage.TotalTokens),
@@ -169,13 +176,12 @@ func (m model) chatView() string {
 		return m.styles().Hint.Render("No messages yet.")
 	}
 
-	start := len(m.messages) - 14
-	if start < 0 {
-		start = 0
-	}
+	return m.scrollableChatText(m.fullChatText())
+}
 
+func (m model) fullChatText() string {
 	var b strings.Builder
-	for _, message := range m.messages[start:] {
+	for _, message := range m.messages {
 		b.WriteString(m.renderChatMessage(message))
 		b.WriteString("\n\n")
 	}
@@ -271,6 +277,54 @@ func (m model) viewWidth() int {
 		return m.width
 	}
 	return 100
+}
+
+func (m model) chatViewportHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	reserved := 8
+	height := m.height - reserved
+	if height < 4 {
+		return 4
+	}
+	return height
+}
+
+func (m model) chatPageSize() int {
+	height := m.chatViewportHeight()
+	if height <= 1 {
+		return 5
+	}
+	return height - 1
+}
+
+func (m model) scrollableChatText(text string) string {
+	height := m.chatViewportHeight()
+	if height <= 0 || strings.TrimSpace(text) == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= height {
+		return text
+	}
+	maxScroll := len(lines) - height
+	offset := m.chatScroll
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxScroll {
+		offset = maxScroll
+	}
+	start := len(lines) - height - offset
+	if start < 0 {
+		start = 0
+	}
+	end := start + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 func wrapText(text string, width int) string {

@@ -6062,6 +6062,66 @@ func TestInputHistoryUsesUpAndDownOutsideAgentList(t *testing.T) {
 	}
 }
 
+func TestChatScrollUsesMacFriendlyKeys(t *testing.T) {
+	lines := make([]string, 0, 30)
+	for i := range 30 {
+		lines = append(lines, "response line "+strings.Repeat("x", i+1))
+	}
+	m := model{
+		view:     viewChat,
+		width:    80,
+		height:   12,
+		messages: []chatMessage{{Role: "system", Text: strings.Join(lines, "\n")}},
+	}
+	m.input = textInputForTest()
+
+	bottom := stripANSI(m.chatView())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	result := updated.(model)
+	if result.chatScroll == 0 {
+		t.Fatalf("expected Ctrl+B to scroll chat up")
+	}
+	if view := stripANSI(result.chatView()); view == bottom {
+		t.Fatalf("expected scrolled chat view to differ from bottom view")
+	}
+
+	updated, _ = result.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	result = updated.(model)
+	if result.chatScroll != 0 {
+		t.Fatalf("expected Ctrl+F to return toward latest response, got scroll=%d", result.chatScroll)
+	}
+	if view := stripANSI(result.chatView()); view != bottom {
+		t.Fatalf("expected bottom chat view after Ctrl+F")
+	}
+}
+
+func TestScrollCommandMovesChatTranscript(t *testing.T) {
+	lines := make([]string, 0, 30)
+	for i := range 30 {
+		lines = append(lines, "response line "+strings.Repeat("x", i+1))
+	}
+	m := model{
+		view:     viewChat,
+		width:    80,
+		height:   12,
+		messages: []chatMessage{{Role: "system", Text: strings.Join(lines, "\n")}},
+	}
+	m.input = textInputForTest()
+
+	updated, _ := m.handleCommand("/scroll up")
+	result := updated.(model)
+	if result.chatScroll == 0 {
+		t.Fatalf("expected /scroll up to move chat transcript")
+	}
+
+	updated, _ = result.handleCommand("/scroll bottom")
+	result = updated.(model)
+	if result.chatScroll != 0 {
+		t.Fatalf("expected /scroll bottom to return to latest response, got %d", result.chatScroll)
+	}
+}
+
 func TestUpDownKeepSelectingAgentsInAgentList(t *testing.T) {
 	m := model{
 		view: viewAgents,

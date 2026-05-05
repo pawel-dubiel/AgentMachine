@@ -188,6 +188,7 @@ Useful first commands:
 /mcp add playwright npx @playwright/mcp@latest
 /skills list
 /agents
+/scroll up
 ```
 
 The TUI supports:
@@ -202,6 +203,8 @@ The TUI supports:
   `/send-agent <id> <message>`, and `/read-agent <id>`;
 - classic and Matrix-inspired themes with `/theme classic|matrix`;
 - conversation compaction through `/compact`;
+- chat transcript scrolling through `Ctrl+B`/`Ctrl+F`, `Ctrl+P`/`Ctrl+N`, or
+  `/scroll up|down|top|bottom`;
 - context controls through `/context ...`;
 - progress commentary through `/progress observer on|off`.
 

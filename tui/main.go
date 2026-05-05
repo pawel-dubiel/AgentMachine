@@ -501,6 +501,7 @@ type model struct {
 	skillPickerQuery           string
 	skillStatus                string
 	messages                   []chatMessage
+	chatScroll                 int
 	inputHistory               []string
 	historyIndex               int
 	historyDraft               string
@@ -710,6 +711,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width > 4 {
 			m.input.Width = msg.Width - 4
 		}
+		m.clampChatScroll()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -865,6 +867,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.back()
 			return m, nil
+		case "ctrl+p":
+			if m.view == viewChat {
+				m.scrollChat(1)
+				return m, nil
+			}
+		case "ctrl+n":
+			if m.view == viewChat {
+				m.scrollChat(-1)
+				return m, nil
+			}
+		case "ctrl+b":
+			if m.view == viewChat {
+				m.scrollChat(m.chatPageSize())
+				return m, nil
+			}
+		case "ctrl+f":
+			if m.view == viewChat {
+				m.scrollChat(-m.chatPageSize())
+				return m, nil
+			}
 		case "up", "k":
 			if m.running && m.view == viewChat {
 				m.scrollEvents(-1)
@@ -901,22 +923,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.submitInput()
 		case "pgup":
+			if m.view == viewChat && !m.running {
+				m.scrollChat(m.chatPageSize())
+				return m, nil
+			}
 			if m.running && m.view == viewChat {
 				m.scrollEvents(-5)
 				return m, nil
 			}
 		case "pgdown":
+			if m.view == viewChat && !m.running {
+				m.scrollChat(-m.chatPageSize())
+				return m, nil
+			}
 			if m.running && m.view == viewChat {
 				m.scrollEvents(5)
 				return m, nil
 			}
 		case "home":
+			if m.view == viewChat && !m.running {
+				m.chatScroll = m.maxChatScroll()
+				return m, nil
+			}
 			if m.running && m.view == viewChat {
 				m.eventScroll = 0
 				m.eventAutoScroll = false
 				return m, nil
 			}
 		case "end":
+			if m.view == viewChat && !m.running {
+				m.chatScroll = 0
+				return m, nil
+			}
 			if m.running && m.view == viewChat {
 				m.eventAutoScroll = true
 				m.clampEventScroll()
@@ -946,6 +984,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(msg.Summary)})
 		}
+		m.chatScroll = 0
 		return m.startNextQueuedRun()
 
 	case streamStartedMsg:
@@ -959,6 +998,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.running = false
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\n" + msg.Err.Error()})
+			m.chatScroll = 0
 			return m.startNextQueuedRun()
 		}
 		return m, nil
@@ -1011,6 +1051,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Text: "Run failed:\nAgentMachine stream ended without a summary"})
 		}
+		m.chatScroll = 0
 		return m.startNextQueuedRun()
 
 	case permissionDecisionMsg:
@@ -1224,6 +1265,7 @@ func (m model) startRun(task string) (tea.Model, tea.Cmd) {
 		chatMessage{Role: "user", Text: task},
 		chatMessage{Role: "system", Text: runningStatus(config)},
 	)
+	m.chatScroll = 0
 	previousConfig := m.activeConfig
 	reuseSession := m.stream != nil && m.stream.persistent && sessionReusable(previousConfig, config)
 	m.running = true
@@ -1547,7 +1589,7 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	name := strings.TrimPrefix(parts[0], "/")
 	args := parts[1:]
 
-	if m.running && name != "queue" && name != "theme" {
+	if m.running && name != "queue" && name != "theme" && name != "scroll" {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "command unavailable while a run is active; queue a message or use /queue"})
 		return m, nil
 	}
@@ -1619,10 +1661,13 @@ func (m model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		return m.handleReadAgentCommand(args)
 	case "queue":
 		return m.handleQueueCommand(args)
+	case "scroll":
+		return m.handleScrollCommand(args)
 	case "back":
 		m.back()
 	case "clear":
 		m.messages = nil
+		m.chatScroll = 0
 		m.view = viewChat
 	case "quit", "q":
 		if m.stream != nil && m.stream.persistent {
@@ -1659,6 +1704,26 @@ func (m model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "theme set to " + string(theme)})
+	return m, nil
+}
+
+func (m model) handleScrollCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) != 1 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /scroll up|down|top|bottom"})
+		return m, nil
+	}
+	switch args[0] {
+	case "up":
+		m.scrollChat(m.chatPageSize())
+	case "down":
+		m.scrollChat(-m.chatPageSize())
+	case "top":
+		m.chatScroll = m.maxChatScroll()
+	case "bottom":
+		m.chatScroll = 0
+	default:
+		m.messages = append(m.messages, chatMessage{Role: "system", Text: "usage: /scroll up|down|top|bottom"})
+	}
 	return m, nil
 }
 
@@ -3498,6 +3563,7 @@ func (m model) handleStreamLine(line string) (model, tea.Cmd) {
 			} else {
 				m.messages = append(m.messages, chatMessage{Role: "assistant", Text: summaryDisplayText(envelope.Summary)})
 			}
+			m.chatScroll = 0
 			nextModel, cmd := m.startNextQueuedRun()
 			if typed, ok := nextModel.(model); ok {
 				return typed, cmd
@@ -5557,6 +5623,37 @@ func (m *model) scrollEvents(delta int) {
 	m.eventAutoScroll = false
 	m.eventScroll += delta
 	m.clampEventScroll()
+}
+
+func (m *model) scrollChat(delta int) {
+	m.chatScroll += delta
+	m.clampChatScroll()
+}
+
+func (m *model) clampChatScroll() {
+	maxScroll := m.maxChatScroll()
+	if m.chatScroll < 0 {
+		m.chatScroll = 0
+	}
+	if m.chatScroll > maxScroll {
+		m.chatScroll = maxScroll
+	}
+}
+
+func (m model) maxChatScroll() int {
+	height := m.chatViewportHeight()
+	if height <= 0 {
+		return 0
+	}
+	text := strings.TrimRight(m.fullChatText(), "\n")
+	if text == "" {
+		return 0
+	}
+	lineCount := len(strings.Split(text, "\n"))
+	if lineCount <= height {
+		return 0
+	}
+	return lineCount - height
 }
 
 func (m *model) clampEventScroll() {
