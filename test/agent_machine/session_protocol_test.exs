@@ -10,6 +10,8 @@ defmodule AgentMachine.SessionProtocolTest do
         message_id: "msg-1",
         run: %{
           task: "hello",
+          recent_context: "user created mdp1; assistant confirmed completion",
+          pending_action: "continue work inside mdp1",
           workflow: "agentic",
           provider: "echo",
           log_file: "/tmp/agent-machine-run.jsonl",
@@ -32,6 +34,8 @@ defmodule AgentMachine.SessionProtocolTest do
              message_id: "msg-1",
              run: %{
                task: "hello",
+               recent_context: "user created mdp1; assistant confirmed completion",
+               pending_action: "continue work inside mdp1",
                workflow: :agentic,
                provider: :echo,
                timeout_ms: 1_000,
@@ -56,6 +60,15 @@ defmodule AgentMachine.SessionProtocolTest do
       ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"agentic","provider":"echo","timeout_ms":1000,"max_steps":1,"max_attempts":1,"stream_response":true,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4,"surprise":true}})
 
     assert_raise ArgumentError, ~r/run contains unknown key/, fn ->
+      SessionProtocol.parse_command!(line)
+    end
+  end
+
+  test "rejects empty structured conversation context fields" do
+    line =
+      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","recent_context":"","provider":"echo","timeout_ms":1000,"max_steps":1,"max_attempts":1,"stream_response":true,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4}})
+
+    assert_raise ArgumentError, ~r/recent_context/, fn ->
       SessionProtocol.parse_command!(line)
     end
   end

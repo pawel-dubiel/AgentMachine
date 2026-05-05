@@ -11,6 +11,8 @@ defmodule AgentMachine.RunSpec do
   # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :task,
+    :recent_context,
+    :pending_action,
     :workflow,
     :provider,
     :model,
@@ -53,6 +55,8 @@ defmodule AgentMachine.RunSpec do
 
   @type t :: %__MODULE__{
           task: binary(),
+          recent_context: binary() | nil,
+          pending_action: binary() | nil,
           workflow: :agentic,
           provider: :echo | binary(),
           model: binary() | nil,
@@ -117,6 +121,8 @@ defmodule AgentMachine.RunSpec do
 
   defp validate!(%__MODULE__{} = spec) do
     require_non_empty_binary!(spec.task, :task)
+    require_optional_non_empty_binary!(spec.recent_context, :recent_context)
+    require_optional_non_empty_binary!(spec.pending_action, :pending_action)
     require_workflow!(spec.workflow)
     require_provider!(spec.provider)
     require_positive_integer!(spec.timeout_ms, :timeout_ms)
@@ -166,6 +172,22 @@ defmodule AgentMachine.RunSpec do
   defp require_workflow!(workflow) do
     raise ArgumentError,
           "run spec :workflow must be :agentic or omitted, got: #{inspect(workflow)}"
+  end
+
+  defp require_optional_non_empty_binary!(nil, _field), do: :ok
+
+  defp require_optional_non_empty_binary!(value, field) when is_binary(value) do
+    if String.trim(value) == "" do
+      raise ArgumentError,
+            "run spec #{inspect(field)} must be a non-empty binary when supplied, got: #{inspect(value)}"
+    end
+
+    :ok
+  end
+
+  defp require_optional_non_empty_binary!(value, field) do
+    raise ArgumentError,
+          "run spec #{inspect(field)} must be a non-empty binary when supplied, got: #{inspect(value)}"
   end
 
   defp require_provider!(:echo), do: :ok

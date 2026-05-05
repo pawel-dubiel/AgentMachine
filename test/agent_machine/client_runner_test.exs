@@ -81,6 +81,37 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
+  test "validates optional structured conversation context fields" do
+    assert %RunSpec{
+             task: "inside this dir create index.html",
+             recent_context: "user created myproj1; assistant confirmed it",
+             pending_action: "create index.html in myproj1"
+           } =
+             RunSpec.new!(%{
+               task: "inside this dir create index.html",
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 2,
+               max_attempts: 1,
+               recent_context: "user created myproj1; assistant confirmed it",
+               pending_action: "create index.html in myproj1"
+             })
+
+    for {field, value} <- [recent_context: "", pending_action: 123] do
+      assert_raise ArgumentError, ~r/run spec #{inspect(field)} must be a non-empty binary/, fn ->
+        %{
+          task: "do work",
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 2,
+          max_attempts: 1
+        }
+        |> Map.put(field, value)
+        |> RunSpec.new!()
+      end
+    end
+  end
+
   test "validates agentic persistence rounds" do
     assert %RunSpec{agentic_persistence_rounds: 2} =
              RunSpec.new!(%{

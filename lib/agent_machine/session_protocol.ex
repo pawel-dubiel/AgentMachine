@@ -7,6 +7,8 @@ defmodule AgentMachine.SessionProtocol do
 
   @run_keys %{
     "task" => :task,
+    "recent_context" => :recent_context,
+    "pending_action" => :pending_action,
     "workflow" => :workflow,
     "provider" => :provider,
     "provider_options" => :provider_options,
@@ -185,6 +187,8 @@ defmodule AgentMachine.SessionProtocol do
     |> normalize_optional_atom_value!(:run_context_compaction, @compaction_values)
     |> normalize_optional_atom_value!(:router_mode, @router_values)
     |> normalize_optional_atom_value!(:planner_review_mode, @planner_review_values)
+    |> normalize_optional_context_field!(:recent_context)
+    |> normalize_optional_context_field!(:pending_action)
     |> normalize_pricing!()
     |> normalize_provider_options!()
   end
@@ -201,6 +205,30 @@ defmodule AgentMachine.SessionProtocol do
       provider ->
         raise ArgumentError, "run :provider must be a string, got: #{inspect(provider)}"
     end)
+  end
+
+  defp normalize_optional_context_field!(attrs, key) do
+    case Map.fetch(attrs, key) do
+      {:ok, nil} ->
+        Map.delete(attrs, key)
+
+      {:ok, value} when is_binary(value) ->
+        trimmed = String.trim(value)
+
+        if trimmed == "" do
+          raise ArgumentError,
+                "run #{inspect(key)} must be a non-empty string when supplied, got: #{inspect(value)}"
+        end
+
+        Map.put(attrs, key, trimmed)
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "run #{inspect(key)} must be a non-empty string when supplied, got: #{inspect(value)}"
+
+      :error ->
+        attrs
+    end
   end
 
   defp normalize_optional_atom_value!(attrs, key, values) do
