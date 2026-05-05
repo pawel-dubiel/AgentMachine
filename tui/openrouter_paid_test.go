@@ -21,7 +21,7 @@ func TestPaidOpenRouterRunThroughTUIAdapter(t *testing.T) {
 
 	summary, raw, err := runPaidAgentMachine(t, runConfig{
 		Task:        "Reply with one concise sentence that includes AgentMachine and TUI.",
-		Workflow:    workflowBasic,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		APIKey:      apiKey,
 		Model:       paidModel,
@@ -402,7 +402,7 @@ func TestPaidOpenRouterSessionAutoCodeEditWebsiteThroughTUIAdapter(t *testing.T)
 			"Use the available code-edit tools. Call apply_patch exactly once with the exact patch text below as the patch argument. " +
 			"Patch:\n" + patch +
 			"Do not only describe the change. Report the confirmed file path and sentinel SESSION_SITE_OK.",
-		Workflow:       workflowAuto,
+		Workflow:       workflowAgentic,
 		Provider:       providerOpenRouter,
 		APIKey:         apiKey,
 		Model:          paidModel,
@@ -426,8 +426,8 @@ func TestPaidOpenRouterSessionAutoCodeEditWebsiteThroughTUIAdapter(t *testing.T)
 	if summary.Status != "completed" {
 		t.Fatalf("expected completed summary, got %#v", summary)
 	}
-	if summary.WorkflowRoute.Selected != "agentic" {
-		t.Fatalf("expected session request to route to agentic workflow, got %#v", summary.WorkflowRoute)
+	if summary.ExecutionStrategy.Selected != "planned" {
+		t.Fatalf("expected session request to use planned strategy, got %#v", summary.ExecutionStrategy)
 	}
 	assertPlannerDecision(t, summary.Results, "delegate")
 	if !hasEvent(summary.Events, "tool_call_finished") {

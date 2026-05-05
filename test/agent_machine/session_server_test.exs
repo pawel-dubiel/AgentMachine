@@ -23,7 +23,8 @@ defmodule AgentMachine.SessionServerTest do
     end)
 
     summary = last_summary(output)
-    assert summary["workflow_route"]["selected"] == "session"
+    assert summary["workflow_route"]["selected"] == "direct"
+    assert summary["execution_strategy"]["session_coordinator"] == true
     assert Map.has_key?(summary["results"], "coordinator")
   end
 
@@ -47,7 +48,13 @@ defmodule AgentMachine.SessionServerTest do
              &match?(%{"type" => "event", "event" => %{"type" => "run_started"}}, &1)
            )
 
-    assert %{"workflow_route" => %{"selected" => "session"}} =
+    assert %{
+             "execution_strategy" => %{
+               "selected" => "direct",
+               "session_coordinator" => true
+             },
+             "workflow_route" => %{"selected" => "direct"}
+           } =
              entries |> last_log_summary() |> Map.fetch!("summary")
   end
 
@@ -58,7 +65,7 @@ defmodule AgentMachine.SessionServerTest do
     assert {:ok, %{status: "started"}} =
              SessionServer.user_message(
                server,
-               user_message("msg-1", "say hello", [workflow: :basic, max_steps: 4],
+               user_message("msg-1", "use agents to say hello", [max_steps: 4],
                  log_file: log_path
                )
              )
@@ -73,11 +80,11 @@ defmodule AgentMachine.SessionServerTest do
              &match?(%{"type" => "event", "event" => %{"type" => "run_started"}}, &1)
            )
 
-    assert %{"workflow_route" => %{"selected" => "basic"}} =
+    assert %{"execution_strategy" => %{"selected" => "planned"}} =
              entries |> last_log_summary() |> Map.fetch!("summary")
   end
 
-  test "auto-routed code mutation starts a primary sidechain and writes its summary" do
+  test "code mutation strategy starts a primary sidechain and writes its summary" do
     %{server: server, output: output} = start_session!()
     root = tmp_dir!("agent-machine-session-code-edit")
 
@@ -87,7 +94,7 @@ defmodule AgentMachine.SessionServerTest do
                user_message(
                  "msg-1",
                  "create a react app file src/main.js with hello world",
-                 workflow: :auto,
+                 workflow: :agentic,
                  max_steps: 6,
                  router_mode: :deterministic,
                  tool_harnesses: [:code_edit],
@@ -109,15 +116,15 @@ defmodule AgentMachine.SessionServerTest do
     assert [%{name: "request-1", status: :completed}] = Map.values(state.agents)
 
     summary = last_summary(output)
-    assert summary["workflow_route"]["selected"] == "agentic"
-    assert summary["workflow_route"]["tool_intent"] == "code_mutation"
+    assert summary["execution_strategy"]["selected"] == "planned"
+    assert summary["execution_strategy"]["tool_intent"] == "code_mutation"
     assert Map.has_key?(summary["results"], "planner")
     refute Map.has_key?(summary["results"], "coordinator")
 
     assert output_event?(output, "session_agent_started")
   end
 
-  test "auto-routed code mutation fails fast without code-edit capability" do
+  test "code mutation strategy fails fast without code-edit capability" do
     %{server: server, output: output} = start_session!()
     root = tmp_dir!("agent-machine-session-local-files")
 
@@ -140,7 +147,7 @@ defmodule AgentMachine.SessionServerTest do
                user_message(
                  "msg-1",
                  "create a react app file src/main.js with hello world",
-                 workflow: :auto,
+                 workflow: :agentic,
                  provider: "openrouter",
                  model: "openai/gpt-4o-mini",
                  http_timeout_ms: 1_000,
@@ -191,9 +198,12 @@ defmodule AgentMachine.SessionServerTest do
           user_message(
             "msg-1",
             "say hello",
-            workflow: :auto,
+            workflow: :agentic,
             router_mode: :llm,
-            model: "test-router-model"
+            provider: "openrouter",
+            model: "test-router-model",
+            http_timeout_ms: 1_000,
+            pricing: %{input_per_million: 0.15, output_per_million: 0.60}
           )
         )
       end)
@@ -322,7 +332,7 @@ defmodule AgentMachine.SessionServerTest do
     run =
       %{
         task: task,
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 10_000,
         max_steps: 1,

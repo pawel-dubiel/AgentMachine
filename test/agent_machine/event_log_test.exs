@@ -26,9 +26,10 @@ defmodule AgentMachine.EventLogTest do
     EventLog.configure!(path, %{session_id: "session-1"})
 
     EventLog.write_event(%{
-      type: :workflow_routed,
-      requested: "auto",
-      selected: "basic",
+      type: :execution_strategy_selected,
+      requested: "agentic",
+      selected: "tool",
+      strategy: "tool",
       reason: "token=secret-value",
       tool_intent: "time",
       tools_exposed: true,
@@ -54,10 +55,10 @@ defmodule AgentMachine.EventLogTest do
     assert %{
              "type" => "event",
              "event" => %{
-               "type" => "workflow_routed",
-               "selected" => "basic",
+               "type" => "execution_strategy_selected",
+               "selected" => "tool",
                "tools_exposed" => true,
-               "summary" => "Workflow routed to basic"
+               "summary" => "Execution strategy selected: tool"
              }
            } = JSON.decode!(Enum.at(lines, 1))
 

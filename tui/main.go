@@ -24,6 +24,7 @@ type summary struct {
 	Status             string                      `json:"status"`
 	Error              string                      `json:"error"`
 	FinalOutput        string                      `json:"final_output"`
+	ExecutionStrategy  workflowRoute               `json:"execution_strategy"`
 	WorkflowRoute      workflowRoute               `json:"workflow_route"`
 	Results            map[string]runResultSummary `json:"results"`
 	Skills             []skillSummary              `json:"skills"`
@@ -66,6 +67,7 @@ type workflowRoute struct {
 	Selected         string   `json:"selected"`
 	Reason           string   `json:"reason"`
 	ToolIntent       string   `json:"tool_intent"`
+	Strategy         string   `json:"strategy"`
 	ToolsExposed     bool     `json:"tools_exposed"`
 	Classifier       string   `json:"classifier"`
 	ClassifierModel  string   `json:"classifier_model"`
@@ -135,6 +137,8 @@ type eventSummary struct {
 	ApprovalMode          string         `json:"approval_mode"`
 	Capability            string         `json:"capability"`
 	Intent                string         `json:"intent"`
+	Strategy              string         `json:"strategy"`
+	Selected              string         `json:"selected"`
 	RequiredHarness       string         `json:"required_harness"`
 	RequiredHarnesses     []string       `json:"required_harnesses"`
 	RequiredApprovalModes []string       `json:"required_approval_modes"`
@@ -337,10 +341,7 @@ var providerSetups = map[provider]providerSetup{
 type runWorkflow string
 
 const (
-	workflowChat    runWorkflow = "chat"
-	workflowBasic   runWorkflow = "basic"
 	workflowAgentic runWorkflow = "agentic"
-	workflowAuto    runWorkflow = "auto"
 )
 
 const (
@@ -403,43 +404,43 @@ type runConfig struct {
 }
 
 type savedConfig struct {
-	OpenAIAPIKey               string                       `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey           string                       `json:"openrouter_api_key,omitempty"`
-	Workflow                   string                       `json:"workflow,omitempty"`
-	Provider                   string                       `json:"provider,omitempty"`
-	OpenAIModel                string                       `json:"openai_model,omitempty"`
-	OpenRouterModel            string                       `json:"openrouter_model,omitempty"`
-	ProviderSecrets            map[string]map[string]string `json:"provider_secrets,omitempty"`
-	ProviderOptions            map[string]map[string]string `json:"provider_options,omitempty"`
-	ProviderModels             map[string]string            `json:"provider_models,omitempty"`
-	Theme                      string                       `json:"theme,omitempty"`
-	ToolHarness                string                       `json:"tool_harness,omitempty"`
-	ToolRoot                   string                       `json:"tool_root,omitempty"`
-	ToolTimeout                string                       `json:"tool_timeout_ms,omitempty"`
-	ToolMaxRounds              string                       `json:"tool_max_rounds,omitempty"`
-	ToolApproval               string                       `json:"tool_approval_mode,omitempty"`
-	TestCommands               []string                     `json:"test_commands,omitempty"`
-	MCPConfig                  string                       `json:"mcp_config,omitempty"`
-	AgenticPersistenceRounds   string                       `json:"agentic_persistence_rounds,omitempty"`
-	AgenticPersistenceMaxSteps string                       `json:"agentic_persistence_max_steps,omitempty"`
-	AgenticPersistenceTimeout  string                       `json:"agentic_persistence_timeout_ms,omitempty"`
-	PlannerReviewMaxRevisions  string                       `json:"planner_review_max_revisions,omitempty"`
-	RouterMode                 string                       `json:"router_mode,omitempty"`
-	RouterModelDir             string                       `json:"router_model_dir,omitempty"`
-	RouterTimeout              string                       `json:"router_timeout_ms,omitempty"`
-	RouterConfidence           string                       `json:"router_confidence_threshold,omitempty"`
-	SkillsMode                 string                       `json:"skills_mode,omitempty"`
-	SkillsDir                  string                       `json:"skills_dir,omitempty"`
-	SkillNames                 []string                     `json:"skill_names,omitempty"`
-	AllowSkillScripts          bool                         `json:"allow_skill_scripts,omitempty"`
-	ContextWindow              string                       `json:"context_window_tokens,omitempty"`
-	ContextWarning             string                       `json:"context_warning_percent,omitempty"`
-	ContextTokenizer           string                       `json:"context_tokenizer_path,omitempty"`
-	ReservedOutput             string                       `json:"reserved_output_tokens,omitempty"`
-	RunContextCompact          string                       `json:"run_context_compaction,omitempty"`
-	ContextCompactPct          string                       `json:"run_context_compact_percent,omitempty"`
-	MaxContextCompact          string                       `json:"max_context_compactions,omitempty"`
-	ProgressObserver           bool                         `json:"progress_observer,omitempty"`
+	OpenAIAPIKey               string                            `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey           string                            `json:"openrouter_api_key,omitempty"`
+	Provider                   string                            `json:"provider,omitempty"`
+	OpenAIModel                string                            `json:"openai_model,omitempty"`
+	OpenRouterModel            string                            `json:"openrouter_model,omitempty"`
+	ProviderSecrets            map[string]map[string]string      `json:"provider_secrets,omitempty"`
+	ProviderOptions            map[string]map[string]string      `json:"provider_options,omitempty"`
+	ProviderModels             map[string]string                 `json:"provider_models,omitempty"`
+	ProviderModelMetadata      map[string]map[string]modelOption `json:"provider_model_metadata,omitempty"`
+	Theme                      string                            `json:"theme,omitempty"`
+	ToolHarness                string                            `json:"tool_harness,omitempty"`
+	ToolRoot                   string                            `json:"tool_root,omitempty"`
+	ToolTimeout                string                            `json:"tool_timeout_ms,omitempty"`
+	ToolMaxRounds              string                            `json:"tool_max_rounds,omitempty"`
+	ToolApproval               string                            `json:"tool_approval_mode,omitempty"`
+	TestCommands               []string                          `json:"test_commands,omitempty"`
+	MCPConfig                  string                            `json:"mcp_config,omitempty"`
+	AgenticPersistenceRounds   string                            `json:"agentic_persistence_rounds,omitempty"`
+	AgenticPersistenceMaxSteps string                            `json:"agentic_persistence_max_steps,omitempty"`
+	AgenticPersistenceTimeout  string                            `json:"agentic_persistence_timeout_ms,omitempty"`
+	PlannerReviewMaxRevisions  string                            `json:"planner_review_max_revisions,omitempty"`
+	RouterMode                 string                            `json:"router_mode,omitempty"`
+	RouterModelDir             string                            `json:"router_model_dir,omitempty"`
+	RouterTimeout              string                            `json:"router_timeout_ms,omitempty"`
+	RouterConfidence           string                            `json:"router_confidence_threshold,omitempty"`
+	SkillsMode                 string                            `json:"skills_mode,omitempty"`
+	SkillsDir                  string                            `json:"skills_dir,omitempty"`
+	SkillNames                 []string                          `json:"skill_names,omitempty"`
+	AllowSkillScripts          bool                              `json:"allow_skill_scripts,omitempty"`
+	ContextWindow              string                            `json:"context_window_tokens,omitempty"`
+	ContextWarning             string                            `json:"context_warning_percent,omitempty"`
+	ContextTokenizer           string                            `json:"context_tokenizer_path,omitempty"`
+	ReservedOutput             string                            `json:"reserved_output_tokens,omitempty"`
+	RunContextCompact          string                            `json:"run_context_compaction,omitempty"`
+	ContextCompactPct          string                            `json:"run_context_compact_percent,omitempty"`
+	MaxContextCompact          string                            `json:"max_context_compactions,omitempty"`
+	ProgressObserver           bool                              `json:"progress_observer,omitempty"`
 }
 
 type startupOptions struct {
@@ -477,8 +478,6 @@ const (
 
 type model struct {
 	input                      textinput.Model
-	workflow                   runWorkflow
-	workflowSet                bool
 	provider                   provider
 	providerSet                bool
 	providerPickerOpen         bool
@@ -490,6 +489,7 @@ type model struct {
 	modelOptions               []modelOption
 	modelIndex                 int
 	selectedModel              string
+	pendingRunAfterModelLoad   string
 	modelStatus                string
 	modelPickerOpen            bool
 	modelPickerIndex           int
@@ -1074,6 +1074,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelPickerOpen = false
 			m.modelPickerPending = false
 			m.modelPickerQuery = ""
+			m.pendingRunAfterModelLoad = ""
 			m.modelStatus = "model load failed: " + msg.Err.Error()
 			m.messages = append(m.messages, chatMessage{Role: "system", Text: m.modelStatus})
 			return m, nil
@@ -1084,12 +1085,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.Models) > 0 {
 			m.selectedModel = msg.Models[m.modelIndex].ID
 			m.modelPickerIndex = m.modelIndex
+			m.savedConfig.rememberModel(m.provider, m.selectedModel)
+			if m.rememberSelectedModelMetadata() && strings.TrimSpace(m.configPath) != "" {
+				if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
+					m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
+				}
+			}
 		}
 		m.modelStatus = fmt.Sprintf("loaded %d models", len(msg.Models))
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: m.modelStatus + " for " + m.provider.Label()})
 		if m.modelPickerPending {
 			m.modelPickerOpen = len(m.modelOptions) > 0
 			m.modelPickerPending = false
+		}
+		if strings.TrimSpace(m.pendingRunAfterModelLoad) != "" {
+			task := m.pendingRunAfterModelLoad
+			m.pendingRunAfterModelLoad = ""
+			m.messages = append(m.messages, chatMessage{Role: "system", Text: "starting after model metadata load"})
+			return m.startRun(task)
 		}
 		return m, nil
 	}
@@ -1167,10 +1180,6 @@ func (m model) startNextQueuedRun() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startRun(task string) (tea.Model, tea.Cmd) {
-	return m.startRunWithWorkflow(task, workflowAuto)
-}
-
-func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Model, tea.Cmd) {
 	if !m.providerSet {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: "select a provider in Setup before running"})
 		m.view = viewSetup
@@ -1181,14 +1190,18 @@ func (m model) startRunWithWorkflow(task string, workflow runWorkflow) (tea.Mode
 	runTask := permissionTask
 	config, err := resolveConfig(m.runConfig(runTask))
 	if err != nil {
+		if m.shouldLoadModelsForMissingPricing(err) {
+			m.pendingRunAfterModelLoad = task
+			m.modelStatus = "loading models..."
+			m.messages = append(m.messages, chatMessage{
+				Role: "system",
+				Text: "pricing metadata is missing for model " + strconv.Quote(m.selectedModel) + "; loading models for " + m.provider.Label() + "...",
+			})
+			return m, m.loadModelsCommand()
+		}
 		return m.withRunPreparationError(err), nil
 	}
 	m.refreshGitBranchStatus()
-	if strings.TrimSpace(config.AgenticPersistenceRounds) != "" {
-		config.Workflow = workflowAgentic
-	} else {
-		config.Workflow = workflow
-	}
 	config.LogFile = nextRunLogPath(m.configPath)
 
 	if err := validateConfig(config); err != nil {
@@ -1252,6 +1265,14 @@ func (m model) withRunPreparationError(err error) model {
 	return m
 }
 
+func (m model) shouldLoadModelsForMissingPricing(err error) bool {
+	return err != nil &&
+		m.providerSet &&
+		m.provider != providerEcho &&
+		strings.TrimSpace(m.selectedModel) != "" &&
+		strings.Contains(err.Error(), "pricing is missing for model")
+}
+
 func (m model) withCapabilityRequired(request capabilityRequired) (model, bool) {
 	if request.empty() {
 		return m, false
@@ -1308,6 +1329,13 @@ func pendingHarnessForCapability(request capabilityRequired) string {
 			return pendingHarnessMCPBrowser
 		}
 	case "missing_write_harness", "missing_code_edit_harness", "missing_test_code_edit_harness", "missing_test_approval":
+		if request.RequiredHarness == "local-files" || request.RequiredHarness == "code-edit" {
+			return request.RequiredHarness
+		}
+	case "insufficient_tool_timeout", "insufficient_tool_max_rounds":
+		if request.RequiredHarness == "mcp" && request.RequiredMCPTool == "browser_navigate" {
+			return pendingHarnessMCPBrowser
+		}
 		if request.RequiredHarness == "local-files" || request.RequiredHarness == "code-edit" {
 			return request.RequiredHarness
 		}
@@ -1959,7 +1987,7 @@ func (m model) plannerReviewStatus() string {
 	if strings.TrimSpace(m.savedConfig.PlannerReviewMaxRevisions) == "" {
 		return "planner review: off"
 	}
-	return "planner review: jsonl-stdio max_revisions=" + m.savedConfig.PlannerReviewMaxRevisions
+	return "planner review: jsonl-stdio max_revisions=" + m.savedConfig.PlannerReviewMaxRevisions + " runtime=agentic"
 }
 
 func (m model) handleQueueCommand(args []string) (tea.Model, tea.Cmd) {
@@ -2136,7 +2164,7 @@ func (m model) handleAllowToolsCommand(args []string, fallbackApproval string) (
 	m.pendingToolHarness = ""
 	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed " + harness + " tools root=" + root + " timeout_ms=" + defaultFilesystemToolTimeout + " max_rounds=" + defaultFilesystemToolMaxRounds + " approval=" + approval})
-	return m.startRunWithWorkflow(task, workflowAgentic)
+	return m.startRun(task)
 }
 
 func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string) (tea.Model, tea.Cmd) {
@@ -2173,7 +2201,7 @@ func (m model) handleAllowMCPBrowserToolsCommand(args []string, approval string)
 	m.pendingToolHarness = ""
 	m.pendingToolChoice = 0
 	m.messages = append(m.messages, chatMessage{Role: "system", Text: "allowed MCP browser tools approval=" + approval})
-	return m.startRunWithWorkflow(task, workflowAuto)
+	return m.startRun(task)
 }
 
 type pendingToolOption struct {
@@ -2499,7 +2527,7 @@ func runtimePermissionDecisionFromInput(text string) (string, bool) {
 func (m model) handleWorkflowCommand(args []string) (tea.Model, tea.Cmd) {
 	_ = args
 	m.view = viewChat
-	m.messages = append(m.messages, chatMessage{Role: "system", Text: "TUI uses progressive auto mode; each run requests auto and records the selected route: chat, tool, basic, or agentic"})
+	m.messages = append(m.messages, chatMessage{Role: "system", Text: "Workflow selection was removed; every run uses the agentic runtime and reports strategy direct, tool, planned, or swarm."})
 	return m, nil
 }
 
@@ -3347,6 +3375,7 @@ func (m model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	m.savedConfig.rememberModel(m.provider, m.selectedModel)
+	m.rememberSelectedModelMetadata()
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
 		return m, nil
@@ -3371,6 +3400,7 @@ func (m model) selectModelFromPicker() (tea.Model, tea.Cmd) {
 	m.modelIndex = m.modelPickerIndex
 	m.selectedModel = m.modelOptions[m.modelIndex].ID
 	m.savedConfig.rememberModel(m.provider, m.selectedModel)
+	m.rememberSelectedModelMetadata()
 	m.modelPickerOpen = false
 	if err := saveSavedConfig(m.configPath, m.savedConfig); err != nil {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: err.Error()})
@@ -4000,7 +4030,7 @@ func (m *model) refreshGitBranchStatus() {
 func (m model) runConfig(task string) runConfig {
 	config := runConfig{
 		Task:                      task,
-		Workflow:                  workflowAuto,
+		Workflow:                  workflowAgentic,
 		Provider:                  m.provider,
 		APIKey:                    m.apiKey(),
 		ProviderSecrets:           m.savedConfig.providerSecretsFor(m.provider),
@@ -4035,7 +4065,6 @@ func (m model) runConfig(task string) runConfig {
 		ProgressObserver:          m.savedConfig.ProgressObserver,
 	}
 	if strings.TrimSpace(m.savedConfig.AgenticPersistenceRounds) != "" {
-		config.Workflow = workflowAgentic
 		config.RunTimeout = m.savedConfig.AgenticPersistenceTimeout
 	}
 
@@ -4072,6 +4101,9 @@ func (m model) selectedModelPricing(modelID string) (modelPricing, bool) {
 			return option.Pricing, true
 		}
 	}
+	if option, ok := m.savedConfig.modelMetadataFor(m.provider, modelID); ok {
+		return option.Pricing, true
+	}
 	return modelPricing{}, false
 }
 
@@ -4083,6 +4115,10 @@ func (m model) contextWindowForModel(modelID string) string {
 		if option.ID == modelID && option.ContextWindowTokens > 0 {
 			return strconv.Itoa(option.ContextWindowTokens)
 		}
+	}
+	if option, ok := m.savedConfig.modelMetadataFor(m.provider, modelID); ok &&
+		option.ContextWindowTokens > 0 {
+		return strconv.Itoa(option.ContextWindowTokens)
 	}
 	return ""
 }
@@ -4119,6 +4155,16 @@ func (m *model) changeModel(delta int) {
 	}
 	m.modelIndex = (m.modelIndex + delta + len(m.modelOptions)) % len(m.modelOptions)
 	m.selectedModel = m.modelOptions[m.modelIndex].ID
+}
+
+func (m *model) rememberSelectedModelMetadata() bool {
+	for _, option := range m.modelOptions {
+		if option.ID == m.selectedModel {
+			m.savedConfig.rememberModelMetadata(m.provider, option)
+			return true
+		}
+	}
+	return false
 }
 
 func (m *model) moveProviderPicker(delta int) {
@@ -4383,8 +4429,8 @@ func validatePlannerReviewConfig(config runConfig) error {
 	if strings.TrimSpace(config.PlannerReviewMaxRevisions) == "" {
 		return nil
 	}
-	if config.Workflow != workflowAgentic && config.Workflow != workflowAuto {
-		return errors.New("planner review requires agentic or auto workflow")
+	if config.Workflow != workflowAgentic {
+		return errors.New("planner review requires agentic runtime")
 	}
 	return validatePositiveInt(config.PlannerReviewMaxRevisions, "planner review max revisions")
 }
@@ -4401,7 +4447,7 @@ func validateAgenticPersistenceConfig(config runConfig) error {
 	}
 
 	if config.Workflow != workflowAgentic {
-		return errors.New("agentic persistence requires agentic workflow")
+		return errors.New("agentic persistence requires agentic runtime")
 	}
 	if err := validatePositiveInt(config.AgenticPersistenceRounds, "agentic persistence rounds"); err != nil {
 		return err
@@ -4730,55 +4776,6 @@ func validateToolConfig(config runConfig) error {
 }
 
 func validateRunnableConfig(config runConfig) error {
-	return validateCodeEditShellBudget(config)
-}
-
-func validateCodeEditShellBudget(config runConfig) error {
-	if config.ToolHarness != "code-edit" || (config.ToolApproval != "ask-before-write" && config.ToolApproval != "full-access") {
-		return nil
-	}
-	if config.Workflow == workflowAuto {
-		return nil
-	}
-
-	timeout, err := positiveIntValue(config.ToolTimeout, "tool timeout ms")
-	if err != nil {
-		return err
-	}
-	minTimeout, err := positiveIntValue(defaultFilesystemToolTimeout, "default filesystem tool timeout ms")
-	if err != nil {
-		return err
-	}
-	if timeout < minTimeout {
-		return fmt.Errorf(
-			"code-edit shell access requires tool timeout ms >= %s; run /tools code-edit %s %s %s %s",
-			defaultFilesystemToolTimeout,
-			config.ToolRoot,
-			defaultFilesystemToolTimeout,
-			defaultFilesystemToolMaxRounds,
-			config.ToolApproval,
-		)
-	}
-
-	maxRounds, err := positiveIntValue(config.ToolMaxRounds, "tool max rounds")
-	if err != nil {
-		return err
-	}
-	minRounds, err := positiveIntValue(defaultFilesystemToolMaxRounds, "default filesystem tool max rounds")
-	if err != nil {
-		return err
-	}
-	if maxRounds < minRounds {
-		return fmt.Errorf(
-			"code-edit shell access requires tool max rounds >= %s; run /tools code-edit %s %s %s %s",
-			defaultFilesystemToolMaxRounds,
-			config.ToolRoot,
-			defaultFilesystemToolTimeout,
-			defaultFilesystemToolMaxRounds,
-			config.ToolApproval,
-		)
-	}
-
 	return nil
 }
 
@@ -4980,17 +4977,11 @@ func parseProvider(value string) (provider, error) {
 }
 
 func parseWorkflow(value string) (runWorkflow, error) {
-	switch strings.ToLower(value) {
-	case "chat":
-		return workflowChat, nil
-	case "basic":
-		return workflowBasic, nil
-	case "agentic":
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "agentic", "":
 		return workflowAgentic, nil
-	case "auto":
-		return workflowAuto, nil
 	default:
-		return "", fmt.Errorf("unsupported workflow: %s", value)
+		return "", fmt.Errorf("unsupported runtime: %s", value)
 	}
 }
 
@@ -5132,7 +5123,7 @@ func (m model) progressStatus() string {
 
 func runningStatus(config runConfig) string {
 	idleTimeout := runTimeoutMS(config)
-	return "running " + config.Provider.Label() + " / " + config.Model + " / mode " + runWorkflowStatus(config.Workflow) + " / " + runAgenticPersistenceStatus(config) + " / " + runPlannerReviewStatus(config) + " / " + runRouterStatus(config) + " / " + runProgressStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
+	return "running " + config.Provider.Label() + " / " + config.Model + " / strategy pending / " + runAgenticPersistenceStatus(config) + " / " + runPlannerReviewStatus(config) + " / " + runRouterStatus(config) + " / " + runProgressStatus(config) + " / idle_timeout_ms=" + idleTimeout + " hard_cap_ms=" + hardCapTimeoutMS(idleTimeout) + " / " + runToolsStatus(config) + " / " + runContextStatus(config) + " / " + runSkillsStatus(config) + " / log=" + emptyAsNone(config.LogFile) + "..."
 }
 
 func hardCapTimeoutMS(idleTimeout string) string {
@@ -5141,17 +5132,6 @@ func hardCapTimeoutMS(idleTimeout string) string {
 		return "(invalid)"
 	}
 	return strconv.Itoa(timeout * 3)
-}
-
-func runWorkflowStatus(workflow runWorkflow) string {
-	switch workflow {
-	case workflowAuto:
-		return "progressive-auto"
-	case workflowChat, workflowBasic, workflowAgentic:
-		return string(workflow)
-	default:
-		return emptyAsNone(string(workflow))
-	}
 }
 
 func runAgenticPersistenceStatus(config runConfig) string {
@@ -5302,7 +5282,7 @@ func (m *model) applySavedSettings() error {
 
 	if strings.TrimSpace(m.savedConfig.ToolHarness) != "" {
 		if err := validateToolConfig(runConfig{
-			Workflow:      workflowBasic,
+			Workflow:      workflowAgentic,
 			Provider:      providerEcho,
 			ToolHarness:   m.savedConfig.ToolHarness,
 			ToolRoot:      m.savedConfig.ToolRoot,
@@ -5318,7 +5298,7 @@ func (m *model) applySavedSettings() error {
 
 	if strings.TrimSpace(m.savedConfig.MCPConfig) != "" && strings.TrimSpace(m.savedConfig.ToolHarness) == "" {
 		if err := validateToolConfig(runConfig{
-			Workflow:      workflowBasic,
+			Workflow:      workflowAgentic,
 			Provider:      providerEcho,
 			ToolTimeout:   m.savedConfig.ToolTimeout,
 			ToolMaxRounds: m.savedConfig.ToolMaxRounds,
@@ -5447,6 +5427,22 @@ func (config savedConfig) modelFor(provider provider) string {
 	}
 }
 
+func (config savedConfig) modelMetadataFor(provider provider, model string) (modelOption, bool) {
+	model = strings.TrimSpace(model)
+	if model == "" || config.ProviderModelMetadata == nil {
+		return modelOption{}, false
+	}
+	metadata := config.ProviderModelMetadata[string(provider)]
+	if metadata == nil {
+		return modelOption{}, false
+	}
+	option, ok := metadata[model]
+	if !ok || strings.TrimSpace(option.ID) == "" {
+		return modelOption{}, false
+	}
+	return option, true
+}
+
 func (config *savedConfig) rememberModel(provider provider, model string) {
 	if config.ProviderModels == nil {
 		config.ProviderModels = map[string]string{}
@@ -5458,6 +5454,20 @@ func (config *savedConfig) rememberModel(provider provider, model string) {
 	case providerOpenRouter:
 		config.OpenRouterModel = ""
 	}
+}
+
+func (config *savedConfig) rememberModelMetadata(provider provider, option modelOption) {
+	if strings.TrimSpace(option.ID) == "" {
+		return
+	}
+	if config.ProviderModelMetadata == nil {
+		config.ProviderModelMetadata = map[string]map[string]modelOption{}
+	}
+	providerID := string(provider)
+	if config.ProviderModelMetadata[providerID] == nil {
+		config.ProviderModelMetadata[providerID] = map[string]modelOption{}
+	}
+	config.ProviderModelMetadata[providerID][option.ID] = option
 }
 
 func summaryError(summary summary) string {

@@ -134,19 +134,19 @@ tui-build:
 
 run-echo:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required. Example: make run-echo TASK="Review this project"' >&2; exit 2)
-	mix agent_machine.run --workflow basic --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 "$(TASK)"
+	mix agent_machine.run --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 "$(TASK)"
 
 run-echo-json:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required. Example: make run-echo-json TASK="Review this project"' >&2; exit 2)
-	mix agent_machine.run --workflow basic --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 --json "$(TASK)"
+	mix agent_machine.run --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 --json "$(TASK)"
 
 run-echo-jsonl:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required. Example: make run-echo-jsonl TASK="Review this project"' >&2; exit 2)
-	mix agent_machine.run --workflow basic --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 --jsonl "$(TASK)"
+	mix agent_machine.run --provider echo --timeout-ms 30000 --max-steps 2 --max-attempts 1 --jsonl "$(TASK)"
 
 run-agentic-echo-jsonl:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required. Example: make run-agentic-echo-jsonl TASK="Review this project"' >&2; exit 2)
-	mix agent_machine.run --workflow agentic --provider echo --timeout-ms 30000 --max-steps 6 --max-attempts 1 --jsonl "$(TASK)"
+	mix agent_machine.run --provider echo --timeout-ms 30000 --max-steps 6 --max-attempts 1 --jsonl "$(TASK)"
 
 run-openrouter-jsonl:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required.' >&2; exit 2)
@@ -154,7 +154,7 @@ run-openrouter-jsonl:
 	@test -n "$(INPUT_PRICE_PER_MILLION)" || (printf '%s\n' 'INPUT_PRICE_PER_MILLION is required.' >&2; exit 2)
 	@test -n "$(OUTPUT_PRICE_PER_MILLION)" || (printf '%s\n' 'OUTPUT_PRICE_PER_MILLION is required.' >&2; exit 2)
 	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
-	mix agent_machine.run --workflow basic --provider openrouter --model "$(MODEL)" --timeout-ms 30000 --http-timeout-ms 25000 --max-steps 2 --max-attempts 1 --input-price-per-million "$(INPUT_PRICE_PER_MILLION)" --output-price-per-million "$(OUTPUT_PRICE_PER_MILLION)" --jsonl "$(TASK)"
+	mix agent_machine.run --provider openrouter --model "$(MODEL)" --timeout-ms 30000 --http-timeout-ms 25000 --max-steps 2 --max-attempts 1 --input-price-per-million "$(INPUT_PRICE_PER_MILLION)" --output-price-per-million "$(OUTPUT_PRICE_PER_MILLION)" --jsonl "$(TASK)"
 
 run-agentic-openrouter-jsonl:
 	@test -n "$(TASK)" || (printf '%s\n' 'TASK is required.' >&2; exit 2)
@@ -162,7 +162,7 @@ run-agentic-openrouter-jsonl:
 	@test -n "$(INPUT_PRICE_PER_MILLION)" || (printf '%s\n' 'INPUT_PRICE_PER_MILLION is required.' >&2; exit 2)
 	@test -n "$(OUTPUT_PRICE_PER_MILLION)" || (printf '%s\n' 'OUTPUT_PRICE_PER_MILLION is required.' >&2; exit 2)
 	@test -n "$$OPENROUTER_API_KEY" || (printf '%s\n' 'OPENROUTER_API_KEY is required in the environment.' >&2; exit 2)
-	mix agent_machine.run --workflow agentic --provider openrouter --model "$(MODEL)" --timeout-ms 30000 --http-timeout-ms 25000 --max-steps 6 --max-attempts 1 --input-price-per-million "$(INPUT_PRICE_PER_MILLION)" --output-price-per-million "$(OUTPUT_PRICE_PER_MILLION)" --jsonl "$(TASK)"
+	mix agent_machine.run --provider openrouter --model "$(MODEL)" --timeout-ms 30000 --http-timeout-ms 25000 --max-steps 6 --max-attempts 1 --input-price-per-million "$(INPUT_PRICE_PER_MILLION)" --output-price-per-million "$(OUTPUT_PRICE_PER_MILLION)" --jsonl "$(TASK)"
 
 clean:
 	mix clean

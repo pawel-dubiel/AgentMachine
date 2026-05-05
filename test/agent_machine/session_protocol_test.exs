@@ -53,9 +53,18 @@ defmodule AgentMachine.SessionProtocolTest do
 
   test "rejects unknown run keys" do
     line =
-      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"chat","provider":"echo","timeout_ms":1000,"max_steps":1,"max_attempts":1,"stream_response":true,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4,"surprise":true}})
+      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"agentic","provider":"echo","timeout_ms":1000,"max_steps":1,"max_attempts":1,"stream_response":true,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4,"surprise":true}})
 
     assert_raise ArgumentError, ~r/run contains unknown key/, fn ->
+      SessionProtocol.parse_command!(line)
+    end
+  end
+
+  test "rejects legacy public workflow values" do
+    line =
+      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"basic","provider":"echo","timeout_ms":1000,"max_steps":1,"max_attempts":1,"stream_response":true,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4}})
+
+    assert_raise ArgumentError, ~r/unsupported run :workflow value/, fn ->
       SessionProtocol.parse_command!(line)
     end
   end
@@ -67,7 +76,7 @@ defmodule AgentMachine.SessionProtocolTest do
         message_id: "msg-1",
         run: %{
           task: "hello",
-          workflow: "basic",
+          workflow: "agentic",
           provider: "google_vertex",
           model: "gemini-2.5-flash",
           timeout_ms: 1_000,
@@ -93,7 +102,7 @@ defmodule AgentMachine.SessionProtocolTest do
 
   test "rejects provider option values that cannot be passed through the session boundary" do
     line =
-      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"basic","provider":"openrouter","model":"openai/gpt-4o-mini","timeout_ms":1000,"max_steps":2,"max_attempts":1,"http_timeout_ms":1000,"pricing":{"input_per_million":0.1,"output_per_million":0.2},"provider_options":{"base_url":123},"stream_response":false,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4}})
+      ~s({"type":"user_message","message_id":"msg-1","run":{"task":"hello","workflow":"agentic","provider":"openrouter","model":"openai/gpt-4o-mini","timeout_ms":1000,"max_steps":2,"max_attempts":1,"http_timeout_ms":1000,"pricing":{"input_per_million":0.1,"output_per_million":0.2},"provider_options":{"base_url":123},"stream_response":false,"session_tool_timeout_ms":1000,"session_tool_max_rounds":4}})
 
     assert_raise ArgumentError, ~r/unsupported provider_options entry/, fn ->
       SessionProtocol.parse_command!(line)

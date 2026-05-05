@@ -10,7 +10,7 @@ the public docs and the main implementation boundaries for each area.
   CLI and TUI.
 - [Explicit run specs](README.md#required-values) through
   [`AgentMachine.RunSpec`](lib/agent_machine/run_spec.ex), with fail-fast
-  validation for required workflow, provider, timeout, step, attempt, model,
+  validation for required provider, timeout, step, attempt, model,
   pricing, tool, and MCP values.
 - [Orchestrated agent runs](lib/agent_machine/orchestrator.ex) with run state,
   task spawning, dependency scheduling, retries, finalizers, event recording,
@@ -23,14 +23,14 @@ the public docs and the main implementation boundaries for each area.
 - [Redacted output](README.md#cli-usage) for text summaries, JSON output, JSONL
   events, logs, read-style tool results, and secret-looking values.
 
-## Workflows
+## Execution Strategy
 
-- [Basic workflow](README.md#workflows) through
-  [`AgentMachine.Workflows.Basic`](lib/agent_machine/workflows/basic.ex), with a
-  straightforward assistant plus finalizer.
-- [Agentic workflow](README.md#workflows) through
-  [`AgentMachine.Workflows.Agentic`](lib/agent_machine/workflows/agentic.ex),
-  with a planner, delegated workers, and a finalizer.
+- [Single agentic runtime](README.md#execution-strategy) through
+  [`AgentMachine.ExecutionPlanner`](lib/agent_machine/execution_planner.ex),
+  selecting `direct`, `tool`, `planned`, or `swarm`.
+- Private strategy builders under
+  [`AgentMachine.Workflows`](lib/agent_machine/workflows) keep the agent graph
+  construction small without exposing workflow choice to users.
 - [Swarm strategy](README.md#core-concepts) for explicit multiple-variant
   requests, with planner-created isolated variant workers, a dependent
   evaluator, validated graph limits, and no automatic merge back to the
@@ -140,11 +140,11 @@ the public docs and the main implementation boundaries for each area.
   agents, agent detail, and help views.
 - [CLI process adapter](tui/agent_machine_cli.go) that calls the stable
   `mix agent_machine.run` boundary.
-- [Config persistence](tui/config.go) for workflow, provider, selected models,
+- [Config persistence](tui/config.go) for provider, selected models,
   API keys, tool setup, MCP config path, and command/test-command state.
 - [Provider model and pricing lookup](tui/provider_models.go) through
   `mix agent_machine.providers`.
-- [Slash commands](README.md#terminal-ui) for workflow, provider, API key,
+- [Slash commands](README.md#terminal-ui) for provider, API key,
   model loading/selection, tool harness setup, test commands, MCP config,
   settings, agent inspection, history, and clearing/quitting.
 - [Filesystem-write permission preflight](README.md#terminal-ui) with
@@ -156,7 +156,7 @@ the public docs and the main implementation boundaries for each area.
 - [Full quality gate](README.md#development) through `mix quality`, covering
   formatting checks, warnings-as-errors compilation, Credo strict mode, and
   tests.
-- [Elixir test suite](test/) for orchestration, workflows, client summaries,
+- [Elixir test suite](test/) for orchestration, strategy selection, client summaries,
   provider tool continuation, tool policy, MCP integration, redaction, JSON, and
   individual tools.
 - [Go TUI test suite](tui/) for the terminal client, config, CLI adapter, and

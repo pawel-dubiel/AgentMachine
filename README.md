@@ -1,15 +1,16 @@
 # AgentMachine
 
 AgentMachine is a terminal-first agent runtime for local project work. It gives
-models narrowly scoped capabilities, runs them through explicit workflows, and
-records enough structured evidence that you can audit what happened afterward.
+models narrowly scoped capabilities, runs them through one adaptive agentic
+runtime, and records enough structured evidence that you can audit what happened
+afterward.
 
 The project is intentionally small. The runtime lives in Elixir, the terminal UI
 is a thin Go client, and every meaningful permission, budget, root path, model,
 and provider value is explicit.
 
-> Build agent workflows that can read, edit, browse, run checks, and explain
-> what happened without giving the model ambient authority.
+> Build agent runs that can read, edit, browse, run checks, and explain what
+> happened without giving the model ambient authority.
 
 ## Contents
 
@@ -21,7 +22,7 @@ and provider value is explicit.
 - [Terminal UI](#terminal-ui)
 - [CLI Usage](#cli-usage)
 - [Required Values](#required-values)
-- [Workflows](#workflows)
+- [Execution Strategy](#execution-strategy)
 - [Tools](#tools)
 - [MCP And Browser Work](#mcp-and-browser-work)
 - [Skills](#skills)
@@ -42,9 +43,9 @@ the opposite stance: the useful path should still be explicit.
 
 - **No hidden authority.** Tools are denied until a run is configured with a
   harness, root, timeout, round limit, and approval mode.
-- **Visible workflow routing.** Auto mode can choose chat, read-only tool use,
-  or agentic planner/worker execution, and the selected route is emitted as a
-  runtime event.
+- **Visible execution strategy.** The agentic runtime can choose direct,
+  read-only tool, planned, or swarm execution, and the selected strategy is
+  emitted as a runtime event.
 - **Provider boundaries stay clean.** Remote providers flow through ReqLLM.
   They do not own orchestration, tools, retries, or UI behavior.
 - **Local project work is scoped.** File and code tools operate under an
@@ -73,7 +74,7 @@ the opposite stance: the useful path should still be explicit.
 
 AgentMachine has a few rules that shape the whole project:
 
-- **Runs are explicit specs.** A run is not started until the task, workflow,
+- **Runs are explicit specs.** A run is not started until the task,
   provider, timeout, step limit, attempt limit, and provider-specific values
   validate.
 - **Routing is advice plus enforcement.** Classifiers can identify intent and
@@ -193,9 +194,10 @@ The TUI supports:
 
 - provider-specific model selection loaded through the Elixir provider catalog;
 - saved provider secrets and non-secret setup fields in the local user config;
-- automatic route display for chat, tool, basic, and agentic runs;
+- automatic strategy display for direct, tool, planned, and swarm runs;
 - interactive permission prompts for write, command, delete, and network risk;
-- planner review with approve, decline, and revise decisions;
+- planner review with approve, decline, and revise decisions, forcing agentic
+  runtime runs when enabled;
 - sidechain session agents with `/agents`, `/agent <id>`,
   `/send-agent <id> <message>`, and `/read-agent <id>`;
 - classic and Matrix-inspired themes with `/theme classic|matrix`;
@@ -229,7 +231,6 @@ Basic local run:
 
 ```sh
 mix agent_machine.run \
-  --workflow basic \
   --provider echo \
   --timeout-ms 30000 \
   --max-steps 2 \
@@ -241,7 +242,6 @@ Auto-routed JSONL run with deterministic routing:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider echo \
   --router-mode deterministic \
   --timeout-ms 30000 \
@@ -255,7 +255,6 @@ Remote provider run:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -273,7 +272,6 @@ Write an explicit JSONL run log:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider echo \
   --router-mode deterministic \
   --timeout-ms 30000 \
@@ -309,7 +307,7 @@ AgentMachine fails fast when required runtime input is missing.
 Every run requires:
 
 - exactly one non-empty task;
-- `--workflow chat|basic|agentic|auto`;
+- optional `--workflow agentic` for legacy callers; omit it for normal use;
 - `--provider echo` or a supported ReqLLM provider ID such as `openai`,
   `anthropic`, `google_vertex`, `openrouter`, or `vllm`;
 - `--timeout-ms <positive-int>`;
@@ -336,17 +334,18 @@ Tool-enabled runs require the full tool budget:
 - `--tool-root <path>` when using `local-files` or `code-edit`;
 - `--mcp-config <path>` when using `mcp`.
 
-## Workflows
+## Execution Strategy
 
-| Workflow | Purpose |
+There is one public runtime: `agentic`. The CLI accepts no workflow flag or
+`--workflow agentic`; `chat`, `basic`, and `auto` fail fast at the public
+boundary.
+
+| Strategy | Purpose |
 | --- | --- |
-| `chat` | One no-tool assistant for plain conversation. Rejects tool options. |
-| `basic` | One assistant plus a no-tool finalizer. Useful for simple provider runs. |
-| `agentic` | Planner, delegated workers, optional evaluator/reviewer work, then finalizer. |
-| `auto` | Runtime-selected route: chat, internal read-only tool path, basic, or agentic. |
-
-The internal `tool` route is selected by `auto` for narrow read-only tool work.
-It is not accepted as a public `--workflow` value.
+| `direct` | One no-tool assistant for plain conversation. |
+| `tool` | One assistant with a narrow read-only tool set. |
+| `planned` | Planner, delegated workers, optional evaluator/reviewer work, then finalizer. |
+| `swarm` | Multiple explicit variants in isolated workspaces plus an evaluator. |
 
 Auto routing supports three router modes:
 
@@ -358,7 +357,7 @@ Auto routing supports three router modes:
 
 LLM routing asks the selected provider/model through ReqLLM for JSON
 classification, then Elixir strictly parses the response and validates
-capabilities before any workflow starts. Deterministic guards still protect
+capabilities before any strategy starts. Deterministic guards still protect
 obvious tool, file, test, browser, and mutation intents.
 
 Agentic extras are opt-in:
@@ -405,7 +404,6 @@ Read files under the current project root:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -427,7 +425,6 @@ Run an interactive code-edit session with JSONL permission control:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -450,7 +447,6 @@ Allow one exact test command:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -499,7 +495,6 @@ Or pass MCP to the CLI:
 
 ```sh
 mix agent_machine.run \
-  --workflow auto \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -569,7 +564,6 @@ Use skills in a run:
 
 ```sh
 mix agent_machine.run \
-  --workflow agentic \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -632,12 +626,16 @@ Remote runs require explicit model, HTTP timeout, pricing, provider setup, and
 required secrets. Secrets are read from environment variables or injected by the
 TUI; they are not passed as CLI arguments or session payload fields.
 
+AgentMachine configures ReqLLM's shared Finch stream pool explicitly with 32
+HTTP/1 connections. Planned agentic runs may have a planner, workers, progress
+observer, and provider tool continuations streaming at the same time, so the app
+does not rely on ReqLLM's smaller library default pool.
+
 Examples:
 
 ```sh
 export OPENROUTER_API_KEY="..."
 mix agent_machine.run \
-  --workflow basic \
   --provider openrouter \
   --model openai/gpt-4o-mini \
   --http-timeout-ms 120000 \
@@ -652,7 +650,6 @@ mix agent_machine.run \
 ```sh
 export AGENT_MACHINE_GOOGLE_VERTEX_ACCESS_TOKEN="..."
 mix agent_machine.run \
-  --workflow basic \
   --provider google_vertex \
   --provider-option project_id=my-project \
   --provider-option region=us-central1 \
@@ -677,7 +674,6 @@ request body when a tokenizer path is configured.
 
 ```sh
 mix agent_machine.run \
-  --workflow agentic \
   --provider openrouter \
   --model <model-id> \
   --http-timeout-ms 30000 \
@@ -730,9 +726,9 @@ flowchart LR
   TUI --> Session["mix agent_machine.session"]
   Session --> ClientRunner["ClientRunner"]
   CLI --> ClientRunner
-  ClientRunner --> Router["WorkflowRouter"]
-  Router --> Workflows["Workflow builders"]
-  Workflows --> Orchestrator["Orchestrator"]
+  ClientRunner --> Planner["ExecutionPlanner"]
+  Planner --> Strategies["Private strategy builders"]
+  Strategies --> Orchestrator["Orchestrator"]
   Orchestrator --> RunServer["RunServer"]
   RunServer --> AgentRunner["AgentRunner"]
   AgentRunner --> Provider["Provider"]
@@ -752,8 +748,8 @@ Ownership boundaries:
   enforce permission metadata.
 - `AgentMachine.MCP.*` owns MCP config parsing, protocol transport, namespacing,
   permissions, and result normalization.
-- `AgentMachine.Workflows.*` chooses the initial agent graph for high-level
-  workflow shapes.
+- `AgentMachine.ExecutionPlanner` selects `direct`, `tool`, `planned`, or
+  `swarm`; `AgentMachine.Workflows.*` remains a private strategy builder layer.
 - `tui/` is a Bubble Tea client over the CLI/session boundary.
 
 For a deeper sequence view, read [docs/runtime-flow.md](docs/runtime-flow.md)

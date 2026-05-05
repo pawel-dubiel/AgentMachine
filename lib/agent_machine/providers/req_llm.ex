@@ -25,12 +25,26 @@ defmodule AgentMachine.Providers.ReqLLM do
     context = context(agent, opts)
     model = model_spec!(agent, opts)
     request_opts = request_opts!(agent, opts)
+    {:ok, stream_collector} = Elixir.Agent.start_link(fn -> [] end)
 
-    with {:ok, stream_response} <- client.stream_text(model, context, request_opts),
-         {:ok, response} <-
-           client.process_stream(stream_response, on_result: &emit_delta(opts, &1)) do
-      emit_done(opts)
-      response_payload(agent, opts, response, client.classify_response(response))
+    try do
+      with {:ok, stream_response} <- client.stream_text(model, context, request_opts),
+           {:ok, response} <-
+             client.process_stream(stream_response,
+               on_result: &handle_stream_result(opts, stream_collector, &1)
+             ) do
+        emit_done(opts)
+
+        response_payload(
+          agent,
+          opts,
+          response,
+          client.classify_response(response),
+          stream_text(stream_collector)
+        )
+      end
+    after
+      Elixir.Agent.stop(stream_collector)
     end
   end
 
@@ -50,10 +64,12 @@ defmodule AgentMachine.Providers.ReqLLM do
     def model_spec_for_test!(%Agent{} = agent, opts), do: model_spec!(agent, opts)
   end
 
-  defp response_payload(%Agent{} = _agent, opts, response, classification)
+  defp response_payload(_agent, opts, response, classification, stream_text \\ nil)
+
+  defp response_payload(%Agent{} = _agent, opts, response, classification, stream_text)
        when is_map(classification) do
     tool_calls = ToolHarness.req_llm_tool_calls!(Map.get(classification, :tool_calls, []), opts)
-    output = output_text!(classification, tool_calls)
+    output = output_text!(classification, response, tool_calls, stream_text)
 
     {:ok,
      %{
@@ -64,11 +80,18 @@ defmodule AgentMachine.Providers.ReqLLM do
      }}
   end
 
-  defp output_text!(classification, tool_calls) do
-    text = Map.get(classification, :text) || Map.get(classification, "text") || ""
+  defp output_text!(classification, response, tool_calls, stream_text) do
+    text =
+      [
+        Map.get(classification, :text),
+        Map.get(classification, "text"),
+        ReqLLM.Response.text(response),
+        stream_text
+      ]
+      |> Enum.find(&present_text?/1)
 
     cond do
-      is_binary(text) and String.trim(text) != "" ->
+      is_binary(text) ->
         text
 
       tool_calls != [] ->
@@ -78,6 +101,8 @@ defmodule AgentMachine.Providers.ReqLLM do
         raise ArgumentError, "ReqLLM response did not contain output text"
     end
   end
+
+  defp present_text?(text), do: is_binary(text) and String.trim(text) != ""
 
   defp tool_state(_response, []), do: nil
 
@@ -305,6 +330,24 @@ defmodule AgentMachine.Providers.ReqLLM do
           tool_continuation: nil
         }
     end
+  end
+
+  defp handle_stream_result(opts, stream_collector, delta) do
+    collect_stream_delta(stream_collector, delta)
+    emit_delta(opts, delta)
+  end
+
+  defp collect_stream_delta(stream_collector, delta) when is_binary(delta) and delta != "" do
+    Elixir.Agent.update(stream_collector, fn deltas -> [delta | deltas] end)
+  end
+
+  defp collect_stream_delta(_stream_collector, _delta), do: :ok
+
+  defp stream_text(stream_collector) do
+    stream_collector
+    |> Elixir.Agent.get(& &1)
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
   end
 
   defp emit_delta(opts, delta) when is_binary(delta) and delta != "" do

@@ -16,14 +16,14 @@ import (
 var providerModelLookup = fetchProviderModelOptions
 
 type modelPricing struct {
-	InputPerMillion  float64
-	OutputPerMillion float64
+	InputPerMillion  float64 `json:"input_per_million"`
+	OutputPerMillion float64 `json:"output_per_million"`
 }
 
 type modelOption struct {
-	ID                  string
-	Pricing             modelPricing
-	ContextWindowTokens int
+	ID                  string       `json:"id"`
+	Pricing             modelPricing `json:"pricing"`
+	ContextWindowTokens int          `json:"context_window_tokens,omitempty"`
 }
 
 type modelListMsg struct {

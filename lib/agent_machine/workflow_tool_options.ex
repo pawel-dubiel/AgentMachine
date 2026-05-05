@@ -3,6 +3,18 @@ defmodule AgentMachine.WorkflowToolOptions do
 
   alias AgentMachine.{RunSpec, ToolHarness}
 
+  @tool_intents %{
+    "time" => :time,
+    "file_read" => :file_read,
+    "web_browse" => :web_browse,
+    "tool_use" => :tool_use,
+    "file_mutation" => :file_mutation,
+    "code_mutation" => :code_mutation,
+    "test_command" => :test_command,
+    "delegation" => :delegation,
+    "none" => :none
+  }
+
   def put_full_tool_opts(opts, %RunSpec{tool_harnesses: nil}) when is_list(opts), do: opts
 
   def put_full_tool_opts(
@@ -32,6 +44,28 @@ defmodule AgentMachine.WorkflowToolOptions do
   def put_full_tool_opts(opts, spec) do
     raise ArgumentError,
           "workflow tool options require keyword opts and a RunSpec, got: #{inspect({opts, spec})}"
+  end
+
+  def put_agentic_tool_opts(opts, %RunSpec{tool_harnesses: nil}, _route) when is_list(opts),
+    do: opts
+
+  def put_agentic_tool_opts(opts, %RunSpec{} = spec, route)
+      when is_list(opts) and is_map(route) do
+    case tool_intent(route) do
+      intent when intent in [:time, :file_read] ->
+        put_read_only_tool_opts(opts, spec, intent)
+
+      :web_browse ->
+        put_scoped_full_tool_opts(opts, spec, [:mcp], :web_browse)
+
+      _intent ->
+        put_full_tool_opts(opts, spec)
+    end
+  end
+
+  def put_agentic_tool_opts(opts, spec, route) do
+    raise ArgumentError,
+          "workflow tool options require keyword opts, a RunSpec, and a route map, got: #{inspect({opts, spec, route})}"
   end
 
   def put_read_only_tool_opts(
@@ -69,6 +103,36 @@ defmodule AgentMachine.WorkflowToolOptions do
     raise ArgumentError,
           "workflow tool options require keyword opts, a RunSpec, and an intent, got: #{inspect({opts, spec, intent})}"
   end
+
+  defp put_scoped_full_tool_opts(
+         opts,
+         %RunSpec{tool_harnesses: harnesses} = spec,
+         expected,
+         intent
+       ) do
+    scoped_harnesses = Enum.filter(harnesses, &(&1 in expected))
+
+    if scoped_harnesses == [] do
+      raise ArgumentError,
+            "agentic #{intent} strategy requires configured tool harness #{inspect(expected)}, got: #{inspect(harnesses)}"
+    end
+
+    put_full_tool_opts(opts, %{
+      spec
+      | tool_harnesses: scoped_harnesses,
+        tool_harness: hd(scoped_harnesses)
+    })
+  end
+
+  defp tool_intent(%{tool_intent: intent}), do: normalize_tool_intent(intent)
+  defp tool_intent(%{"tool_intent" => intent}), do: normalize_tool_intent(intent)
+  defp tool_intent(_route), do: nil
+
+  defp normalize_tool_intent(intent) when is_atom(intent), do: intent
+
+  defp normalize_tool_intent(intent) when is_binary(intent), do: Map.get(@tool_intents, intent)
+
+  defp normalize_tool_intent(_intent), do: nil
 
   defp full_harness_opts(%RunSpec{
          test_commands: test_commands,

@@ -49,7 +49,7 @@ defmodule AgentMachine.SessionProtocol do
     "session_tool_max_rounds" => :session_tool_max_rounds
   }
 
-  @workflow_values %{"chat" => :chat, "basic" => :basic, "agentic" => :agentic, "auto" => :auto}
+  @workflow_values %{"agentic" => :agentic}
   @harness_values %{
     "demo" => :demo,
     "time" => :time,
@@ -175,7 +175,8 @@ defmodule AgentMachine.SessionProtocol do
 
   defp normalize_run_attrs!(attrs) do
     attrs
-    |> normalize_atom_value!(:workflow, @workflow_values)
+    |> normalize_optional_atom_value!(:workflow, @workflow_values)
+    |> Map.put_new(:workflow, :agentic)
     |> normalize_provider!()
     |> normalize_optional_atom_value!(:tool_harness, @harness_values)
     |> normalize_optional_atom_list!(:tool_harnesses, @harness_values)
@@ -200,10 +201,6 @@ defmodule AgentMachine.SessionProtocol do
       provider ->
         raise ArgumentError, "run :provider must be a string, got: #{inspect(provider)}"
     end)
-  end
-
-  defp normalize_atom_value!(attrs, key, values) do
-    Map.update!(attrs, key, &lookup_atom!(&1, values, key))
   end
 
   defp normalize_optional_atom_value!(attrs, key, values) do

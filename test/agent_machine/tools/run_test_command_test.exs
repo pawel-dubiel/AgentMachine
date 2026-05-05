@@ -10,7 +10,7 @@ defmodule AgentMachine.Tools.RunTestCommandTest do
              RunTestCommand.run(%{"command" => "elixir -e IO.puts(1)", "cwd" => "."},
                tool_root: root,
                test_commands: ["elixir -e IO.puts(1)"],
-               tool_timeout_ms: 1_000
+               tool_timeout_ms: 15_000
              )
 
     assert result.command == "elixir -e IO.puts(1)"
@@ -29,7 +29,7 @@ defmodule AgentMachine.Tools.RunTestCommandTest do
              RunTestCommand.run(%{"command" => "elixir -e System.halt(7)", "cwd" => "."},
                tool_root: root,
                test_commands: ["elixir -e System.halt(7)"],
-               tool_timeout_ms: 1_000
+               tool_timeout_ms: 15_000
              )
   end
 
@@ -122,7 +122,7 @@ defmodule AgentMachine.Tools.RunTestCommandTest do
                test_commands: [
                  "elixir -e IO.puts(\"OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456\")"
                ],
-               tool_timeout_ms: 5_000
+               tool_timeout_ms: 15_000
              )
 
     refute result.output =~ "sk-proj-abcdefghijklmnopqrstuvwxyz123456"

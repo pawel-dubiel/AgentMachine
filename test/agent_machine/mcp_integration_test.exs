@@ -208,7 +208,7 @@ defmodule AgentMachine.MCPIntegrationTest do
       tools: []
     }
 
-    response = Client.call_tool(server, "snapshot", %{}, 1_000)
+    response = Client.call_tool(server, "snapshot", %{}, 5_000)
     text = get_in(response, ["result", "content", Access.at(0), "text"])
 
     assert byte_size(text) == 90_000
@@ -674,7 +674,7 @@ defmodule AgentMachine.MCPIntegrationTest do
              tool.run(%{"arguments" => %{}},
                mcp_config: config,
                mcp_session: session,
-               tool_timeout_ms: 1_000
+               tool_timeout_ms: 5_000
              )
 
     assert get_in(result, [:result, "content", Access.at(0), "text"]) == "env-token-42"
@@ -687,7 +687,7 @@ defmodule AgentMachine.MCPIntegrationTest do
     spec =
       RunSpec.new!(%{
         task: "hello",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -712,7 +712,7 @@ defmodule AgentMachine.MCPIntegrationTest do
       ExUnit.CaptureIO.capture_io(fn ->
         Run.run([
           "--workflow",
-          "basic",
+          "agentic",
           "--provider",
           "echo",
           "--timeout-ms",

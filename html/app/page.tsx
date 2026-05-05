@@ -1,7 +1,7 @@
 const principles = [
   "Explicit run specs",
   "Scoped tool authority",
-  "Agentic workflows",
+  "Adaptive strategies",
   "JSONL observability"
 ];
 
@@ -24,7 +24,7 @@ const capabilities = [
 ];
 
 const events = [
-  "workflow_routed",
+  "execution_strategy_selected",
   "agent_started",
   "tool_call_started",
   "tool_call_finished",
@@ -51,7 +51,7 @@ export default function Home() {
           <div className="heroCopy">
             <p className="eyebrow">Elixir agent runtime</p>
             <h1 id="hero-title">
-              Controlled AI workflows for real project work.
+              Controlled agent execution for real project work.
             </h1>
             <p className="lead">
               Build agents that can inspect, edit, browse, run checks, and

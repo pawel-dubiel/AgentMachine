@@ -73,11 +73,11 @@ defmodule AgentMachine.WorkflowRouterTest do
     end
   end
 
-  test "run spec defaults auto routing to llm mode" do
+  test "run spec defaults the single public runtime to llm routing mode" do
     spec =
       RunSpec.new!(%{
         task: "explain the project",
-        workflow: :auto,
+        workflow: :agentic,
         provider: "openrouter",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
@@ -1245,17 +1245,31 @@ defmodule AgentMachine.WorkflowRouterTest do
   end
 
   defp route!(attrs) do
-    %{
-      provider: :echo,
-      timeout_ms: 1_000,
-      max_steps: 6,
-      max_attempts: 1,
-      router_mode: :deterministic
+    %WorkflowRouter{
+      requested_workflow: Map.get(attrs, :workflow, :auto),
+      task: Map.get(attrs, :task, "please handle this request"),
+      tool_harnesses: Map.get(attrs, :tool_harnesses, tool_harnesses(attrs)),
+      tool_root: Map.get(attrs, :tool_root),
+      provider: Map.get(attrs, :provider, :echo),
+      model: Map.get(attrs, :model),
+      pricing: Map.get(attrs, :pricing),
+      provider_options: Map.get(attrs, :provider_options, %{}),
+      http_timeout_ms: Map.get(attrs, :http_timeout_ms),
+      approval_mode: Map.get(attrs, :tool_approval_mode),
+      test_commands: Map.get(attrs, :test_commands, []),
+      pending_action: Map.get(attrs, :pending_action),
+      recent_context: Map.get(attrs, :recent_context),
+      mcp_config: Map.get(attrs, :mcp_config),
+      router_mode: Map.get(attrs, :router_mode, :deterministic),
+      router_model_dir: Map.get(attrs, :router_model_dir),
+      router_timeout_ms: Map.get(attrs, :router_timeout_ms),
+      router_confidence_threshold: Map.get(attrs, :router_confidence_threshold)
     }
-    |> Map.merge(attrs)
-    |> RunSpec.new!()
     |> WorkflowRouter.route!()
   end
+
+  defp tool_harnesses(%{tool_harness: harness}), do: [harness]
+  defp tool_harnesses(_attrs), do: []
 
   defp llm_route!(intent, attrs) do
     Process.put(:workflow_router_classifier_result, classifier_result(intent, attrs, "llm"))

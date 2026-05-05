@@ -115,7 +115,7 @@ defmodule AgentMachine.ProviderCatalogTest do
     assert %RunSpec{provider: "openrouter"} =
              RunSpec.new!(%{
                task: "hello",
-               workflow: :basic,
+               workflow: :agentic,
                provider: "openrouter",
                model: "openai/gpt-4o-mini",
                timeout_ms: 1_000,
@@ -128,7 +128,7 @@ defmodule AgentMachine.ProviderCatalogTest do
     assert_raise ArgumentError, ~r/supported ReqLLM provider id/, fn ->
       RunSpec.new!(%{
         task: "hello",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :openrouter,
         timeout_ms: 1_000,
         max_steps: 2,

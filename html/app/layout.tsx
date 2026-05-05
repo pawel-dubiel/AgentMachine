@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AgentMachine",
   description:
-    "Elixir agent runtime for controlled AI workflows with scoped tools, MCP support, and auditable execution."
+    "Elixir agent runtime for controlled execution with scoped tools, MCP support, and auditable events."
 };
 
 export default function RootLayout({

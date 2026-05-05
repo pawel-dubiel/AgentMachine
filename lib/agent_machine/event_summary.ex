@@ -16,6 +16,9 @@ defmodule AgentMachine.EventSummary do
   defp summary(%{type: :workflow_routed, selected: selected}),
     do: "Workflow routed to #{selected}"
 
+  defp summary(%{type: :execution_strategy_selected, selected: selected}),
+    do: "Execution strategy selected: #{selected}"
+
   defp summary(%{type: :event_log_configured}), do: "Event log configured"
 
   defp summary(%{type: :skills_loaded, count: count}), do: "Loaded #{count} skill(s)"

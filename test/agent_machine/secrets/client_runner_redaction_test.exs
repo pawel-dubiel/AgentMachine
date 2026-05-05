@@ -82,7 +82,7 @@ defmodule AgentMachine.Secrets.ClientRunnerRedactionTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--timeout-ms",
@@ -109,7 +109,7 @@ defmodule AgentMachine.Secrets.ClientRunnerRedactionTest do
       capture_io(fn ->
         Run.run([
           "--workflow",
-          "basic",
+          "agentic",
           "--provider",
           "echo",
           "--timeout-ms",

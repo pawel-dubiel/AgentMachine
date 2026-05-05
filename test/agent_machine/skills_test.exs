@@ -165,7 +165,7 @@ defmodule AgentMachine.SkillsTest do
 
     selection =
       Selector.select!(%AgentMachine.RunSpec{
-        task: "Update README documentation",
+        task: "Summarize README documentation guidance",
         workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
@@ -181,7 +181,7 @@ defmodule AgentMachine.SkillsTest do
 
     summary =
       ClientRunner.run!(%{
-        task: "Update README documentation",
+        task: "Summarize README documentation guidance",
         workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
@@ -243,7 +243,7 @@ defmodule AgentMachine.SkillsTest do
     summary =
       ClientRunner.run!(
         %{
-          task: "Update README documentation",
+          task: "Summarize README documentation guidance",
           workflow: :agentic,
           provider: :echo,
           timeout_ms: 1_000,

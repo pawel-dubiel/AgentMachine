@@ -103,16 +103,15 @@ func TestProjectRootFindsParentRepositoryFromTUIDirectory(t *testing.T) {
 func TestBuildRunArgsIncludesExplicitRuntimeOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "review this project",
-		Workflow: workflowBasic,
+		Workflow: workflowAgentic,
 		Provider: providerEcho,
 	})
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "basic",
 		"--provider", "echo",
-		"--timeout-ms", defaultRunTimeoutMS,
-		"--max-steps", "2",
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
+		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
 		"--stream-response",
@@ -143,7 +142,6 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "agentic",
 		"--provider", "openrouter",
 		"--timeout-ms", defaultAgenticRunTimeoutMS,
 		"--max-steps", defaultAgenticSteps,
@@ -171,14 +169,13 @@ func TestBuildRunArgsIncludesOpenRouterOptions(t *testing.T) {
 func TestBuildRunArgsUsesExplicitRunTimeoutWhenProvided(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:       "review this project",
-		Workflow:   workflowAuto,
+		Workflow:   workflowAgentic,
 		Provider:   providerEcho,
 		RunTimeout: "240000",
 	})
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "auto",
 		"--provider", "echo",
 		"--timeout-ms", "240000",
 		"--max-steps", defaultAgenticSteps,
@@ -209,7 +206,7 @@ func TestBuildRunArgsIncludesAgenticPersistenceOnlyWhenEnabled(t *testing.T) {
 		AgenticPersistenceRounds: "2",
 	})
 
-	if !containsArgPair(args, "--workflow", "agentic") ||
+	if containsArg(args, "--workflow") ||
 		!containsArgPair(args, "--timeout-ms", "300000") ||
 		!containsArgPair(args, "--max-steps", "9") {
 		t.Fatalf("expected explicit persistence runtime args, got %#v", args)
@@ -231,7 +228,7 @@ func TestBuildRunArgsIncludesAgenticPersistenceOnlyWhenEnabled(t *testing.T) {
 func TestBuildRunArgsIncludesPlannerReviewWhenEnabled(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:                      "review this project",
-		Workflow:                  workflowAuto,
+		Workflow:                  workflowAgentic,
 		Provider:                  providerEcho,
 		PlannerReviewMaxRevisions: "2",
 	})
@@ -243,7 +240,7 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "run.jsonl")
 	payload, err := sessionRunPayload(runConfig{
 		Task:              "review this project",
-		Workflow:          workflowAuto,
+		Workflow:          workflowAgentic,
 		Provider:          providerOpenRouter,
 		Model:             "moonshotai/kimi-k2.6",
 		LogFile:           logFile,
@@ -264,8 +261,11 @@ func TestSessionRunPayloadUsesTypedRuntimeOptions(t *testing.T) {
 		t.Fatalf("sessionRunPayload returned error: %v", err)
 	}
 
-	if payload["task"] != "review this project" || payload["workflow"] != "auto" || payload["provider"] != "openrouter" {
+	if payload["task"] != "review this project" || payload["provider"] != "openrouter" {
 		t.Fatalf("unexpected basic payload: %#v", payload)
+	}
+	if _, ok := payload["workflow"]; ok {
+		t.Fatalf("session payload must omit workflow, got %#v", payload["workflow"])
 	}
 	if payload["log_file"] != logFile {
 		t.Fatalf("expected run log file in payload, got %#v", payload)
@@ -299,8 +299,11 @@ func TestSessionRunPayloadIncludesAgenticPersistenceWhenEnabled(t *testing.T) {
 		t.Fatalf("sessionRunPayload returned error: %v", err)
 	}
 
-	if payload["workflow"] != "agentic" || payload["max_steps"] != 9 || payload["timeout_ms"] != 300000 {
+	if payload["max_steps"] != 9 || payload["timeout_ms"] != 300000 {
 		t.Fatalf("unexpected agentic persistence payload: %#v", payload)
+	}
+	if _, ok := payload["workflow"]; ok {
+		t.Fatalf("session payload must omit workflow, got %#v", payload["workflow"])
 	}
 	if payload["agentic_persistence_rounds"] != 2 {
 		t.Fatalf("expected persistence rounds in payload, got %#v", payload)
@@ -310,7 +313,7 @@ func TestSessionRunPayloadIncludesAgenticPersistenceWhenEnabled(t *testing.T) {
 func TestSessionRunPayloadIncludesPlannerReviewWhenEnabled(t *testing.T) {
 	payload, err := sessionRunPayload(runConfig{
 		Task:                      "review this project",
-		Workflow:                  workflowAuto,
+		Workflow:                  workflowAgentic,
 		Provider:                  providerEcho,
 		PlannerReviewMaxRevisions: "2",
 	})
@@ -318,6 +321,9 @@ func TestSessionRunPayloadIncludesPlannerReviewWhenEnabled(t *testing.T) {
 		t.Fatalf("sessionRunPayload returned error: %v", err)
 	}
 
+	if _, ok := payload["workflow"]; ok {
+		t.Fatalf("session payload must omit workflow, got %#v", payload["workflow"])
+	}
 	if payload["planner_review_mode"] != "jsonl-stdio" || payload["planner_review_max_revisions"] != 2 {
 		t.Fatalf("expected planner review payload, got %#v", payload)
 	}
@@ -326,7 +332,7 @@ func TestSessionRunPayloadIncludesPlannerReviewWhenEnabled(t *testing.T) {
 func TestSessionUserMessagePayloadRejectsInvalidNumbers(t *testing.T) {
 	_, err := sessionUserMessagePayload(runConfig{
 		Task:         "review this project",
-		Workflow:     workflowBasic,
+		Workflow:     workflowAgentic,
 		Provider:     providerEcho,
 		RunTimeout:   "nope",
 		EventLogFile: filepath.Join(t.TempDir(), "session.jsonl"),
@@ -339,7 +345,7 @@ func TestSessionUserMessagePayloadRejectsInvalidNumbers(t *testing.T) {
 func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:             "review this project",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RouterMode:       "local",
 		RouterModelDir:   "/tmp/agent-machine-router-model",
@@ -349,7 +355,6 @@ func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "auto",
 		"--provider", "echo",
 		"--timeout-ms", defaultAgenticRunTimeoutMS,
 		"--max-steps", defaultAgenticSteps,
@@ -377,7 +382,7 @@ func TestBuildRunArgsIncludesLocalRouterOptions(t *testing.T) {
 func TestBuildRunArgsIncludesExplicitLLMRouterMode(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:       "review this project",
-		Workflow:   workflowAuto,
+		Workflow:   workflowAgentic,
 		Provider:   providerOpenRouter,
 		Model:      "openai/gpt-4o-mini",
 		RouterMode: "llm",
@@ -392,7 +397,7 @@ func TestBuildRunArgsIncludesExplicitLLMRouterMode(t *testing.T) {
 func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:           "review this project",
-		Workflow:       workflowAuto,
+		Workflow:       workflowAgentic,
 		Provider:       providerEcho,
 		EventLogFile:   "/tmp/agent-machine-session.jsonl",
 		EventSessionID: "session-1",
@@ -405,7 +410,7 @@ func TestBuildRunArgsIncludesSessionEventLog(t *testing.T) {
 func TestBuildRunArgsIncludesProgressObserver(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:             "hello",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RunTimeout:       "1000",
 		MaxSteps:         "1",
@@ -418,7 +423,7 @@ func TestBuildRunArgsIncludesProgressObserver(t *testing.T) {
 func TestSessionRunPayloadIncludesProgressObserver(t *testing.T) {
 	payload, err := sessionRunPayload(runConfig{
 		Task:             "hello",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RunTimeout:       "1000",
 		MaxSteps:         "1",
@@ -1011,7 +1016,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "fix the existing app",
-		Workflow: workflowAuto,
+		Workflow: workflowAgentic,
 		Provider: providerEcho,
 	})
 
@@ -1021,7 +1026,7 @@ func TestBuildRunArgsUsesLongerTimeoutForAutoRuns(t *testing.T) {
 func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "create hello",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerOpenRouter,
 		Model:         "qwen/qwen3.5-flash-02-23",
 		InputPrice:    "0.01",
@@ -1036,10 +1041,9 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "basic",
 		"--provider", "openrouter",
-		"--timeout-ms", defaultRunTimeoutMS,
-		"--max-steps", defaultBasicSteps,
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
+		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
 		"--stream-response",
@@ -1068,7 +1072,7 @@ func TestBuildRunArgsIncludesLocalFileToolHarness(t *testing.T) {
 func TestBuildRunArgsIncludesPermissionControlForAskBeforeWriteTools(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "edit app",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
@@ -1085,7 +1089,7 @@ func TestBuildRunArgsIncludesPermissionControlForAskBeforeWriteTools(t *testing.
 func TestBuildRunArgsIncludesRunLogFile(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:     "review this project",
-		Workflow: workflowBasic,
+		Workflow: workflowAgentic,
 		Provider: providerEcho,
 		LogFile:  "/tmp/agent-machine-run.jsonl",
 	})
@@ -1098,7 +1102,7 @@ func TestBuildRunArgsIncludesRunLogFile(t *testing.T) {
 func TestBuildRunArgsIncludesRepeatedTestCommands(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "verify changes",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
@@ -1143,7 +1147,7 @@ func TestBuildRunArgsIncludesExplicitSkills(t *testing.T) {
 func TestBuildRunArgsIncludesMCPConfigAsRepeatedHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "search docs",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "local-files",
 		ToolRoot:      "/tmp/project",
@@ -1178,7 +1182,7 @@ func TestPrepareRunLogCreatesPrivateDirectory(t *testing.T) {
 
 func TestRunningStatusIncludesToolState(t *testing.T) {
 	withoutTools := runningStatus(runConfig{
-		Workflow: workflowAuto,
+		Workflow: workflowAgentic,
 		Provider: providerOpenRouter,
 		Model:    "qwen/qwen3.5-flash-02-23",
 	})
@@ -1186,8 +1190,8 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	if !strings.Contains(withoutTools, "tools off") {
 		t.Fatalf("expected tools off in running status, got %q", withoutTools)
 	}
-	if !strings.Contains(withoutTools, "mode progressive-auto") {
-		t.Fatalf("expected progressive auto mode in running status, got %q", withoutTools)
+	if !strings.Contains(withoutTools, "strategy pending") {
+		t.Fatalf("expected pending strategy in running status, got %q", withoutTools)
 	}
 	if !strings.Contains(withoutTools, "router llm current model") {
 		t.Fatalf("expected llm router in running status, got %q", withoutTools)
@@ -1197,7 +1201,7 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	}
 
 	withTools := runningStatus(runConfig{
-		Workflow:    workflowAuto,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		Model:       "qwen/qwen3.5-flash-02-23",
 		ToolHarness: "local-files",
@@ -1209,7 +1213,7 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 	}
 
 	withLocalRouter := runningStatus(runConfig{
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerOpenRouter,
 		Model:            "qwen/qwen3.5-flash-02-23",
 		RouterMode:       "local",
@@ -1226,7 +1230,7 @@ func TestRunningStatusIncludesToolState(t *testing.T) {
 func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "edit code",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerOpenRouter,
 		Model:         "qwen/qwen3.5-flash-02-23",
 		InputPrice:    "0.01",
@@ -1241,10 +1245,9 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "basic",
 		"--provider", "openrouter",
-		"--timeout-ms", defaultRunTimeoutMS,
-		"--max-steps", defaultBasicSteps,
+		"--timeout-ms", defaultAgenticRunTimeoutMS,
+		"--max-steps", defaultAgenticSteps,
 		"--max-attempts", "1",
 		"--jsonl",
 		"--stream-response",
@@ -1273,7 +1276,7 @@ func TestBuildRunArgsIncludesCodeEditToolHarness(t *testing.T) {
 func TestBuildRunArgsIncludesTimeToolHarness(t *testing.T) {
 	args := buildRunArgs(runConfig{
 		Task:          "what time is it?",
-		Workflow:      workflowAuto,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "time",
 		ToolTimeout:   "1000",
@@ -1283,7 +1286,6 @@ func TestBuildRunArgsIncludesTimeToolHarness(t *testing.T) {
 
 	expected := []string{
 		"agent_machine.run",
-		"--workflow", "auto",
 		"--provider", "echo",
 		"--timeout-ms", defaultAgenticRunTimeoutMS,
 		"--max-steps", defaultAgenticSteps,
@@ -1310,7 +1312,7 @@ func TestBuildRunArgsIncludesTimeToolHarness(t *testing.T) {
 func TestValidateConfigRequiresOpenRouterKey(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
-		Workflow:    workflowBasic,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		APIKey:      "",
 		Model:       "openai/gpt-4o-mini",
@@ -1344,7 +1346,7 @@ func TestPaidOpenRouterModelUsesExplicitEnvironmentValue(t *testing.T) {
 func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
-		Workflow:    workflowBasic,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		APIKey:      "test-key",
 		Model:       "openai/gpt-4o-mini",
@@ -1361,7 +1363,7 @@ func TestValidateConfigAcceptsExplicitOpenRouterConfig(t *testing.T) {
 func TestValidateConfigAcceptsLocalRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:             "review this project",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RouterMode:       "local",
 		RouterModelDir:   "/tmp/agent-machine-router-model",
@@ -1377,7 +1379,7 @@ func TestValidateConfigAcceptsLocalRouterConfig(t *testing.T) {
 func TestValidateConfigAcceptsLLMRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "review this project",
-		Workflow:    workflowAuto,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		APIKey:      "test-key",
 		Model:       "openai/gpt-4o-mini",
@@ -1395,7 +1397,7 @@ func TestValidateConfigAcceptsLLMRouterConfig(t *testing.T) {
 func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:             "review this project",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RouterMode:       "local",
 		RouterTimeout:    "5000",
@@ -1408,7 +1410,7 @@ func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 
 	err = validateConfig(runConfig{
 		Task:             "review this project",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RouterMode:       "local",
 		RouterModelDir:   "/tmp/agent-machine-router-model",
@@ -1422,7 +1424,7 @@ func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 
 	err = validateConfig(runConfig{
 		Task:             "review this project",
-		Workflow:         workflowAuto,
+		Workflow:         workflowAgentic,
 		Provider:         providerEcho,
 		RouterMode:       "local",
 		RouterModelDir:   "/tmp/agent-machine-router-model",
@@ -1438,7 +1440,7 @@ func TestValidateConfigRejectsInvalidLocalRouterConfig(t *testing.T) {
 func TestValidateConfigRejectsLocalSettingsForLLMRouter(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:           "review this project",
-		Workflow:       workflowAuto,
+		Workflow:       workflowAgentic,
 		Provider:       providerEcho,
 		RouterMode:     "llm",
 		RouterModelDir: "/tmp/agent-machine-router-model",
@@ -1452,7 +1454,7 @@ func TestValidateConfigRejectsLocalSettingsForLLMRouter(t *testing.T) {
 func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "write a file",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "local-files",
 		ToolTimeout:   "1000",
@@ -1468,7 +1470,7 @@ func TestValidateConfigRequiresToolRootForLocalFiles(t *testing.T) {
 func TestValidateConfigRequiresToolMaxRoundsForLocalFiles(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:        "write a file",
-		Workflow:    workflowBasic,
+		Workflow:    workflowAgentic,
 		Provider:    providerEcho,
 		ToolHarness: "local-files",
 		ToolRoot:    "/tmp/agent-machine-wiki",
@@ -1483,7 +1485,7 @@ func TestValidateConfigRequiresToolMaxRoundsForLocalFiles(t *testing.T) {
 func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "edit code",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
@@ -1497,10 +1499,10 @@ func TestValidateConfigAcceptsCodeEditHarness(t *testing.T) {
 	}
 }
 
-func TestValidateRunnableConfigRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+func TestValidateRunnableConfigAllowsCodeEditBudgetUntilRuntimeStrategyIsKnown(t *testing.T) {
 	err := validateRunnableConfig(runConfig{
 		Task:          "edit code",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/Users/pawel/priv/java",
@@ -1509,23 +1511,13 @@ func TestValidateRunnableConfigRejectsCommandCapableCodeEditWithLegacyToolBudget
 		ToolApproval:  "full-access",
 	})
 
-	if err == nil {
-		t.Fatal("expected low code-edit shell budget error")
-	}
-	for _, expected := range []string{
-		"code-edit shell access requires tool timeout ms >= " + defaultFilesystemToolTimeout,
-		"/tools code-edit /Users/pawel/priv/java " + defaultFilesystemToolTimeout + " " + defaultFilesystemToolMaxRounds + " full-access",
-	} {
-		if !strings.Contains(err.Error(), expected) {
-			t.Fatalf("expected error to contain %q, got %v", expected, err)
-		}
+	if err != nil {
+		t.Fatalf("expected TUI to defer shell budget validation to runtime strategy selection, got %v", err)
 	}
 }
 
-func TestStartRunAllowsAutoChatWithLegacyCodeEditShellBudget(t *testing.T) {
+func TestStartRunAllowsDirectPromptWithLegacyCodeEditShellBudget(t *testing.T) {
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		savedConfig: savedConfig{
@@ -1541,20 +1533,19 @@ func TestStartRunAllowsAutoChatWithLegacyCodeEditShellBudget(t *testing.T) {
 	result := updated.(model)
 
 	if cmd == nil {
-		t.Fatal("expected auto chat run to start despite legacy code-edit shell budget")
+		t.Fatal("expected run command because direct prompts should not be blocked by stale code-edit shell budget")
 	}
 	if !result.running {
 		t.Fatal("expected run to start")
 	}
-	if len(result.messages) < 2 || result.messages[len(result.messages)-2].Text != "hi" {
-		t.Fatalf("expected user message to be recorded, got %#v", result.messages)
+	if result.messages[len(result.messages)-2].Role != "user" ||
+		result.messages[len(result.messages)-2].Text != "hi" {
+		t.Fatalf("expected user message before run, got %#v", result.messages)
 	}
 }
 
-func TestStartRunWithAgenticWorkflowRejectsCommandCapableCodeEditWithLegacyToolBudget(t *testing.T) {
+func TestStartRunDefersCommandCapableCodeEditBudgetToRuntime(t *testing.T) {
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		savedConfig: savedConfig{
@@ -1566,30 +1557,21 @@ func TestStartRunWithAgenticWorkflowRejectsCommandCapableCodeEditWithLegacyToolB
 		},
 	}
 
-	updated, cmd := m.startRunWithWorkflow("in dir /Users/pawel/priv/java create me bootstrap project", workflowAgentic)
+	updated, cmd := m.startRun("in dir /Users/pawel/priv/java create me bootstrap project")
 	result := updated.(model)
 
-	if cmd != nil {
-		t.Fatal("expected no run command for legacy code-edit shell budget")
+	if cmd == nil {
+		t.Fatal("expected run command so runtime can select strategy before validating shell budget")
 	}
-	if result.running {
-		t.Fatal("expected run to stay idle after validation error")
-	}
-	last := result.messages[len(result.messages)-1].Text
-	for _, expected := range []string{
-		"code-edit shell access requires tool timeout ms >= " + defaultFilesystemToolTimeout,
-		"/tools code-edit /Users/pawel/priv/java " + defaultFilesystemToolTimeout + " " + defaultFilesystemToolMaxRounds + " full-access",
-	} {
-		if !strings.Contains(last, expected) {
-			t.Fatalf("expected message to contain %q, got %q", expected, last)
-		}
+	if !result.running {
+		t.Fatal("expected run to start")
 	}
 }
 
 func TestValidateConfigAllowsSafeCodeEditWithSmallToolBudget(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "edit code",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
@@ -1606,7 +1588,7 @@ func TestValidateConfigAllowsSafeCodeEditWithSmallToolBudget(t *testing.T) {
 func TestValidateConfigRejectsTaskPathOutsideToolRoot(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "setup me /Users/pawel/priv/java bootstrap project",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/Users/pawel/priv/elixir",
@@ -1631,7 +1613,7 @@ func TestValidateConfigRejectsTaskPathOutsideToolRoot(t *testing.T) {
 func TestValidateConfigAcceptsTaskPathInsideToolRoot(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "setup me /Users/pawel/priv/java bootstrap project",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/Users/pawel/priv",
@@ -1648,7 +1630,7 @@ func TestValidateConfigAcceptsTaskPathInsideToolRoot(t *testing.T) {
 func TestValidateConfigIgnoresSlashCommandsAsTaskPaths(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "explain the /setup command",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/Users/pawel/priv/elixir",
@@ -1665,7 +1647,7 @@ func TestValidateConfigIgnoresSlashCommandsAsTaskPaths(t *testing.T) {
 func TestValidateConfigAcceptsTimeHarness(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "what time is it?",
-		Workflow:      workflowAuto,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "time",
 		ToolTimeout:   "1000",
@@ -1681,7 +1663,7 @@ func TestValidateConfigAcceptsTimeHarness(t *testing.T) {
 func TestValidateConfigRejectsTimeHarnessRoot(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "what time is it?",
-		Workflow:      workflowAuto,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "time",
 		ToolRoot:      "/tmp/agent-machine-time",
@@ -1726,7 +1708,7 @@ func TestValidateConfigRejectsAutoSkillsWithExplicitNames(t *testing.T) {
 func TestValidateConfigRequiresToolApprovalMode(t *testing.T) {
 	err := validateConfig(runConfig{
 		Task:          "edit code",
-		Workflow:      workflowBasic,
+		Workflow:      workflowAgentic,
 		Provider:      providerEcho,
 		ToolHarness:   "code-edit",
 		ToolRoot:      "/tmp/agent-machine-project",
@@ -2206,8 +2188,8 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 		providerSet: true,
 		lastSummary: summary{
 			Skills: []skillSummary{{Name: "docs-helper"}},
-			WorkflowRoute: workflowRoute{
-				Requested:    "auto",
+			ExecutionStrategy: workflowRoute{
+				Requested:    "agentic",
 				Selected:     "tool",
 				Reason:       "time_intent_with_read_only_tool",
 				ToolIntent:   "time",
@@ -2224,11 +2206,11 @@ func TestAgentsViewRendersSelectedSkills(t *testing.T) {
 	if !strings.Contains(view, "Skills: docs-helper") {
 		t.Fatalf("expected selected skills in agents view, got %q", view)
 	}
-	if !strings.Contains(view, "Workflow route: requested=auto selected=tool intent=time tools=true") {
-		t.Fatalf("expected workflow route in agents view, got %q", view)
+	if !strings.Contains(view, "Execution strategy: runtime=agentic strategy=tool intent=time tools=true") {
+		t.Fatalf("expected execution strategy in agents view, got %q", view)
 	}
-	if !strings.Contains(m.statusLine(), "route=auto->tool") {
-		t.Fatalf("expected workflow route in status line, got %q", m.statusLine())
+	if !strings.Contains(m.statusLine(), "strategy=tool") {
+		t.Fatalf("expected execution strategy in status line, got %q", m.statusLine())
 	}
 }
 
@@ -2282,7 +2264,7 @@ func TestAgentsViewRendersWorkChecklistToolRows(t *testing.T) {
 func TestResolveConfigRequiresExplicitRemotePricing(t *testing.T) {
 	_, err := resolveConfig(runConfig{
 		Task:     "review this project",
-		Workflow: workflowBasic,
+		Workflow: workflowAgentic,
 		Provider: providerOpenAI,
 		APIKey:   "test-key",
 		Model:    "gpt-4o-mini",
@@ -2296,10 +2278,69 @@ func TestResolveConfigRequiresExplicitRemotePricing(t *testing.T) {
 	}
 }
 
+func TestStartRunLoadsModelMetadataWhenSavedModelPricingIsMissing(t *testing.T) {
+	originalLookup := providerModelLookup
+	providerModelLookup = func(config runConfig) ([]modelOption, error) {
+		if config.Provider != providerOpenRouter {
+			t.Fatalf("unexpected provider lookup config: %#v", config)
+		}
+		return []modelOption{
+			{
+				ID: "stepfun/step-3.5-flash",
+				Pricing: modelPricing{
+					InputPerMillion:  0.04,
+					OutputPerMillion: 0.16,
+				},
+			},
+		}, nil
+	}
+	defer func() { providerModelLookup = originalLookup }()
+
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		selectedModel: "stepfun/step-3.5-flash",
+		configPath:    filepath.Join(t.TempDir(), "config.json"),
+		savedConfig: savedConfig{
+			ProviderSecrets: map[string]map[string]string{
+				string(providerOpenRouter): {"api_key": "test-key"},
+			},
+			ProviderModels: map[string]string{
+				string(providerOpenRouter): "stepfun/step-3.5-flash",
+			},
+		},
+	}
+
+	updated, cmd := m.startRun("hi")
+	result := updated.(model)
+	if cmd == nil {
+		t.Fatal("expected model metadata load command")
+	}
+	if result.running {
+		t.Fatal("expected run to wait for model metadata")
+	}
+	if result.pendingRunAfterModelLoad != "hi" {
+		t.Fatalf("expected pending run after model load, got %q", result.pendingRunAfterModelLoad)
+	}
+
+	msg := cmd()
+	updated, cmd = result.Update(msg)
+	result = updated.(model)
+	if cmd == nil {
+		t.Fatal("expected pending run to start after model metadata load")
+	}
+	if !result.running {
+		t.Fatal("expected pending run to start")
+	}
+	if result.activeConfig.InputPrice != "0.04" || result.activeConfig.OutputPrice != "0.16" {
+		t.Fatalf("expected loaded pricing in active config, got %#v", result.activeConfig)
+	}
+}
+
 func TestResolveConfigAcceptsExplicitRemotePricingAndTimeout(t *testing.T) {
 	resolved, err := resolveConfig(runConfig{
 		Task:        "review this project",
-		Workflow:    workflowBasic,
+		Workflow:    workflowAgentic,
 		Provider:    providerOpenRouter,
 		APIKey:      "test-key",
 		Model:       "openai/gpt-4o-mini",
@@ -2353,6 +2394,59 @@ func TestModelListMessageSelectsFirstLoadedModel(t *testing.T) {
 	}
 }
 
+func TestModelListMessagePersistsSelectedModelMetadata(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		configPath:    configPath,
+		selectedModel: "stepfun/step-3.5-flash",
+		savedConfig: savedConfig{
+			Provider: string(providerOpenRouter),
+			ProviderSecrets: map[string]map[string]string{
+				string(providerOpenRouter): {"api_key": "test-key"},
+			},
+			ProviderModels: map[string]string{
+				string(providerOpenRouter): "stepfun/step-3.5-flash",
+			},
+		},
+	}
+
+	updated, _ := m.Update(modelListMsg{
+		Provider: providerOpenRouter,
+		Models: []modelOption{
+			{
+				ID: "stepfun/step-3.5-flash",
+				Pricing: modelPricing{
+					InputPerMillion:  0.04,
+					OutputPerMillion: 0.16,
+				},
+				ContextWindowTokens: 262144,
+			},
+		},
+	})
+	result := updated.(model)
+
+	if result.selectedModel != "stepfun/step-3.5-flash" {
+		t.Fatalf("unexpected selected model: %q", result.selectedModel)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatalf("expected saved config, got %v", err)
+	}
+	metadata, ok := loaded.modelMetadataFor(providerOpenRouter, "stepfun/step-3.5-flash")
+	if !ok {
+		t.Fatalf("expected model metadata to persist, got %#v", loaded.ProviderModelMetadata)
+	}
+	if metadata.Pricing.InputPerMillion != 0.04 || metadata.Pricing.OutputPerMillion != 0.16 {
+		t.Fatalf("unexpected persisted pricing: %#v", metadata.Pricing)
+	}
+	if metadata.ContextWindowTokens != 262144 {
+		t.Fatalf("unexpected context window: %d", metadata.ContextWindowTokens)
+	}
+}
+
 func TestConfigUsesLoadedModelPricing(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
@@ -2370,8 +2464,8 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 
 	config := m.runConfig("review this project")
 
-	if config.Workflow != workflowAuto {
-		t.Fatalf("expected progressive auto workflow request, got %q", config.Workflow)
+	if config.Workflow != workflowAgentic {
+		t.Fatalf("expected agentic runtime request, got %q", config.Workflow)
 	}
 
 	if config.InputPrice != "0.15" {
@@ -2384,6 +2478,43 @@ func TestConfigUsesLoadedModelPricing(t *testing.T) {
 
 	if config.HTTPTimeout != defaultHTTPTimeoutMS {
 		t.Fatalf("unexpected HTTP timeout: %q", config.HTTPTimeout)
+	}
+}
+
+func TestConfigUsesSavedModelPricingMetadataWithoutReload(t *testing.T) {
+	m := model{
+		provider:      providerOpenRouter,
+		providerSet:   true,
+		selectedModel: "stepfun/step-3.5-flash",
+		savedConfig: savedConfig{
+			ProviderSecrets: map[string]map[string]string{
+				string(providerOpenRouter): {"api_key": "test-key"},
+			},
+			ProviderModelMetadata: map[string]map[string]modelOption{
+				string(providerOpenRouter): {
+					"stepfun/step-3.5-flash": {
+						ID: "stepfun/step-3.5-flash",
+						Pricing: modelPricing{
+							InputPerMillion:  0.04,
+							OutputPerMillion: 0.16,
+						},
+						ContextWindowTokens: 262144,
+					},
+				},
+			},
+		},
+	}
+
+	config := m.runConfig("review this project")
+	resolved, err := resolveConfig(config)
+	if err != nil {
+		t.Fatalf("expected saved model metadata to resolve pricing, got %v", err)
+	}
+	if resolved.InputPrice != "0.04" || resolved.OutputPrice != "0.16" {
+		t.Fatalf("unexpected pricing: input=%q output=%q", resolved.InputPrice, resolved.OutputPrice)
+	}
+	if resolved.ContextWindow != "262144" {
+		t.Fatalf("unexpected context window: %q", resolved.ContextWindow)
 	}
 }
 
@@ -2633,6 +2764,23 @@ func TestProviderPickerSelectingCurrentProviderKeepsModel(t *testing.T) {
 	}
 }
 
+func TestRunConfigUsesAgenticWorkflowWhenPlannerReviewEnabled(t *testing.T) {
+	m := model{
+		provider:    providerEcho,
+		providerSet: true,
+		savedConfig: savedConfig{
+			Provider:                  string(providerEcho),
+			PlannerReviewMaxRevisions: "2",
+		},
+	}
+
+	config := m.runConfig("simple prompt")
+
+	if config.Workflow != workflowAgentic {
+		t.Fatalf("expected planner review to use agentic runtime, got %q", config.Workflow)
+	}
+}
+
 func TestProviderCommandPersistsSelectedProvider(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
@@ -2675,7 +2823,7 @@ func TestInitialModelRequiresProviderBeforeRun(t *testing.T) {
 	}
 }
 
-func TestStartRunUsesAutoWithoutWorkflowSetup(t *testing.T) {
+func TestStartRunUsesAgenticRuntimeWithoutWorkflowSetup(t *testing.T) {
 	m := model{
 		provider:    providerEcho,
 		providerSet: true,
@@ -2688,8 +2836,8 @@ func TestStartRunUsesAutoWithoutWorkflowSetup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected run command")
 	}
-	if result.activeConfig.Workflow != workflowAuto {
-		t.Fatalf("expected auto workflow request, got %q", result.activeConfig.Workflow)
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected agentic runtime request, got %q", result.activeConfig.Workflow)
 	}
 }
 
@@ -2730,8 +2878,8 @@ func TestStartRunTimeQuestionWithCodeEditToolsStaysInChat(t *testing.T) {
 	if !result.running {
 		t.Fatal("expected run to start")
 	}
-	if result.activeConfig.Workflow != workflowAuto {
-		t.Fatalf("expected auto workflow, got %q", result.activeConfig.Workflow)
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected agentic runtime, got %q", result.activeConfig.Workflow)
 	}
 }
 
@@ -2792,7 +2940,7 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	}
 }
 
-func TestWorkflowCommandReportsProgressiveAutoMode(t *testing.T) {
+func TestWorkflowCommandReportsRemovedWorkflowSelection(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
 	m, err := initialModel()
@@ -2803,10 +2951,7 @@ func TestWorkflowCommandReportsProgressiveAutoMode(t *testing.T) {
 	updated, _ := m.handleCommand("/workflow agentic")
 	result := updated.(model)
 
-	if result.workflowSet {
-		t.Fatal("expected workflow command not to mutate workflow setup")
-	}
-	if !strings.Contains(result.messages[len(result.messages)-1].Text, "progressive auto") {
+	if !strings.Contains(result.messages[len(result.messages)-1].Text, "Workflow selection was removed") {
 		t.Fatalf("unexpected workflow message: %#v", result.messages[len(result.messages)-1])
 	}
 }
@@ -2822,12 +2967,12 @@ func TestWorkflowCommandDoesNotPersistWorkflow(t *testing.T) {
 
 	_, _ = m.handleCommand("/workflow agentic")
 
-	loaded, err := loadSavedConfig(configPath)
-	if err != nil {
-		t.Fatalf("expected saved config to load, got %v", err)
+	data, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("expected saved config to be readable or absent, got %v", err)
 	}
-	if loaded.Workflow != "" {
-		t.Fatalf("expected workflow not to persist, got %q", loaded.Workflow)
+	if strings.Contains(string(data), `"workflow"`) {
+		t.Fatalf("expected workflow not to persist, got %s", string(data))
 	}
 }
 
@@ -3792,6 +3937,23 @@ func TestLastJSONLineIgnoresMixCompileNoise(t *testing.T) {
 	}
 }
 
+func TestParseJSONLLineIgnoresObjectLikeNonProtocolNoise(t *testing.T) {
+	envelope, ok, err := parseJSONLLine(`{ signal: lock acquired }`)
+	if err != nil {
+		t.Fatalf("expected non-protocol line to be ignored, got %v", err)
+	}
+	if ok || envelope.Type != "" {
+		t.Fatalf("expected ignored line, got %#v", envelope)
+	}
+}
+
+func TestParseJSONLLineRejectsMalformedProtocolEnvelope(t *testing.T) {
+	_, _, err := parseJSONLLine(`{"type":event}`)
+	if err == nil || !strings.Contains(err.Error(), "failed to parse AgentMachine JSONL line") {
+		t.Fatalf("expected malformed AgentMachine envelope error, got %v", err)
+	}
+}
+
 func TestValidateConfigRejectsMCPConfigWithoutToolBudget(t *testing.T) {
 	err := validateToolConfig(runConfig{MCPConfig: "/tmp/agent-machine.mcp.json"})
 	if err == nil {
@@ -3913,8 +4075,6 @@ func TestToolsOffClearsToolHarness(t *testing.T) {
 func TestFilesystemWriteStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  configPath,
@@ -3954,7 +4114,7 @@ func TestStartRunForcesAgenticWorkflowWhenPersistenceEnabled(t *testing.T) {
 		t.Fatal("expected runtime command")
 	}
 	if result.activeConfig.Workflow != workflowAgentic {
-		t.Fatalf("expected agentic workflow, got %q", result.activeConfig.Workflow)
+		t.Fatalf("expected agentic runtime, got %q", result.activeConfig.Workflow)
 	}
 	if result.activeConfig.AgenticPersistenceRounds != "2" ||
 		result.activeConfig.MaxSteps != "9" ||
@@ -3976,14 +4136,14 @@ func TestValidateConfigRejectsIncompleteAgenticPersistence(t *testing.T) {
 
 	err = validateConfig(runConfig{
 		Task:                     "review this project",
-		Workflow:                 workflowBasic,
+		Workflow:                 workflowAgentic,
 		Provider:                 providerEcho,
 		RunTimeout:               "300000",
 		MaxSteps:                 "9",
 		AgenticPersistenceRounds: "2",
 	})
-	if err == nil || !strings.Contains(err.Error(), "requires agentic workflow") {
-		t.Fatalf("expected non-agentic workflow error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected complete agentic persistence config, got %v", err)
 	}
 }
 
@@ -3992,8 +4152,6 @@ func TestCodeEditFollowUpStartsRuntimeWithoutTUIIntentGuessing(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  configPath,
@@ -4026,8 +4184,6 @@ func TestNextJSProjectCreationStartsRuntimeWithoutTUIIntentGuessing(t *testing.T
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  configPath,
@@ -4113,7 +4269,7 @@ func TestPersistentSessionCapabilitySummaryShowsPermissionSelector(t *testing.T)
 		},
 	}
 
-	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit","requested_root":"/tmp/agent-machine-home"}}}`)
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"agentic runtime detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit","requested_root":"/tmp/agent-machine-home"}}}`)
 
 	if updated.pendingToolTask == "" {
 		t.Fatal("expected pending tool task")
@@ -4149,7 +4305,7 @@ func TestCapabilitySummaryWithoutRootRequiresExplicitToolRoot(t *testing.T) {
 		},
 	}
 
-	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"auto workflow detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit"}}}`)
+	updated, _ := m.handleStreamLine(`{"type":"summary","summary":{"status":"failed","error":"agentic runtime detected code mutation intent but :code_edit tool harness is not configured","final_output":null,"results":{},"events":[],"capability_required":{"reason":"missing_code_edit_harness","intent":"code_mutation","required_harness":"code-edit"}}}`)
 
 	if updated.running {
 		t.Fatal("expected persistent run to stop after failed summary")
@@ -4287,6 +4443,42 @@ func TestRouterWebBrowseApprovalErrorShowsMCPBrowserSelector(t *testing.T) {
 	}
 }
 
+func TestMCPBrowserTimeoutCapabilityErrorShowsMCPBrowserSelector(t *testing.T) {
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolTimeout:   "1000",
+			ToolMaxRounds: "16",
+			ToolApproval:  "ask-before-write",
+			MCPConfig:     "/tmp/agent-machine.mcp.json",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "make me research of latest AI papers"},
+		},
+	}
+
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:          "insufficient_tool_timeout",
+		Intent:          "web_browse",
+		RequiredHarness: "mcp",
+		RequiredMCPTool: "browser_navigate",
+		Detail:          "MCP browser access requires :tool_timeout_ms >= 60000, got: 1000",
+	})
+
+	if !handled {
+		t.Fatal("expected MCP browser timeout capability requirement to be handled")
+	}
+	if updated.pendingToolHarness != pendingHarnessMCPBrowser {
+		t.Fatalf("expected MCP browser pending harness, got %q", updated.pendingToolHarness)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "MCP browser permission required") ||
+		!strings.Contains(last, "/tmp/agent-machine.mcp.json") {
+		t.Fatalf("expected MCP browser permission prompt, got %q", last)
+	}
+}
+
 func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	home, err := os.UserHomeDir()
@@ -4295,8 +4487,6 @@ func TestAllowToolsApprovesPendingFilesystemRun(t *testing.T) {
 	}
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4333,8 +4523,6 @@ func TestAllowToolsApprovesPendingMCPBrowserRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4368,8 +4556,8 @@ func TestAllowToolsApprovesPendingMCPBrowserRun(t *testing.T) {
 		result.savedConfig.ToolApproval != "ask-before-write" {
 		t.Fatalf("unexpected MCP browser tool config: %#v", result.savedConfig)
 	}
-	if result.activeConfig.Workflow != workflowAuto {
-		t.Fatalf("expected MCP browser approval retry to run auto workflow, got %q", result.activeConfig.Workflow)
+	if result.activeConfig.Workflow != workflowAgentic {
+		t.Fatalf("expected MCP browser approval retry to use agentic runtime, got %q", result.activeConfig.Workflow)
 	}
 	if result.pendingToolTask != "" || result.pendingToolRoot != "" || result.pendingToolHarness != "" {
 		t.Fatalf("expected pending MCP browser request to clear, got task=%q root=%q harness=%q", result.pendingToolTask, result.pendingToolRoot, result.pendingToolHarness)
@@ -4380,8 +4568,6 @@ func TestAllowToolsApprovesPendingCodeEditRun(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4419,8 +4605,6 @@ func TestYoloToolsUsesFullAccessForPendingFilesystemRun(t *testing.T) {
 	}
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4450,8 +4634,6 @@ func TestPendingToolSelectorApprovesWithKeyboard(t *testing.T) {
 	}
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4487,8 +4669,6 @@ func TestPendingToolSelectorCanChooseFullAccessAndDeny(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 
 	m := model{
-		workflow:           workflowBasic,
-		workflowSet:        true,
 		provider:           providerEcho,
 		providerSet:        true,
 		configPath:         configPath,
@@ -4556,8 +4736,6 @@ func TestStartRunIncludesRecentConversationContext(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		savedConfig: savedConfig{
@@ -4714,8 +4892,6 @@ func TestTaskConversationContextOmitsAssistantRefusals(t *testing.T) {
 func TestFilesystemWriteDoesNotPreflightActiveRootCoverage(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  configPath,
@@ -4775,7 +4951,6 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
 
 	if err := saveSavedConfig(configPath, savedConfig{
-		Workflow:        "legacy-invalid",
 		Provider:        "openrouter",
 		OpenRouterModel: "openai/gpt-4o-mini",
 		ToolHarness:     "local-files",
@@ -4792,9 +4967,6 @@ func TestInitialModelLoadsSavedSetup(t *testing.T) {
 		t.Fatalf("expected initial model, got %v", err)
 	}
 
-	if m.workflowSet || m.workflow != "" {
-		t.Fatalf("expected saved workflow to be ignored, got set=%v workflow=%q", m.workflowSet, m.workflow)
-	}
 	if !m.providerSet || m.provider != providerOpenRouter {
 		t.Fatalf("expected saved provider, got set=%v provider=%q", m.providerSet, m.provider)
 	}
@@ -5688,8 +5860,6 @@ func TestQueueCommandsEditRemoveClearAndRun(t *testing.T) {
 
 func TestQueueRunStartsImmediatelyWhenIdle(t *testing.T) {
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  filepath.Join(t.TempDir(), "config.json"),
@@ -5736,8 +5906,6 @@ func TestQueueRunMovesItemToFrontWhileRunning(t *testing.T) {
 
 func TestQueuedMessageStartsAfterCurrentRun(t *testing.T) {
 	m := model{
-		workflow:    workflowBasic,
-		workflowSet: true,
 		provider:    providerEcho,
 		providerSet: true,
 		configPath:  filepath.Join(t.TempDir(), "config.json"),
@@ -5929,7 +6097,6 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 	err := saveSavedConfig(path, savedConfig{
 		OpenAIAPIKey:     "openai-key",
 		OpenRouterAPIKey: "openrouter-key",
-		Workflow:         "agentic",
 		Provider:         "openrouter",
 		OpenAIModel:      "gpt-4o-mini",
 		OpenRouterModel:  "openai/gpt-4o-mini",
@@ -5959,9 +6126,6 @@ func TestSavedConfigRoundTripUsesPrivateFile(t *testing.T) {
 
 	if loaded.Theme != "matrix" {
 		t.Fatalf("unexpected theme: %q", loaded.Theme)
-	}
-	if loaded.Workflow != "agentic" {
-		t.Fatalf("unexpected workflow: %q", loaded.Workflow)
 	}
 	if loaded.Provider != "openrouter" {
 		t.Fatalf("unexpected provider: %q", loaded.Provider)

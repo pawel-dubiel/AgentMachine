@@ -16,7 +16,7 @@ partition "TUI or Mix CLI boundary" {
   :User message or CLI task;
 
   if (TUI normal message?) then (yes)
-    :Build runConfig with workflow=auto;
+    :Build runConfig with agentic runtime;
     :Include recent conversation context\nfor short follow-ups;
     :Preflight local permission intent;
     if (filesystem/code action needs a different harness?) then (yes)
@@ -33,7 +33,7 @@ partition "TUI or Mix CLI boundary" {
     :Build mix agent_machine.run args;
   endif
 
-  :Pass provider, model, workflow request,\npricing, timeouts, skills, tool harnesses,\nMCP config, root, approval mode, test commands;
+  :Pass provider, model, runtime request,\npricing, timeouts, skills, tool harnesses,\nMCP config, root, approval mode, test commands;
 }
 
 partition "Mix.Tasks.AgentMachine.Session (TUI daemon)" {
@@ -41,7 +41,7 @@ partition "Mix.Tasks.AgentMachine.Session (TUI daemon)" {
     :Parse user_message, send_agent_message,\nread_agent_output, cancel_agent,\npermission_decision, shutdown;
     :Own one PermissionControl registry;\nstdin has a single reader;
     :Persist session context JSONL ledger;
-    :Run daemon-only coordinator workflow;
+    :Run daemon-only coordinator strategy;
     :Expose only session-control tools:\nspawn_agent, send_agent_message,\nread_agent_output, list_session_agents;
     if (coordinator spawns sidechain agent?) then (yes)
       :Create sidechain transcript under\nsessions/<session-id>/agents/<agent-id>.jsonl;
@@ -85,7 +85,7 @@ partition "ClientRunner" {
     stop
   endif
 
-  :WorkflowRouter.route!(RunSpec);
+  :ExecutionPlanner.plan!(RunSpec);
 
   if (router_mode == local?) then (yes)
     :LocalIntentClassifier.classify!;
@@ -100,20 +100,18 @@ partition "ClientRunner" {
     :Detect intent with deterministic rules;
   endif
 
-  if (requested workflow is chat/basic/agentic?) then (explicit)
-    if (requested chat and tools configured?) then (yes)
-      :Fail fast\nchat cannot expose tools;
-      stop
-    else (valid)
-      :selected = requested;
-    endif
-  else (requested auto)
-    if (no tool or mutation intent?) then (chat)
-      :selected = chat;
+  if (public workflow omitted or agentic?) then (valid)
+    :classify intent for agentic runtime;
+  else (legacy chat/basic/auto)
+    :Fail fast\nworkflow must be agentic or omitted;
+    stop
+  endif
+    if (no tool or mutation intent?) then (direct)
+      :strategy = direct;
       :tools_exposed = false;
     elseif (read/list/search/inspect intent?) then (tool)
       if (local-files or code-edit read capability?) then (yes)
-        :selected = tool;
+        :strategy = tool;
         :Expose only read-risk filesystem tools;
         :tools_exposed = true;
       else (no)
@@ -122,21 +120,21 @@ partition "ClientRunner" {
       endif
     elseif (time intent?) then (time)
       if (time/demo harness?) then (yes)
-        :selected = tool;
+        :strategy = tool;
         :Expose only now;
         :tools_exposed = true;
       elseif (another tool harness active?) then (auto-add)
-        :selected = tool;
+        :strategy = tool;
         :Auto-add time harness for this run;
         :Expose only now;
         :tools_exposed = true;
       else (no)
-        :selected = chat;
+        :strategy = direct;
         :tools_exposed = false;
       endif
     elseif (generic tool intent?) then (tool)
       if (matching read-risk tool harness?) then (yes)
-        :selected = tool;
+        :strategy = tool;
         :Expose only tools with approval_risk=read;
         :tools_exposed = true;
       else (no)
@@ -145,7 +143,7 @@ partition "ClientRunner" {
       endif
     elseif (file mutation intent?) then (agentic)
       if (write-capable local-files or code-edit?) then (yes)
-        :selected = agentic;
+        :strategy = planned;
         :tools_exposed = true;
       else (no)
         :Fail fast\nwrite capability missing;
@@ -153,7 +151,7 @@ partition "ClientRunner" {
       endif
     elseif (code mutation intent?) then (agentic)
       if (code-edit harness configured?) then (yes)
-        :selected = agentic;
+        :strategy = planned;
         :tools_exposed = true;
       else (no)
         :Fail fast\ncode-edit missing;
@@ -161,18 +159,18 @@ partition "ClientRunner" {
       endif
     elseif (test command intent?) then (agentic)
       if (code-edit + full-access/ask-before-write\n+ allowlisted test command?) then (yes)
-        :selected = agentic;
+        :strategy = planned;
         :tools_exposed = true;
       else (no)
         :Fail fast\ntest capability missing;
         stop
       endif
     elseif (explicit delegation intent?) then (agentic)
-      :selected = agentic;
+      :strategy = planned;
     endif
   endif
 
-  :Emit workflow_routed to EventLog;
+  :Emit execution_strategy_selected to EventLog;
 
   :Skills.Selector.select!(RunSpec);
   if (skills off?) then (off)
@@ -186,33 +184,26 @@ partition "ClientRunner" {
     :Select up to 8 matching skills;
   endif
 
-  :Build selected workflow only;
+  :Build selected strategy only;
   if (permission control active and tools exposed?) then (yes)
     :Expose safe request_capability tool;
     :Install runtime approval callback;
   endif
 }
 
-partition "Workflow construction" {
-  if (selected == chat?) then (chat)
+partition "Strategy construction" {
+  if (strategy == direct?) then (direct)
     :Workflows.Chat.build!;
     :Create assistant only;
     :No finalizer;
     :No tools;
     :Disable tools in metadata;
-  elseif (selected == basic?) then (basic)
-    :Workflows.Basic.build!;
-    :Create assistant + finalizer;
-    :Finalizer disables tools;
-    if (tools_exposed?) then (yes)
-      :Attach allowed_tools, tool_policy,\ntool_timeout_ms, tool_max_rounds,\ntool_approval_mode;
-    endif
-  elseif (selected == tool?) then (tool)
+  elseif (strategy == tool?) then (tool)
     :Workflows.Tool.build!;
     :Create assistant only;
     :No finalizer;
     :Attach only read-risk tools and policy;
-  else (agentic)
+  else (planned/swarm)
     :Workflows.Agentic.build!;
     :Create planner + finalizer;
     :Planner metadata:\nagent_machine_response=delegation\nagent_machine_disable_tools=true;
@@ -231,10 +222,10 @@ partition "Workflow construction" {
 }
 
 partition "Tool harness assembly" {
-  if (no selected workflow exposes tools?) then (no tools)
+  if (no selected strategy exposes tools?) then (no tools)
     :Provider request has no tool definitions;
   else (tools)
-    if (selected == tool?) then (read-only)
+    if (strategy == tool?) then (read-only)
       :ToolHarness.read_only_many!(harnesses, intent);
       :ToolHarness.read_only_policy_many!(harnesses, intent);
       :Filter out write/delete/command/network tools;
@@ -365,13 +356,13 @@ partition "Dynamic delegation and final output" {
     :Validate delegated agents;
     :Reserve max_steps;
     :Spawn workers with parent_agent_id=planner;
-    :Workers may call tools if workflow exposed them;
+    :Workers may call tools if strategy exposed them;
     :When idle, start finalizer;
     :final_output = finalizer.output;
-  elseif (selected == chat or tool?) then (single assistant)
+  elseif (strategy == direct or tool?) then (single assistant)
     :No finalizer;
     :final_output = assistant.output;
-  elseif (basic workflow idle?) then (basic)
+  elseif (planned/swarm strategy idle?) then (finalizer)
     :Start finalizer;
     :final_output = finalizer.output;
   endif
@@ -379,7 +370,7 @@ partition "Dynamic delegation and final output" {
 
 partition "Summary and output" {
   :Aggregate usage, events, artifacts, results;
-  :Attach workflow_route:\nrequested, selected, reason,\ntool_intent, tools_exposed,\nclassifier, classified_intent,\nconfidence;
+  :Attach execution_strategy:\nrequested, selected, reason,\ntool_intent, tools_exposed,\nclassifier, classified_intent,\nconfidence;
   :Attach selected skills summary;
   :Redact secrets from output, logs, events,\nsummaries, and read-style tool results;
   :Write final summary to EventLog\nwhen configured;
@@ -394,7 +385,7 @@ partition "Summary and output" {
 stop
 
 legend right
-  <b>Fail fast</b>: missing required config, invalid workflow/tool setup,
+  <b>Fail fast</b>: missing required config, invalid runtime/tool setup,
   missing capabilities, disallowed tools, permission failures, approval denial,
   invalid provider/tool contracts.
 
@@ -402,7 +393,7 @@ legend right
   error-shaped tool_results and are returned to the model so it can choose a
   different safe approach within tool_max_rounds.
 
-  <b>auto</b> is a routing policy, not a workflow implementation.
+  <b>agentic</b> is the public runtime; strategy selection is internal.
 endlegend
 
 @enduml

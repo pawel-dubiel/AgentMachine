@@ -101,7 +101,7 @@ func (m model) statusLine() string {
 	if m.running {
 		parts = append(parts, "run=running")
 	}
-	if route := workflowRouteStatus(m.lastSummary.WorkflowRoute); route != "" {
+	if route := executionStrategyStatus(m.lastSummary.ExecutionStrategy, m.lastSummary.WorkflowRoute); route != "" {
 		parts = append(parts, route)
 	}
 	if len(m.queuedMessages) > 0 {
@@ -915,6 +915,14 @@ func eventDisplayLineWithTheme(event eventSummary, theme tuiTheme) string {
 	if text := permissionEventDisplayLine(event, theme); text != "" {
 		return text
 	}
+	if event.Type == "execution_strategy_selected" {
+		strategy := firstNonEmpty(event.Strategy, event.Selected)
+		text := "strategy selected: " + emptyAsNone(strategy)
+		if event.Reason != "" {
+			text += "  " + hintTextForTheme(theme, event.Reason)
+		}
+		return text
+	}
 
 	text := event.Summary
 	if strings.TrimSpace(text) == "" {
@@ -1370,11 +1378,14 @@ func selectedModelPickerPosition(indexes []int, selected int) int {
 	return 0
 }
 
-func workflowRouteStatus(route workflowRoute) string {
-	if strings.TrimSpace(route.Requested) == "" && strings.TrimSpace(route.Selected) == "" {
+func executionStrategyStatus(strategy workflowRoute, legacy workflowRoute) string {
+	if strings.TrimSpace(strategy.Selected) == "" {
+		strategy = legacy
+	}
+	if strings.TrimSpace(strategy.Selected) == "" {
 		return ""
 	}
-	return "route=" + emptyAsNone(route.Requested) + "->" + emptyAsNone(route.Selected)
+	return "strategy=" + emptyAsNone(strategy.Selected)
 }
 
 func workflowRouteLine(route workflowRoute) string {
@@ -1382,8 +1393,8 @@ func workflowRouteLine(route workflowRoute) string {
 		return ""
 	}
 	parts := []string{
-		"requested=" + emptyAsNone(route.Requested),
-		"selected=" + emptyAsNone(route.Selected),
+		"runtime=" + emptyAsNone(route.Requested),
+		"strategy=" + emptyAsNone(route.Selected),
 		"intent=" + emptyAsNone(route.ToolIntent),
 		fmt.Sprintf("tools=%v", route.ToolsExposed),
 	}
@@ -1399,7 +1410,7 @@ func workflowRouteLine(route workflowRoute) string {
 	if strings.TrimSpace(route.Reason) != "" {
 		parts = append(parts, "reason="+route.Reason)
 	}
-	return "Workflow route: " + strings.Join(parts, " ")
+	return "Execution strategy: " + strings.Join(parts, " ")
 }
 
 func (m model) agentsView() string {
@@ -1411,7 +1422,11 @@ func (m model) agentsView() string {
 	if len(m.eventLog) > 0 {
 		lines = append(lines, m.styles().Label.Render("Latest event"), eventDisplayLineWithTheme(m.eventLog[len(m.eventLog)-1], m.activeTheme()), "")
 	}
-	if route := workflowRouteLine(m.lastSummary.WorkflowRoute); route != "" {
+	route := m.lastSummary.ExecutionStrategy
+	if strings.TrimSpace(route.Selected) == "" {
+		route = m.lastSummary.WorkflowRoute
+	}
+	if route := workflowRouteLine(route); route != "" {
 		lines = append(lines, route, "")
 	}
 	if len(m.lastSummary.Skills) > 0 {

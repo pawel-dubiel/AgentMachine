@@ -354,12 +354,12 @@ func pathWithin(root string, path string) bool {
 }
 
 func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
-	overlayString(&base.Workflow, override.Workflow)
 	overlayString(&base.Provider, override.Provider)
 	overlayString(&base.OpenAIModel, override.OpenAIModel)
 	overlayString(&base.OpenRouterModel, override.OpenRouterModel)
 	overlayStringMapMap(&base.ProviderOptions, override.ProviderOptions)
 	overlayStringMap(&base.ProviderModels, override.ProviderModels)
+	overlayModelMetadataMap(&base.ProviderModelMetadata, override.ProviderModelMetadata)
 	overlayString(&base.Theme, override.Theme)
 	overlayString(&base.ToolHarness, override.ToolHarness)
 	overlayString(&base.ToolRoot, override.ToolRoot)
@@ -393,6 +393,29 @@ func overlaySavedConfig(base savedConfig, override savedConfig) savedConfig {
 		base.ProgressObserver = true
 	}
 	return base
+}
+
+func overlayModelMetadataMap(base *map[string]map[string]modelOption, override map[string]map[string]modelOption) {
+	if len(override) == 0 {
+		return
+	}
+	if *base == nil {
+		*base = map[string]map[string]modelOption{}
+	}
+	for providerID, models := range override {
+		if len(models) == 0 {
+			continue
+		}
+		if (*base)[providerID] == nil {
+			(*base)[providerID] = map[string]modelOption{}
+		}
+		for modelID, metadata := range models {
+			if strings.TrimSpace(modelID) == "" {
+				continue
+			}
+			(*base)[providerID][modelID] = metadata
+		}
+	}
 }
 
 func overlayStringMapMap(target *map[string]map[string]string, values map[string]map[string]string) {

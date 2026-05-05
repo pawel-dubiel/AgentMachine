@@ -55,7 +55,7 @@ defmodule AgentMachine.Workflows.Agentic do
       |> maybe_put_agentic_persistence(spec.agentic_persistence_rounds, goal_reviewer)
       |> maybe_put_planner_review(spec.planner_review_mode, spec.planner_review_max_revisions)
       |> WorkflowProvider.put_http_opts(spec)
-      |> WorkflowToolOptions.put_full_tool_opts(spec)
+      |> maybe_put_tool_opts(spec, route)
       |> WorkflowOptions.put_context_opts(spec)
 
     {[planner], opts}
@@ -70,6 +70,12 @@ defmodule AgentMachine.Workflows.Agentic do
   end
 
   defp validate_persistence_strategy!(_persistence?, _swarm?), do: :ok
+
+  defp maybe_put_tool_opts(opts, _spec, %{tools_exposed: false}), do: opts
+  defp maybe_put_tool_opts(opts, _spec, %{"tools_exposed" => false}), do: opts
+
+  defp maybe_put_tool_opts(opts, spec, route),
+    do: WorkflowToolOptions.put_agentic_tool_opts(opts, spec, route)
 
   defp maybe_put_agentic_persistence(opts, nil, nil), do: opts
 
@@ -139,7 +145,7 @@ defmodule AgentMachine.Workflows.Agentic do
     Use decision mode "direct" when the request can be answered without tools, filesystem changes, or separate worker context. In direct mode, put the final user-facing answer in output and use an empty next_agents list.
     Use decision mode "delegate" when worker agents are needed. Keep worker ids short, lowercase, and unique.
     If the task needs external side effects such as writing files, creating directories, browsing the web, calling MCP tools, or running commands, you MUST create a worker agent for that exact action and require it to use available tools.
-    If runtime facts show workflow_route.tool_intent is "web_browse", you MUST use decision mode "delegate" and create exactly one worker that uses the available MCP browser tools. Do not ask for a website when the user gives a search source or query such as Google, latest news, today, headlines, or a named topic; construct the browser task from that request.
+    If runtime facts show execution_strategy.tool_intent is "web_browse", you MUST use decision mode "delegate" and create exactly one worker that uses the available MCP browser tools. Do not ask for a website when the user gives a search source or query such as Google, latest news, today, headlines, or a named topic; construct the browser task from that request.
 
     Worker briefing rules:
     - Include exact paths, requested outcome, relevant context, and success evidence in each worker input.
@@ -163,7 +169,7 @@ defmodule AgentMachine.Workflows.Agentic do
       planner_instructions(false),
       """
       Swarm strategy:
-      - Runtime facts show workflow_route.strategy is "swarm"; you MUST return decision mode "swarm".
+      - Runtime facts show execution_strategy.strategy is "swarm"; you MUST return decision mode "swarm".
       - Create isolated candidate-producing variant workers that solve the same user goal through intentionally different approaches.
       - Use 2 to 5 variants. Default to exactly 3 variants unless the user explicitly asks for a different count: minimal, robust, experimental.
       - The minimal variant should pursue the smallest correct solution.

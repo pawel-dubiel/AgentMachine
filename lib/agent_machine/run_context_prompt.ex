@@ -35,7 +35,7 @@ defmodule AgentMachine.RunContextPrompt do
 
   def runtime_facts(opts \\ []) when is_list(opts) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-    route = Keyword.get(opts, :workflow_route)
+    strategy = Keyword.get(opts, :execution_strategy) || Keyword.get(opts, :workflow_route)
     run_context = Keyword.get(opts, :run_context)
 
     %{
@@ -45,7 +45,8 @@ defmodule AgentMachine.RunContextPrompt do
       agent_machine: agent_machine_facts(),
       instruction: "Use these runtime facts when relevant. Do not invent dates or times."
     }
-    |> maybe_put_workflow_route(route)
+    |> maybe_put_execution_strategy(strategy)
+    |> maybe_put_workflow_route(strategy)
     |> maybe_put_run_context_facts(run_context)
   end
 
@@ -143,6 +144,7 @@ defmodule AgentMachine.RunContextPrompt do
 
       :auto ->
         runtime_facts(
+          execution_strategy: Keyword.get(opts, :execution_strategy),
           workflow_route: Keyword.get(opts, :workflow_route),
           run_context: Keyword.get(opts, :run_context)
         )
@@ -153,22 +155,28 @@ defmodule AgentMachine.RunContextPrompt do
     end
   end
 
+  defp maybe_put_execution_strategy(facts, nil), do: facts
+
+  defp maybe_put_execution_strategy(facts, strategy) when is_map(strategy) do
+    Map.put(facts, :execution_strategy, strategy_facts(strategy))
+  end
+
   defp maybe_put_workflow_route(facts, nil), do: facts
 
   defp maybe_put_workflow_route(facts, route) when is_map(route) do
-    Map.put(
-      facts,
-      :workflow_route,
-      Map.take(route, [
-        :requested,
-        :selected,
-        :reason,
-        :strategy,
-        :tool_intent,
-        :work_shape,
-        :route_hint
-      ])
-    )
+    Map.put(facts, :workflow_route, strategy_facts(route))
+  end
+
+  defp strategy_facts(strategy) do
+    Map.take(strategy, [
+      :requested,
+      :selected,
+      :reason,
+      :strategy,
+      :tool_intent,
+      :work_shape,
+      :route_hint
+    ])
   end
 
   defp maybe_put_run_context_facts(facts, nil), do: facts
@@ -213,13 +221,15 @@ defmodule AgentMachine.RunContextPrompt do
       role: "assistant running inside AgentMachine",
       execution_model:
         "Models do not directly spawn OS processes. They return text, tool calls, or structured delegation; the Elixir runtime executes tools and starts delegated worker agents.",
-      workflows: %{
-        chat: "no tools, workers, or side effects",
-        tool: "read-only tool calls when selected by auto routing",
-        agentic: "planner may return next_agents; Elixir runtime starts worker agents"
+      runtime: "one public agentic runtime selects an internal execution strategy",
+      execution_strategies: %{
+        direct: "one assistant, no tools, workers, or side effects",
+        tool: "one assistant with a narrow read-only tool set",
+        planned: "planner may return next_agents; Elixir runtime starts worker agents",
+        swarm: "planner creates variants and the runtime evaluates them"
       },
       instruction:
-        "Be precise about the selected route. Do not claim AgentMachine lacks agents. In chat route, explain that concrete 'use agents to do X' requests can be routed through agentic workflow, but this chat run has no workers or tools."
+        "Be precise about the selected execution strategy. Do not claim AgentMachine lacks agents. In direct strategy, explain that concrete 'use agents to do X' requests can use planned strategy, while this direct run has no workers or tools."
     }
   end
 

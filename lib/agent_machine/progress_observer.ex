@@ -530,7 +530,7 @@ defmodule AgentMachine.ProgressObserver do
     I’m making PermissionControl the shared runtime-control pipe rather than adding a second process. That keeps tool approvals compatible while letting planner decisions use the same JSONL correlation mechanism.
 
     Ran 3 tests
-    The new routing branch is passing for explicit chat and basic workflows, but the auto workflow still needs one failing case fixed around tool intent detection.
+    The new routing branch is passing for direct and planned strategies, but the tool strategy still needs one failing case fixed around intent detection.
 
     Output only the progress update.
     """

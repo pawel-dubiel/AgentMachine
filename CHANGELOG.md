@@ -4,6 +4,33 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Changed session runtime event delivery to write TUI JSONL events
+  asynchronously, preventing slow terminal/stdout writes from failing active
+  provider streams while keeping final summaries synchronous.
+- Configured ReqLLM's Finch stream pool explicitly for concurrent agentic runs
+  so planner, worker, progress observer, and continuation streams do not
+  inherit the smaller library default pool.
+- Added structured fail-fast validation for MCP browser runs with too-low tool
+  timeouts, surfacing the repair selector instead of a stacktrace, and ignored
+  non-protocol object-like stdout noise in the TUI JSONL reader.
+- Scoped planned agentic tools by route intent so web research uses MCP browser
+  tools without inheriting stale code-edit shell settings, while mutation and
+  shell strategies still fail fast on insufficient shell budgets.
+- Fixed ReqLLM streaming runs so providers whose final normalized response omits
+  text still return the accumulated streamed assistant output instead of failing
+  after successful deltas.
+- Fixed TUI startup runs with saved remote models by caching selected model
+  pricing/context metadata and automatically loading model metadata before
+  retrying a pending message when old config lacks the cache.
+- Fixed TUI run preparation so a stale code-edit shell budget no longer blocks
+  direct agentic answers; shell budget validation now happens after the runtime
+  selects a strategy that actually exposes shell tools.
+- Collapsed public workflow selection into one agentic runtime. The CLI accepts
+  no workflow flag or `--workflow agentic`, session payloads omit workflow, and
+  JSON/JSONL summaries now expose `execution_strategy` with a temporary
+  `workflow_route` compatibility alias.
+- Changed the TUI so saved planner review forces agentic runtime runs instead
+  of letting auto-routing select chat and then fail the planner-review contract.
 - Added a TUI provider picker opened by `/provider`, listing all providers and
   marking the currently selected provider while preserving direct
   `/provider <provider-id>` selection.
@@ -25,9 +52,8 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 - Tightened provider-facing code-edit tool schemas so shell command tools expose
   the configured timeout maximum and `apply_edits` advertises required fields
   for each operation, reducing invalid model tool calls.
-- Fixed the TUI so legacy low-budget `code-edit` shell settings do not block
-  plain auto-routed chat turns such as `hi`; explicit agentic/tool retries still
-  fail fast with the `/tools code-edit ... 120000 16 ...` repair command.
+- Fixed the TUI so legacy low-budget `code-edit` shell settings fail fast with
+  the `/tools code-edit ... 120000 16 ...` repair command before starting runs.
 - Rewrote the README into a polished GitHub-style guide with clearer quick
   start, workflow, tool, provider, safety, and architecture sections.
 - Fixed failed agentic runs so unresolved worker errors suppress misleading

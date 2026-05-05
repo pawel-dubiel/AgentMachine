@@ -47,7 +47,7 @@ defmodule AgentMachine.ProviderToolContinuationTest do
 
     def classify_response(%ReqLLM.Response{id: "resp-stream"}) do
       %{
-        text: "hello",
+        text: "",
         tool_calls: [],
         finish_reason: :stop
       }
@@ -153,7 +153,7 @@ defmodule AgentMachine.ProviderToolContinuationTest do
     assert budget.breakdown.mcp_tools == []
   end
 
-  test "ReqLLM streaming emits assistant deltas and final done event" do
+  test "ReqLLM streaming emits assistant deltas and uses deltas when final text is empty" do
     parent = self()
 
     assert {:ok, payload} =

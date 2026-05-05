@@ -15,12 +15,12 @@ executes tools, records events, and decides when the run is complete.
 | --- | --- | --- | --- |
 | CLI boundary | `Mix.Tasks.AgentMachine.Run` | Parse flags, fail fast on invalid options, configure event logs and permission control, call `ClientRunner`. | Hide missing required configuration behind defaults. |
 | Session daemon | `Mix.Tasks.AgentMachine.Session`, `SessionServer` | Keep one long-lived JSONL stdio session for the TUI, persist session context, route user messages, own sidechain session agents, pass permission decisions to the active runtime. | Reimplement orchestration, dependency scheduling, or tool execution. |
-| Router | `WorkflowRouter`, `LLMRouter`, `LocalIntentClassifier` | Convert a `RunSpec` into a selected route: `chat`, `basic`, internal `tool`, or `agentic`. Validate required capabilities before a workflow starts. | Execute tools, grant permissions, or treat classifier hints as authority. |
-| Client runner | `ClientRunner` | Build `RunSpec`, route workflow, select skills, build workflow agents/options, install event sinks, summarize and redact results. | Run agents directly or bypass the orchestrator. |
-| Workflow builder | `Workflows.Chat`, `Basic`, `Tool`, `Agentic` | Build initial agent specs and run options for the selected route. | Decide permissions outside `RunSpec` and `ToolHarness`. |
+| Execution planner | `ExecutionPlanner`, `WorkflowRouter`, `LLMRouter`, `LocalIntentClassifier` | Convert a `RunSpec` into `direct`, `tool`, `planned`, or `swarm`. Validate required capabilities before a strategy starts. | Execute tools, grant permissions, or treat classifier hints as authority. |
+| Client runner | `ClientRunner` | Build `RunSpec`, select execution strategy and skills, build private strategy agents/options, install event sinks, summarize and redact results. | Run agents directly or bypass the orchestrator. |
+| Strategy builder | `Workflows.Chat`, `Tool`, `Agentic` | Build initial agent specs and run options for the selected strategy. | Decide permissions outside `RunSpec` and `ToolHarness`. |
 | Orchestrator facade | `Orchestrator` | Validate agent graph and run limits, start one supervised run subtree, await completion or timeout. | Interpret model output itself. |
 | Run owner | `RunServer` | Own one run state: ready/pending tasks, dependencies, retries, delegation, finalizer, artifacts, usage, events, timeouts. | Call providers directly. |
-| Agent execution | `AgentRunner` | Execute one agent attempt through exactly one provider, normalize output, run allowed tools, continue provider tool loops. | Spawn workers or decide workflow shape. |
+| Agent execution | `AgentRunner` | Execute one agent attempt through exactly one provider, normalize output, run allowed tools, continue provider tool loops. | Spawn workers or decide execution strategy. |
 | Planner | Agent id `planner` in `Workflows.Agentic` | Return strict JSON describing direct answer, delegated workers, or swarm workers. Tools are disabled for this agent. | Edit files, browse, run commands, or claim worker results before workers run. |
 | Worker | Delegated agent returned in `next_agents` | Perform delegated work. If tools are exposed, workers may call them subject to policy and approval. | Assume permission not granted by the runtime. |
 | Finalizer | Agent id `finalizer` | Produce the final user-facing answer from prior results, artifacts, and tool results. Tools are disabled. | Delegate follow-up agents or claim side effects without evidence. |
@@ -39,8 +39,8 @@ actor User
 participant "mix agent_machine.run" as MixRun
 participant ClientRunner
 participant RunSpec
-participant WorkflowRouter as Router
-participant "Workflow builder" as Workflow
+participant ExecutionPlanner as Planner
+participant "Strategy builder" as Strategy
 participant Orchestrator
 participant RunServer
 participant AgentRunner
@@ -54,11 +54,11 @@ MixRun -> MixRun: parse flags and validate required inputs
 MixRun -> ClientRunner: run!(attrs, opts)
 ClientRunner -> RunSpec: new!(attrs)
 RunSpec --> ClientRunner: validated spec or explicit error
-ClientRunner -> Router: route!(spec)
-Router --> ClientRunner: route map or CapabilityRequired
-ClientRunner -> ToolHarness: build allowed tools and ToolPolicy when route exposes tools
-ClientRunner -> Workflow: build!(spec, route)
-Workflow --> ClientRunner: initial agents + run opts
+ClientRunner -> Planner: plan!(spec)
+Planner --> ClientRunner: execution_strategy or CapabilityRequired
+ClientRunner -> ToolHarness: build allowed tools and ToolPolicy when strategy exposes tools
+ClientRunner -> Strategy: build!(spec, strategy)
+Strategy --> ClientRunner: initial agents + run opts
 ClientRunner -> Orchestrator: run(agents, opts)
 Orchestrator -> RunServer: start supervised run subtree
 RunServer -> EventLog: run_started / agent_started
@@ -84,9 +84,9 @@ MixRun --> User: text, JSON, or JSONL output
 Key contracts:
 
 - `RunSpec.new!/1` is the first runtime contract. Required fields include
-  `task`, `workflow`, `provider`, `timeout_ms`, `max_steps`, and
-  `max_attempts`. Remote providers also require explicit model, HTTP timeout,
-  and pricing.
+  `task`, `provider`, `timeout_ms`, `max_steps`, and `max_attempts`. Public
+  `workflow` is optional and may only be `agentic`. Remote providers also
+  require explicit model, HTTP timeout, and pricing.
 - Tool options are all-or-nothing. A run with tool options must specify a
   harness or harness list, timeout, max rounds, approval mode, and any required
   root or MCP config.
@@ -98,69 +98,59 @@ Key contracts:
   payloads, missing tool state for tool calls, repeated tool call ids, unknown
   tools, or missing runtime options fail the agent attempt.
 
-## Router
+## Execution Planner
 
-The router answers one question: which workflow should handle this request?
+The execution planner answers one question: which internal strategy should
+handle this request?
 It does not execute the request.
 
 ```plantuml
 @startuml
-title Workflow routing contract
+title Execution strategy contract
 
 participant ClientRunner
 participant RunSpec
-participant WorkflowRouter as Router
+participant ExecutionPlanner as Planner
+participant WorkflowRouter as Classifier
 participant LLMRouter
 participant LocalIntentClassifier as Local
 participant CapabilityRequired
 
 ClientRunner -> RunSpec: new!(attrs)
-ClientRunner -> Router: route!(spec)
+ClientRunner -> Planner: plan!(spec)
 
-alt workflow is explicit chat
-  Router -> Router: reject tool options
-  Router --> ClientRunner: selected=chat, tools_exposed=false
-else workflow is explicit basic
-  Router -> Router: deterministic intent metadata
-  Router --> ClientRunner: selected=basic
-else workflow is explicit agentic
-  Router -> Router: deterministic intent + swarm detection
-  Router --> ClientRunner: selected=agentic
-else workflow is auto
-  alt router_mode=llm
-    Router -> LLMRouter: classify!(task, provider, model, pricing)
-    LLMRouter --> Router: intent + work_shape + route_hint + confidence
-  else router_mode=local
-    Router -> Local: classify!(task, model_dir, threshold)
-    Local --> Router: intent + confidence
-  else router_mode=deterministic
-    Router -> Router: deterministic rules
-  end
+alt router_mode=llm
+  Planner -> Classifier: classify route intent
+  Classifier -> LLMRouter: classify!(task, provider, model, pricing)
+  LLMRouter --> Classifier: intent + work_shape + route_hint + confidence
+else router_mode=local
+  Planner -> Classifier: classify route intent
+  Classifier -> Local: classify!(task, model_dir, threshold)
+  Local --> Classifier: intent + confidence
+else router_mode=deterministic
+  Planner -> Classifier: deterministic rules
+end
 
-  Router -> Router: apply deterministic guards and capability checks
-  alt missing required capability
-    Router -> CapabilityRequired: raise structured error
-    CapabilityRequired --> ClientRunner: failed summary path
-  else capability present
-    Router --> ClientRunner: selected route + reason + metadata
-  end
+Classifier -> Classifier: apply deterministic guards and capability checks
+alt missing required capability
+  Classifier -> CapabilityRequired: raise structured error
+  CapabilityRequired --> ClientRunner: failed summary path
+else capability present
+  Planner --> ClientRunner: execution_strategy + reason + metadata
 end
 @enduml
 ```
 
-Route meanings:
+Strategy meanings:
 
-- `chat`: one no-tool assistant. Used for normal conversation. Explicit
-  `chat` rejects configured tool harnesses.
-- `basic`: one assistant plus a no-tool finalizer. If explicitly configured,
-  full harness tools may be exposed to the assistant.
-- `tool`: internal auto-selected path for narrow read-only tool work. It is not
-  a public workflow value. It exposes only read-risk tools.
-- `agentic`: planner first, optional workers, then finalizer. Used for broad
-  analysis, explicit delegation, mutation, code-edit, test, web browse, and
-  swarm requests when required capabilities are present.
+- `direct`: one no-tool assistant. Used for normal conversation.
+- `tool`: one assistant with narrow read-only tools.
+- `planned`: planner first, optional workers, then finalizer. Used for broad
+  analysis, explicit delegation, mutation, code-edit, test, and web browse when
+  required capabilities are present.
+- `swarm`: planner-created variants plus evaluator and finalizer.
 - `session`: internal daemon coordinator route for conversational TUI session
-  turns. It is not a public workflow value.
+  turns. It is not a public strategy value.
 
 The LLM router contract is strict JSON:
 
@@ -176,7 +166,7 @@ The LLM router contract is strict JSON:
 
 `route_hint` is advisory only. Elixir still checks required harnesses,
 approval modes, MCP browser configuration, test command allowlists, and write
-capability before any workflow starts.
+capability before any strategy starts.
 
 ## Session Daemon And Session Agents
 
@@ -194,7 +184,7 @@ participant TUI
 participant "mix agent_machine.session" as SessionTask
 participant SessionProtocol
 participant SessionServer
-participant WorkflowRouter as Router
+participant ExecutionPlanner as Planner
 participant "Coordinator run" as Coordinator
 participant AgentTask
 participant ClientRunner
@@ -207,9 +197,9 @@ SessionTask -> SessionProtocol: parse_command!(line)
 SessionProtocol --> SessionTask: typed command or explicit error
 SessionTask -> SessionServer: user_message(command)
 SessionServer -> SessionTranscript: append user_message
-SessionServer -> Router: route!(RunSpec)
+SessionServer -> Planner: plan!(RunSpec)
 
-alt selected chat with no tool intent
+alt selected direct with no tool intent
   SessionServer -> Coordinator: run one coordinator agent
   Coordinator -> SessionServer: may use session-control tools
   alt coordinator spawns sidechain agent
@@ -218,7 +208,7 @@ alt selected chat with no tool intent
     AgentTask -> ClientRunner: run!(attrs with agent message)
   end
   Coordinator --> SessionTask: summary
-else selected tool or agentic
+else selected tool, planned, or swarm
   SessionServer -> SessionServer: create primary session agent
   SessionServer -> AgentTask: start primary sidechain attempt
   AgentTask -> ClientRunner: run!(current attrs)
@@ -246,7 +236,7 @@ Important distinction:
 - A **session agent** is a long-lived TUI sidechain record owned by
   `SessionServer` (`agent-1`, `agent-2`, and names chosen by the coordinator).
   Each session-agent attempt calls `ClientRunner.run!/2`, so it uses the same
-  router, workflow builders, orchestrator, tools, and permission checks as a
+  execution planner, private strategy builders, orchestrator, tools, and permission checks as a
   one-shot run.
 - The **coordinator** is daemon-only. It can answer conversational session
   turns and can use session-control tools to spawn/read/message/list session
@@ -262,9 +252,9 @@ Session protocol fail-fast rules:
   session-control tools.
 - Invalid permission control input cancels pending permission requests.
 
-## Agentic Planner Flow
+## Planned Strategy Flow
 
-Agentic workflow is the planner-to-worker path. The planner is a model agent,
+The planned strategy is the planner-to-worker path. The planner is a model agent,
 but it has no runtime authority. It returns JSON. The runtime decides whether
 that JSON is valid, starts workers, enforces graph limits, and starts the
 finalizer when the run is idle.
@@ -349,7 +339,7 @@ Planner contract:
 ```
 
 The planner may describe desired work, but the runtime owns execution. Workers
-inherit runtime options from the selected workflow. If no tool harness is
+inherit runtime options from the selected strategy. If no tool harness is
 exposed, a worker cannot perform filesystem, MCP, command, or network side
 effects.
 
@@ -357,7 +347,7 @@ Finalizer contract:
 
 - The finalizer has tools disabled.
 - It receives prior results, artifacts, tool results, selected skills, compact
-  runtime facts, and workflow route context.
+  runtime facts, and execution strategy context.
 - It must summarize only evidenced work.
 - If it returns `next_agents`, the run fails because finalizers must not
   delegate follow-up work.
@@ -529,21 +519,21 @@ Observer contract:
 
 ## Start-To-Finish Route Examples
 
-### Normal chat
+### Normal Direct Answer
 
-1. TUI or CLI sends task with `workflow = auto`.
-2. Router classifies `intent = none`.
-3. Selected route is `chat`.
-4. Workflow builds one no-tool `assistant`.
+1. TUI or CLI sends a task to the agentic runtime.
+2. Planner classifies `intent = none`.
+3. Selected strategy is `direct`.
+4. Strategy builder creates one no-tool `assistant`.
 5. Provider returns output.
 6. Summary final output is the assistant output.
 
 ### Narrow file read
 
 1. Request asks to read, list, search, or inspect local files.
-2. Router requires a read-capable harness such as `local-files` or `code-edit`.
-3. Selected route is internal `tool`.
-4. Workflow exposes only read-risk tools.
+2. Planner requires a read-capable harness such as `local-files` or `code-edit`.
+3. Selected strategy is `tool`.
+4. Strategy builder exposes only read-risk tools.
 5. Assistant calls read/list/search tools.
 6. Tool results are returned to the provider until final output or
    `tool_max_rounds` is reached.
@@ -551,8 +541,8 @@ Observer contract:
 ### Code edit
 
 1. Request asks to create, edit, patch, or fix code.
-2. Router requires `code-edit`.
-3. Selected route is `agentic`.
+2. Planner requires `code-edit`.
+3. Selected strategy is `planned`.
 4. Planner tools are disabled, so the planner delegates an exact worker task.
 5. Worker uses code-edit tools under `tool_root`.
 6. Approval mode controls whether writes run directly, prompt the user, or are
@@ -562,7 +552,7 @@ Observer contract:
 ### TUI conversational session with background agent
 
 1. TUI sends `user_message` to the session daemon.
-2. Router selects daemon coordinator route for chat with no tool intent.
+2. Planner selects daemon coordinator route for direct turns with no tool intent.
 3. Coordinator may answer directly or call `spawn_agent`.
 4. `SessionServer` creates a session agent transcript and starts `AgentTask`.
 5. `AgentTask` runs the normal `ClientRunner` path for that agent attempt.
@@ -570,8 +560,8 @@ Observer contract:
 
 ## Practical Debugging Map
 
-- Route selected unexpectedly: inspect `workflow_routed` events and
-  `workflow_route` in the final summary.
+- Strategy selected unexpectedly: inspect `execution_strategy_selected` events
+  and `execution_strategy` in the final summary.
 - Missing harness or approval: inspect `capability_required` events or summary
   fields.
 - Tool did not run: inspect `permission_requested`, `permission_decided`,

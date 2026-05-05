@@ -106,11 +106,11 @@ defmodule AgentMachine.OpenRouterPaidTest do
     assert payload.usage.total_tokens > 0
   end
 
-  test "ClientRunner completes a basic run through the OpenRouter paid model" do
+  test "ClientRunner completes a direct run through the OpenRouter paid model" do
     summary =
       ClientRunner.run!(%{
         task: "Reply with one concise sentence that includes AgentMachine.",
-        workflow: :basic,
+        workflow: :agentic,
         provider: "openrouter",
         model: paid_model(),
         timeout_ms: 120_000,
@@ -194,7 +194,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       capture_io(fn ->
         Run.run([
           "--workflow",
-          "basic",
+          "agentic",
           "--provider",
           "openrouter",
           "--model",
@@ -243,7 +243,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       ClientRunner.run!(%{
         task:
           "You have access to an MCP tool named mcp_paid_lookup. Call that tool once with arguments {\"query\":\"agent-machine\"}. Then answer with the exact marker returned by the tool. Do not answer without using the tool.",
-        workflow: :basic,
+        workflow: :agentic,
         provider: "openrouter",
         model: paid_model(),
         timeout_ms: 120_000,
@@ -270,7 +270,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
   end
 
   @tag :openrouter_auto_web_browse_mcp_paid
-  test "auto Google news request delegates to an MCP browser worker through OpenRouter" do
+  test "web browse strategy delegates to an MCP browser worker through OpenRouter" do
     marker = "POLAND_NEWS_PAID_MARKER_42"
     script = fake_playwright_mcp_stdio_server!(marker)
     config_path = playwright_mcp_config_file!(script)
@@ -279,7 +279,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       ClientRunner.run!(%{
         task:
           "research me in google the latest news in poland. If the browser results contain an uppercase marker string, include it exactly in your answer.",
-        workflow: :auto,
+        workflow: :agentic,
         provider: "openrouter",
         model: paid_model(),
         timeout_ms: 180_000,
@@ -295,9 +295,9 @@ defmodule AgentMachine.OpenRouterPaidTest do
       })
 
     assert summary.status == "completed"
-    assert summary.workflow_route.selected == "agentic"
-    assert summary.workflow_route.tool_intent == "web_browse"
-    assert summary.workflow_route.reason == "web_browse_intent_with_mcp_browser"
+    assert summary.execution_strategy.selected == "planned"
+    assert summary.execution_strategy.tool_intent == "web_browse"
+    assert summary.execution_strategy.reason == "web_browse_intent_with_mcp_browser"
     assert summary.final_output =~ marker
     assert event_with?(summary.events, :tool, "mcp_playwright_browser_navigate")
     assert event_with?(summary.events, :tool, "mcp_playwright_browser_snapshot")
@@ -357,8 +357,13 @@ defmodule AgentMachine.OpenRouterPaidTest do
                tool_max_rounds: 6,
                tool_approval_mode: :ask_before_write,
                tool_approval_callback: callback,
+               execution_strategy: %{
+                 selected: "swarm",
+                 strategy: "swarm",
+                 reason: "paid_swarm_integration_test"
+               },
                workflow_route: %{
-                 selected: "agentic",
+                 selected: "swarm",
                  strategy: "swarm",
                  reason: "paid_swarm_integration_test"
                }
@@ -373,6 +378,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
       )
 
     assert run.status == :completed
+    assert run.opts[:execution_strategy].selected == "swarm"
     assert run.opts[:workflow_route].strategy == "swarm"
     assert run.results["planner"].status == :ok
     assert run.results["variant-minimal"].status == :ok
@@ -425,7 +431,7 @@ defmodule AgentMachine.OpenRouterPaidTest do
         ClientRunner.run!(%{
           task:
             "Use the MCP tools mcp_playwright_browser_navigate and mcp_playwright_browser_snapshot. First call mcp_playwright_browser_navigate with arguments {\"arguments\":{\"url\":\"#{url}\"}}. Then call mcp_playwright_browser_snapshot with arguments {\"arguments\":{}}. Reply with the exact marker text from the page and nothing else.",
-          workflow: :basic,
+          workflow: :agentic,
           provider: "openrouter",
           model: paid_model(),
           timeout_ms: 240_000,

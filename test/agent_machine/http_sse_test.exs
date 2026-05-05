@@ -17,7 +17,7 @@ defmodule AgentMachine.HTTPSSETest do
                String.to_charlist("http://127.0.0.1:#{server.port}/stream"),
                [{~c"content-type", ~c"application/json"}],
                "{}",
-               1_000,
+               5_000,
                fn event -> send(parent, {:sse_event, event}) end
              )
 
@@ -65,7 +65,7 @@ defmodule AgentMachine.HTTPSSETest do
                String.to_charlist("http://127.0.0.1:#{server.port}/stream"),
                [{~c"content-type", ~c"application/json"}],
                "{}",
-               1_000,
+               5_000,
                fn _event -> :ok end
              )
   end

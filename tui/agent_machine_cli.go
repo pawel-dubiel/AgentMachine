@@ -368,7 +368,6 @@ func sessionRunPayload(config runConfig) (map[string]any, error) {
 
 	run := map[string]any{
 		"task":                    config.Task,
-		"workflow":                string(config.Workflow),
 		"provider":                string(config.Provider),
 		"timeout_ms":              timeoutMS,
 		"max_steps":               maxStepsValue,
@@ -609,9 +608,9 @@ func prepareRunLog(config runConfig) error {
 }
 
 func buildRunArgs(config runConfig) []string {
+	// Run execution stays on the public mix agent_machine.run boundary.
 	args := []string{
 		"agent_machine.run",
-		"--workflow", string(config.Workflow),
 		"--provider", string(config.Provider),
 		"--timeout-ms", runTimeoutMS(config),
 		"--max-steps", runMaxSteps(config),
@@ -874,13 +873,7 @@ func sortedStringMapKeys(values map[string]string) []string {
 
 func maxSteps(workflow runWorkflow) string {
 	switch workflow {
-	case workflowChat:
-		return defaultChatSteps
-	case workflowBasic:
-		return defaultBasicSteps
 	case workflowAgentic:
-		return defaultAgenticSteps
-	case workflowAuto:
 		return defaultAgenticSteps
 	default:
 		return ""
@@ -898,7 +891,7 @@ func runTimeoutMS(config runConfig) string {
 	if strings.TrimSpace(config.RunTimeout) != "" {
 		return config.RunTimeout
 	}
-	if config.Workflow == workflowAgentic || config.Workflow == workflowAuto {
+	if config.Workflow == workflowAgentic {
 		return defaultAgenticRunTimeoutMS
 	}
 	return defaultRunTimeoutMS
@@ -944,6 +937,9 @@ func parseCompactSummary(raw string) (compactSummary, error) {
 func parseJSONLLine(line string) (jsonlEnvelope, bool, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return jsonlEnvelope{}, false, nil
+	}
+	if !strings.Contains(trimmed, `"type"`) {
 		return jsonlEnvelope{}, false, nil
 	}
 

@@ -2,8 +2,11 @@ defmodule AgentMachine.ClientRunnerTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
-  alias AgentMachine.{AgentResult, ClientRunner, EventLog, JSON, RunSpec, UsageLedger}
+  alias AgentMachine.{AgentResult, ClientRunner, EventLog, JSON}
+  alias AgentMachine.MCP.Config
+  alias AgentMachine.RunSpec
   alias AgentMachine.Tools.ApplyEdits
+  alias AgentMachine.UsageLedger
   alias AgentMachine.Workflows.{Agentic, Basic, Chat, Tool}
   alias Mix.Tasks.AgentMachine.{Rollback, Run}
 
@@ -19,20 +22,19 @@ defmodule AgentMachine.ClientRunnerTest do
   end
 
   test "validates required high-level run spec fields" do
-    assert_raise ArgumentError, ~r/:workflow/, fn ->
-      RunSpec.new!(%{
-        task: "do work",
-        provider: :echo,
-        timeout_ms: 1_000,
-        max_steps: 2,
-        max_attempts: 1
-      })
-    end
+    assert %RunSpec{workflow: :agentic} =
+             RunSpec.new!(%{
+               task: "do work",
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 2,
+               max_attempts: 1
+             })
 
     assert_raise ArgumentError, ~r/run spec :task must be a non-empty binary/, fn ->
       RunSpec.new!(%{
         task: "",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -45,7 +47,7 @@ defmodule AgentMachine.ClientRunnerTest do
                  fn ->
                    RunSpec.new!(%{
                      task: "do work",
-                     workflow: :basic,
+                     workflow: :agentic,
                      provider: :unknown,
                      timeout_ms: 1_000,
                      max_steps: 2,
@@ -54,32 +56,32 @@ defmodule AgentMachine.ClientRunnerTest do
                  end
   end
 
-  test "validates new workflow request values" do
-    for workflow <- [:chat, :basic, :agentic, :auto] do
-      assert %RunSpec{workflow: ^workflow} =
-               RunSpec.new!(%{
-                 task: "do work",
-                 workflow: workflow,
-                 provider: :echo,
-                 timeout_ms: 1_000,
-                 max_steps: 2,
-                 max_attempts: 1
-               })
-    end
+  test "validates single public workflow request value" do
+    assert %RunSpec{workflow: :agentic} =
+             RunSpec.new!(%{
+               task: "do work",
+               workflow: :agentic,
+               provider: :echo,
+               timeout_ms: 1_000,
+               max_steps: 2,
+               max_attempts: 1
+             })
 
-    assert_raise ArgumentError, ~r/:workflow must be :chat, :basic, :agentic, or :auto/, fn ->
-      RunSpec.new!(%{
-        task: "do work",
-        workflow: :unknown,
-        provider: :echo,
-        timeout_ms: 1_000,
-        max_steps: 2,
-        max_attempts: 1
-      })
+    for workflow <- [:chat, :basic, :auto, :unknown] do
+      assert_raise ArgumentError, ~r/:workflow must be :agentic or omitted/, fn ->
+        RunSpec.new!(%{
+          task: "do work",
+          workflow: workflow,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 2,
+          max_attempts: 1
+        })
+      end
     end
   end
 
-  test "validates agentic persistence rounds as an explicit agentic-only option" do
+  test "validates agentic persistence rounds" do
     assert %RunSpec{agentic_persistence_rounds: 2} =
              RunSpec.new!(%{
                task: "do persistent work",
@@ -104,21 +106,9 @@ defmodule AgentMachine.ClientRunnerTest do
         })
       end
     end
-
-    assert_raise ArgumentError, ~r/requires :workflow :agentic/, fn ->
-      RunSpec.new!(%{
-        task: "do persistent work",
-        workflow: :basic,
-        provider: :echo,
-        timeout_ms: 1_000,
-        max_steps: 6,
-        max_attempts: 1,
-        agentic_persistence_rounds: 1
-      })
-    end
   end
 
-  test "validates planner review as an explicit agentic or auto option" do
+  test "validates planner review options" do
     assert %RunSpec{planner_review_mode: :jsonl_stdio, planner_review_max_revisions: 2} =
              RunSpec.new!(%{
                task: "do reviewed work",
@@ -134,7 +124,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert %RunSpec{planner_review_mode: :prompt, planner_review_max_revisions: 1} =
              RunSpec.new!(%{
                task: "do reviewed work",
-               workflow: :auto,
+               workflow: :agentic,
                provider: :echo,
                timeout_ms: 1_000,
                max_steps: 6,
@@ -166,19 +156,6 @@ defmodule AgentMachine.ClientRunnerTest do
         max_steps: 6,
         max_attempts: 1,
         planner_review_mode: :jsonl_stdio
-      })
-    end
-
-    assert_raise ArgumentError, ~r/requires :workflow :agentic or :auto/, fn ->
-      RunSpec.new!(%{
-        task: "do reviewed work",
-        workflow: :basic,
-        provider: :echo,
-        timeout_ms: 1_000,
-        max_steps: 6,
-        max_attempts: 1,
-        planner_review_mode: :jsonl_stdio,
-        planner_review_max_revisions: 1
       })
     end
   end
@@ -266,11 +243,11 @@ defmodule AgentMachine.ClientRunnerTest do
                  end
   end
 
-  test "builds the basic workflow with ReqLLM provider options" do
+  test "builds the private basic strategy with ReqLLM provider options" do
     spec =
       RunSpec.new!(%{
         task: "do work",
-        workflow: :basic,
+        workflow: :agentic,
         provider: "openrouter",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,
@@ -293,11 +270,11 @@ defmodule AgentMachine.ClientRunnerTest do
            } = Keyword.fetch!(opts, :finalizer)
   end
 
-  test "builds the chat workflow without tools or finalizer" do
+  test "builds the private direct strategy without tools or finalizer" do
     spec =
       RunSpec.new!(%{
         task: "hello",
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 1,
@@ -309,7 +286,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert assistant.id == "assistant"
     assert assistant.instructions =~ "assistant running inside AgentMachine"
     assert assistant.instructions =~ "AgentMachine can route concrete tasks"
-    assert assistant.instructions =~ "this chat route cannot manually spawn arbitrary workers"
+    assert assistant.instructions =~ "this direct run cannot manually spawn arbitrary workers"
     assert assistant.metadata == %{agent_machine_disable_tools: true}
     refute Keyword.has_key?(opts, :finalizer)
     refute Keyword.has_key?(opts, :allowed_tools)
@@ -319,7 +296,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "what time is it?",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -347,7 +324,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "what time is it?",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -375,7 +352,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_timeout_ms/, fn ->
       RunSpec.new!(%{
         task: "what time is it?",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -391,7 +368,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_max_rounds/, fn ->
       RunSpec.new!(%{
         task: "what time is it?",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -407,7 +384,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_approval_mode/, fn ->
       RunSpec.new!(%{
         task: "what time is it?",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -423,7 +400,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "write a file",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -463,7 +440,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_root/, fn ->
       RunSpec.new!(%{
         task: "write a file",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -480,7 +457,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "edit code",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -531,7 +508,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "edit code",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -559,7 +536,7 @@ defmodule AgentMachine.ClientRunnerTest do
     spec =
       RunSpec.new!(%{
         task: "edit code",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -582,7 +559,7 @@ defmodule AgentMachine.ClientRunnerTest do
   test "requires code-edit and command-capable approval mode for test commands" do
     base = %{
       task: "edit code",
-      workflow: :basic,
+      workflow: :agentic,
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 2,
@@ -615,14 +592,14 @@ defmodule AgentMachine.ClientRunnerTest do
 
     attrs = %{
       task: "edit code",
-      workflow: :basic,
+      workflow: :agentic,
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 2,
       max_attempts: 1,
       tool_harness: :code_edit,
-      tool_timeout_ms: 100,
-      tool_max_rounds: 2,
+      tool_timeout_ms: 120_000,
+      tool_max_rounds: 16,
       tool_root: root,
       tool_approval_mode: :ask_before_write,
       test_commands: ["mix test"]
@@ -648,7 +625,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     attrs = %{
       task: "write a file",
-      workflow: :basic,
+      workflow: :agentic,
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 2,
@@ -672,7 +649,7 @@ defmodule AgentMachine.ClientRunnerTest do
     summary =
       ClientRunner.run!(%{
         task: "what time is it?",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -689,7 +666,7 @@ defmodule AgentMachine.ClientRunnerTest do
   test "validates client approval callback option" do
     attrs = %{
       task: "summarize",
-      workflow: :basic,
+      workflow: :agentic,
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 2,
@@ -707,7 +684,7 @@ defmodule AgentMachine.ClientRunnerTest do
   test "rejects duplicate or malformed test commands" do
     base = %{
       task: "edit code",
-      workflow: :basic,
+      workflow: :agentic,
       provider: :echo,
       timeout_ms: 1_000,
       max_steps: 2,
@@ -732,7 +709,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_root/, fn ->
       RunSpec.new!(%{
         task: "edit code",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -842,11 +819,10 @@ defmodule AgentMachine.ClientRunnerTest do
     assert finalizer.instructions =~ "Do not auto-merge"
   end
 
-  test "runs the basic echo workflow and returns a client summary" do
+  test "runs the direct echo strategy and returns a client summary" do
     summary =
       ClientRunner.run!(%{
         task: "summarize the project",
-        workflow: :basic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -854,9 +830,11 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.final_output =~ "finalizer"
-    assert Map.keys(summary.results) |> Enum.sort() == ["assistant", "finalizer"]
-    assert summary.usage.agents == 2
+    assert summary.final_output =~ "agent assistant: summarize the project"
+    assert Map.keys(summary.results) == ["assistant"]
+    assert summary.execution_strategy.selected == "direct"
+    assert summary.workflow_route.selected == "direct"
+    assert summary.usage.agents == 1
     assert Enum.map(summary.events, & &1.type) |> List.last() == "run_completed"
   end
 
@@ -896,11 +874,11 @@ defmodule AgentMachine.ClientRunnerTest do
     assert [%{id: "agent:assistant", status: "done", duration_ms: 10}] = summary.checklist
   end
 
-  test "runs the chat echo workflow and returns assistant output directly" do
+  test "runs the single agentic runtime direct strategy without tools" do
     summary =
       ClientRunner.run!(%{
         task: "summarize the project",
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 1,
@@ -911,10 +889,11 @@ defmodule AgentMachine.ClientRunnerTest do
     assert summary.final_output =~ "agent assistant: summarize the project"
     assert Map.keys(summary.results) == ["assistant"]
 
-    assert summary.workflow_route == %{
-             requested: "chat",
-             selected: "chat",
-             reason: "explicit_chat_workflow",
+    assert summary.execution_strategy == %{
+             requested: "agentic",
+             selected: "direct",
+             strategy: "direct",
+             reason: "no_tool_or_mutation_intent_detected",
              tool_intent: "none",
              tools_exposed: false,
              classifier: "deterministic",
@@ -924,11 +903,11 @@ defmodule AgentMachine.ClientRunnerTest do
            }
   end
 
-  test "runs auto chat without planner when no tool intent is detected" do
+  test "runs direct strategy without planner when no tool intent is detected" do
     summary =
       ClientRunner.run!(%{
         task: "explain progressive escalation",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -937,18 +916,18 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.workflow_route.selected == "chat"
+    assert summary.execution_strategy.selected == "direct"
     assert Map.keys(summary.results) == ["assistant"]
     refute Map.has_key?(summary.results, "planner")
     assert summary.final_output =~ "agent assistant: explain progressive escalation"
   end
 
-  test "planner review is rejected when auto routing does not select agentic" do
-    assert_raise ArgumentError, ~r/planner review requires an agentic workflow route/, fn ->
+  test "planner review forces planned strategy" do
+    summary =
       ClientRunner.run!(
         %{
           task: "explain progressive escalation",
-          workflow: :auto,
+          workflow: :agentic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 6,
@@ -959,7 +938,111 @@ defmodule AgentMachine.ClientRunnerTest do
         },
         planner_review_callback: fn _context -> {:approved, "ok"} end
       )
-    end
+
+    assert summary.status == "completed"
+    assert summary.execution_strategy.selected == "planned"
+    assert summary.execution_strategy.reason == "planner_review_requires_planned_strategy"
+    assert Map.keys(summary.results) == ["planner"]
+  end
+
+  test "planner review does not expose stale code-edit shell tools for direct intent" do
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-review-direct-shell-#{System.unique_integer()}")
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(
+        %{
+          task: "hi",
+          workflow: :agentic,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 6,
+          max_attempts: 1,
+          router_mode: :deterministic,
+          planner_review_mode: :jsonl_stdio,
+          planner_review_max_revisions: 1,
+          tool_harness: :code_edit,
+          tool_root: root,
+          tool_timeout_ms: 1_000,
+          tool_max_rounds: 16,
+          tool_approval_mode: :full_access
+        },
+        planner_review_callback: fn _context -> {:approved, "ok"} end
+      )
+
+    assert summary.status == "completed"
+    assert summary.execution_strategy.selected == "planned"
+    assert summary.execution_strategy.tools_exposed == false
+  end
+
+  test "planner review web browse does not expose stale code-edit shell tools" do
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-review-web-shell-#{System.unique_integer()}")
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(
+        %{
+          task: "research me latest news in AI",
+          workflow: :agentic,
+          provider: :echo,
+          timeout_ms: 1_000,
+          max_steps: 6,
+          max_attempts: 1,
+          router_mode: :deterministic,
+          planner_review_mode: :jsonl_stdio,
+          planner_review_max_revisions: 1,
+          tool_harnesses: [:code_edit, :mcp],
+          tool_root: root,
+          tool_timeout_ms: 60_000,
+          tool_max_rounds: 16,
+          tool_approval_mode: :full_access,
+          mcp_config_path: "test-mcp.json",
+          mcp_config: playwright_mcp_config()
+        },
+        planner_review_callback: fn _context -> {:approved, "ok"} end
+      )
+
+    assert summary.status == "completed"
+    assert summary.execution_strategy.selected == "planned"
+    assert summary.execution_strategy.tool_intent == "web_browse"
+    assert summary.execution_strategy.tools_exposed == true
+  end
+
+  test "web browse returns structured capability when MCP browser timeout is too low" do
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-web-browser-timeout-#{System.unique_integer()}")
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "open https://arxiv.org",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        router_mode: :deterministic,
+        tool_harnesses: [:code_edit, :mcp],
+        tool_root: root,
+        tool_timeout_ms: 1_000,
+        tool_max_rounds: 16,
+        tool_approval_mode: :full_access,
+        mcp_config_path: "test-mcp.json",
+        mcp_config: playwright_mcp_config()
+      })
+
+    assert summary.status == "failed"
+    assert summary.capability_required.reason == "insufficient_tool_timeout"
+    assert summary.capability_required.required_harness == "mcp"
+    assert summary.capability_required.required_mcp_tool == "browser_navigate"
+
+    assert summary.capability_required.detail =~
+             "MCP browser access requires :tool_timeout_ms >= 60000, got: 1000"
   end
 
   test "planner review requires a client callback" do
@@ -977,14 +1060,14 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
-  test "emits workflow route telemetry" do
+  test "emits execution strategy telemetry" do
     parent = self()
     handler_id = {:client_runner_test, System.unique_integer([:positive])}
 
     :ok =
       :telemetry.attach(
         handler_id,
-        [:agent_machine, :workflow, :route],
+        [:agent_machine, :execution_strategy, :selected],
         &AgentMachine.TestTelemetryForwarder.handle/4,
         parent
       )
@@ -994,7 +1077,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert %{status: "completed"} =
              ClientRunner.run!(%{
                task: "explain progressive escalation",
-               workflow: :auto,
+               workflow: :agentic,
                provider: :echo,
                timeout_ms: 1_000,
                max_steps: 6,
@@ -1002,8 +1085,104 @@ defmodule AgentMachine.ClientRunnerTest do
                router_mode: :deterministic
              })
 
-    assert_receive {:telemetry, [:agent_machine, :workflow, :route], %{system_time: _},
-                    %{workflow_route: %{requested: "auto", selected: "chat"}}}
+    assert_receive {:telemetry, [:agent_machine, :execution_strategy, :selected],
+                    %{system_time: _},
+                    %{execution_strategy: %{requested: "agentic", selected: "direct"}}}
+  end
+
+  test "direct strategy is not blocked by stale code-edit shell budget" do
+    root =
+      Path.join(System.tmp_dir!(), "agent-machine-direct-shell-budget-#{System.unique_integer()}")
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "hello",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        router_mode: :deterministic,
+        tool_harness: :code_edit,
+        tool_root: root,
+        tool_timeout_ms: 1_000,
+        tool_max_rounds: 6,
+        tool_approval_mode: :full_access
+      })
+
+    assert summary.status == "completed"
+    assert summary.execution_strategy.selected == "direct"
+    assert Map.keys(summary.results) == ["assistant"]
+  end
+
+  test "planned strategy returns structured capability when code-edit shell timeout is too low" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-planned-shell-timeout-#{System.unique_integer()}"
+      )
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "create file src/main.ex",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        router_mode: :deterministic,
+        tool_harness: :code_edit,
+        tool_root: root,
+        tool_timeout_ms: 1_000,
+        tool_max_rounds: 16,
+        tool_approval_mode: :full_access
+      })
+
+    assert summary.status == "failed"
+    assert summary.capability_required.reason == "insufficient_tool_timeout"
+    assert summary.capability_required.required_harness == "code-edit"
+    assert summary.capability_required.requested_root == root
+
+    assert summary.capability_required.detail =~
+             "code-edit shell access requires :tool_timeout_ms >= 120000, got: 1000"
+  end
+
+  test "planned strategy returns structured capability when code-edit shell max rounds is too low" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "agent-machine-planned-shell-rounds-#{System.unique_integer()}"
+      )
+
+    File.mkdir_p!(root)
+
+    summary =
+      ClientRunner.run!(%{
+        task: "create file src/main.ex",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        router_mode: :deterministic,
+        tool_harness: :code_edit,
+        tool_root: root,
+        tool_timeout_ms: 120_000,
+        tool_max_rounds: 6,
+        tool_approval_mode: :full_access
+      })
+
+    assert summary.status == "failed"
+    assert summary.capability_required.reason == "insufficient_tool_max_rounds"
+    assert summary.capability_required.required_harness == "code-edit"
+    assert summary.capability_required.requested_root == root
+
+    assert summary.capability_required.detail =~
+             "code-edit shell access requires :tool_max_rounds >= 16, got: 6"
   end
 
   test "runs auto time intent with time tool when another harness is configured" do
@@ -1013,7 +1192,7 @@ defmodule AgentMachine.ClientRunnerTest do
     summary =
       ClientRunner.run!(%{
         task: "what time is it?",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -1027,8 +1206,8 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.workflow_route.selected == "tool"
-    assert summary.workflow_route.reason == "time_intent_with_read_only_tool"
+    assert summary.execution_strategy.selected == "tool"
+    assert summary.execution_strategy.reason == "time_intent_with_read_only_tool"
     assert Map.keys(summary.results) == ["assistant"]
     refute Map.has_key?(summary.results, "finalizer")
     assert summary.final_output =~ "agent assistant: what time is it?"
@@ -1041,7 +1220,7 @@ defmodule AgentMachine.ClientRunnerTest do
     summary =
       ClientRunner.run!(%{
         task: "read README.md",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -1055,12 +1234,12 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.workflow_route.selected == "tool"
-    assert summary.workflow_route.tool_intent == "file_read"
+    assert summary.execution_strategy.selected == "tool"
+    assert summary.execution_strategy.tool_intent == "file_read"
     assert Map.keys(summary.results) == ["assistant"]
   end
 
-  test "collector records workflow route, runtime events, and final summary" do
+  test "collector records execution strategy, runtime events, and final summary" do
     path =
       Path.join(System.tmp_dir!(), "agent-machine-client-events-#{System.unique_integer()}.jsonl")
 
@@ -1069,7 +1248,7 @@ defmodule AgentMachine.ClientRunnerTest do
     summary =
       ClientRunner.run!(%{
         task: "explain progressive escalation",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -1089,11 +1268,13 @@ defmodule AgentMachine.ClientRunnerTest do
       |> Enum.filter(&(&1["type"] == "event"))
       |> Enum.map(&get_in(&1, ["event", "type"]))
 
-    assert "workflow_routed" in event_types
+    assert "execution_strategy_selected" in event_types
     assert "run_started" in event_types
     assert "agent_started" in event_types
 
-    route_event = Enum.find(decoded, &(get_in(&1, ["event", "type"]) == "workflow_routed"))
+    route_event =
+      Enum.find(decoded, &(get_in(&1, ["event", "type"]) == "execution_strategy_selected"))
+
     assert get_in(route_event, ["event", "tools_exposed"]) == false
     assert Map.has_key?(route_event["event"], "work_shape")
     assert Map.has_key?(route_event["event"], "route_hint")
@@ -1104,10 +1285,10 @@ defmodule AgentMachine.ClientRunnerTest do
            )
   end
 
-  test "runs the agentic echo workflow in direct mode and exposes planner decision" do
+  test "explicit delegation request uses planned strategy and exposes planner decision" do
     summary =
       ClientRunner.run!(%{
-        task: "summarize the project",
+        task: "use agents to summarize the project",
         workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
@@ -1116,7 +1297,8 @@ defmodule AgentMachine.ClientRunnerTest do
       })
 
     assert summary.status == "completed"
-    assert summary.final_output =~ "agent planner: summarize the project"
+    assert summary.execution_strategy.selected == "planned"
+    assert summary.final_output =~ "agent planner: use agents to summarize the project"
     assert Map.keys(summary.results) == ["planner"]
     assert summary.usage.agents == 1
 
@@ -1126,7 +1308,8 @@ defmodule AgentMachine.ClientRunnerTest do
              delegated_agent_ids: []
            }
 
-    assert summary.results["planner"].output =~ "agent planner: summarize the project"
+    assert summary.results["planner"].output =~
+             "agent planner: use agents to summarize the project"
   end
 
   test "streams live events without changing the final summary" do
@@ -1136,7 +1319,7 @@ defmodule AgentMachine.ClientRunnerTest do
       ClientRunner.run!(
         %{
           task: "summarize the project",
-          workflow: :basic,
+          workflow: :agentic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 2,
@@ -1146,7 +1329,8 @@ defmodule AgentMachine.ClientRunnerTest do
       )
 
     assert summary.status == "completed"
-    assert summary.final_output =~ "finalizer"
+    assert summary.final_output =~ "agent assistant: summarize the project"
+    assert_receive {:event, :execution_strategy_selected, %{selected: "direct"}}
     assert_receive {:event, :run_started, %{run_id: _run_id}}
     assert_receive {:event, :agent_started, %{agent_id: "assistant"}}
 
@@ -1155,7 +1339,6 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert total_tokens > 0
     assert_receive {:event, :agent_finished, %{agent_id: "assistant", status: :ok}}
-    assert_receive {:event, :agent_started, %{agent_id: "finalizer"}}
     assert_receive {:event, :run_completed, %{run_id: _run_id}}
   end
 
@@ -1166,7 +1349,7 @@ defmodule AgentMachine.ClientRunnerTest do
       ClientRunner.run!(
         %{
           task: "summarize the project",
-          workflow: :basic,
+          workflow: :agentic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 2,
@@ -1187,7 +1370,7 @@ defmodule AgentMachine.ClientRunnerTest do
       ClientRunner.run!(
         %{
           task: "summarize the project",
-          workflow: :basic,
+          workflow: :agentic,
           provider: :echo,
           timeout_ms: 1_000,
           max_steps: 2,
@@ -1397,7 +1580,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -1416,10 +1599,11 @@ defmodule AgentMachine.ClientRunnerTest do
 
     decoded = JSON.decode!(json)
     assert decoded["status"] == "completed"
-    assert decoded["final_output"] =~ "finalizer"
+    assert decoded["final_output"] =~ "agent assistant: summarize the project"
+    assert decoded["execution_strategy"]["selected"] == "direct"
   end
 
-  test "mix agent_machine.run accepts auto workflow and reports selected route" do
+  test "mix agent_machine.run accepts agentic runtime and reports selected strategy" do
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
 
@@ -1431,7 +1615,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "auto",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -1449,8 +1633,9 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_receive {:mix_shell, :info, [json]}
 
     decoded = JSON.decode!(json)
-    assert decoded["workflow_route"]["requested"] == "auto"
-    assert decoded["workflow_route"]["selected"] == "chat"
+    assert decoded["execution_strategy"]["requested"] == "agentic"
+    assert decoded["execution_strategy"]["selected"] == "direct"
+    assert decoded["workflow_route"]["selected"] == "direct"
     assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
@@ -1458,7 +1643,7 @@ defmodule AgentMachine.ClientRunnerTest do
     summary =
       ClientRunner.run!(%{
         task: "patch lib/foo.ex",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 6,
@@ -1496,7 +1681,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "auto",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -1529,7 +1714,7 @@ defmodule AgentMachine.ClientRunnerTest do
                  get_in(&1, ["event", "session_id"]) == "session-1")
            )
 
-    assert Enum.any?(decoded, &(get_in(&1, ["event", "type"]) == "workflow_routed"))
+    assert Enum.any?(decoded, &(get_in(&1, ["event", "type"]) == "execution_strategy_selected"))
     assert Enum.any?(decoded, &(&1["type"] == "summary"))
   end
 
@@ -1539,7 +1724,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise Mix.Error, ~r/--event-session-id requires --event-log-file/, fn ->
       Run.run([
         "--workflow",
-        "chat",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1555,25 +1740,27 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
-  test "mix agent_machine.run rejects agentic persistence outside agentic workflow" do
+  test "mix agent_machine.run rejects legacy public workflow values" do
     Mix.Task.reenable("agent_machine.run")
 
-    assert_raise Mix.Error, ~r/--agentic-persistence-rounds requires --workflow agentic/, fn ->
-      Run.run([
-        "--workflow",
-        "basic",
-        "--provider",
-        "echo",
-        "--timeout-ms",
-        "1000",
-        "--max-steps",
-        "2",
-        "--max-attempts",
-        "1",
-        "--agentic-persistence-rounds",
-        "1",
-        "hello"
-      ])
+    for workflow <- ["chat", "basic", "auto"] do
+      Mix.Task.reenable("agent_machine.run")
+
+      assert_raise Mix.Error, ~r/--workflow must be agentic or omitted/, fn ->
+        Run.run([
+          "--workflow",
+          workflow,
+          "--provider",
+          "echo",
+          "--timeout-ms",
+          "1000",
+          "--max-steps",
+          "2",
+          "--max-attempts",
+          "1",
+          "hello"
+        ])
+      end
     end
   end
 
@@ -1621,12 +1808,10 @@ defmodule AgentMachine.ClientRunnerTest do
       ])
     end
 
-    Mix.Task.reenable("agent_machine.run")
-
-    assert_raise ArgumentError, ~r/requires :workflow :agentic or :auto/, fn ->
+    assert_raise Mix.Error, ~r/--planner-review must be prompt or jsonl-stdio/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1636,7 +1821,7 @@ defmodule AgentMachine.ClientRunnerTest do
         "--max-attempts",
         "1",
         "--planner-review",
-        "prompt",
+        "maybe",
         "--planner-review-max-revisions",
         "1",
         "--json",
@@ -1645,52 +1830,13 @@ defmodule AgentMachine.ClientRunnerTest do
     end
   end
 
-  test "mix agent_machine.run accepts local router flags" do
-    previous_shell = Mix.shell()
-    Mix.shell(Mix.Shell.Process)
-
-    on_exit(fn ->
-      Mix.shell(previous_shell)
-    end)
-
-    Mix.Task.reenable("agent_machine.run")
-
-    Run.run([
-      "--workflow",
-      "basic",
-      "--provider",
-      "echo",
-      "--router-mode",
-      "deterministic",
-      "--timeout-ms",
-      "1000",
-      "--max-steps",
-      "2",
-      "--max-attempts",
-      "1",
-      "--router-mode",
-      "local",
-      "--router-model-dir",
-      "/tmp/agent-machine-router-model",
-      "--router-timeout-ms",
-      "100",
-      "--router-confidence-threshold",
-      "0.5",
-      "--json",
-      "hello"
-    ])
-
-    assert_receive {:mix_shell, :info, [json]}
-    assert JSON.decode!(json)["status"] == "completed"
-  end
-
   test "mix agent_machine.run rejects invalid local router options" do
     Mix.Task.reenable("agent_machine.run")
 
     assert_raise ArgumentError, ~r/:router_model_dir/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1711,7 +1857,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:router_timeout_ms/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1738,7 +1884,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:router_confidence_threshold/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1773,7 +1919,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--timeout-ms",
@@ -1790,37 +1936,6 @@ defmodule AgentMachine.ClientRunnerTest do
 
     assert_receive {:mix_shell, :info, [json]}
     assert JSON.decode!(json)["status"] == "completed"
-  end
-
-  test "mix agent_machine.run rejects explicit chat with tool harness options" do
-    Mix.Task.reenable("agent_machine.run")
-
-    assert_raise ArgumentError, ~r/workflow :chat does not accept tool harness options/, fn ->
-      Run.run([
-        "--workflow",
-        "chat",
-        "--provider",
-        "echo",
-        "--timeout-ms",
-        "1000",
-        "--max-steps",
-        "1",
-        "--max-attempts",
-        "1",
-        "--tool-harness",
-        "local-files",
-        "--tool-root",
-        System.tmp_dir!(),
-        "--tool-timeout-ms",
-        "100",
-        "--tool-max-rounds",
-        "2",
-        "--tool-approval-mode",
-        "read-only",
-        "--json",
-        "hello"
-      ])
-    end
   end
 
   test "mix agent_machine.run rejects run-context compaction without required limits" do
@@ -1857,7 +1972,7 @@ defmodule AgentMachine.ClientRunnerTest do
       capture_io(fn ->
         Run.run([
           "--workflow",
-          "basic",
+          "agentic",
           "--provider",
           "echo",
           "--timeout-ms",
@@ -1874,7 +1989,10 @@ defmodule AgentMachine.ClientRunnerTest do
     messages = output |> String.trim() |> String.split("\n", trim: true)
     decoded = Enum.map(messages, &JSON.decode!/1)
 
-    assert %{"type" => "event", "event" => %{"type" => "run_started"}} = hd(decoded)
+    assert %{"type" => "event", "event" => %{"type" => "execution_strategy_selected"}} =
+             hd(decoded)
+
+    assert Enum.any?(decoded, &match?(%{"event" => %{"type" => "run_started"}}, &1))
     assert %{"type" => "summary", "summary" => %{"status" => "completed"}} = List.last(decoded)
 
     assert Enum.any?(
@@ -1895,7 +2013,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise Mix.Error, ~r/--stream-response requires --jsonl/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1916,7 +2034,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise Mix.Error, ~r/--progress-observer requires --jsonl/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1937,7 +2055,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_max_rounds/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -1968,7 +2086,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "auto",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -1994,8 +2112,8 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_receive {:mix_shell, :info, [json]}
 
     decoded = JSON.decode!(json)
-    assert decoded["workflow_route"]["selected"] == "tool"
-    assert decoded["workflow_route"]["reason"] == "time_intent_with_read_only_tool"
+    assert decoded["execution_strategy"]["selected"] == "tool"
+    assert decoded["execution_strategy"]["reason"] == "time_intent_with_read_only_tool"
     assert Map.keys(decoded["results"]) == ["assistant"]
   end
 
@@ -2014,7 +2132,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -2098,7 +2216,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "auto",
+      "agentic",
       "--provider",
       "echo",
       "--router-mode",
@@ -2137,7 +2255,7 @@ defmodule AgentMachine.ClientRunnerTest do
       |> File.read!()
       |> String.split("\n", trim: true)
       |> Enum.map(&JSON.decode!/1)
-      |> Enum.find(&(get_in(&1, ["event", "type"]) == "workflow_routed"))
+      |> Enum.find(&(get_in(&1, ["event", "type"]) == "execution_strategy_selected"))
 
     assert get_in(route_event, ["event", "active_harnesses"]) == ["local_files", "mcp"]
   end
@@ -2157,7 +2275,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--timeout-ms",
@@ -2194,7 +2312,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/test_commands require :tool_harness :code_edit/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -2206,9 +2324,9 @@ defmodule AgentMachine.ClientRunnerTest do
         "--tool-harness",
         "demo",
         "--tool-timeout-ms",
-        "100",
+        "120000",
         "--tool-max-rounds",
-        "2",
+        "16",
         "--tool-approval-mode",
         "full-access",
         "--test-command",
@@ -2223,7 +2341,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/test_commands require :tool_approval_mode :full_access/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -2254,7 +2372,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise ArgumentError, ~r/:tool_approval_callback is required/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -2268,15 +2386,15 @@ defmodule AgentMachine.ClientRunnerTest do
         "--tool-root",
         System.tmp_dir!(),
         "--tool-timeout-ms",
-        "100",
+        "120000",
         "--tool-max-rounds",
-        "2",
+        "16",
         "--tool-approval-mode",
         "ask-before-write",
         "--test-command",
         "mix test",
         "--json",
-        "edit"
+        "edit lib/foo.ex"
       ])
     end
   end
@@ -2287,7 +2405,7 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise Mix.Error, ~r/--tool-approval-mode/, fn ->
       Run.run([
         "--workflow",
-        "basic",
+        "agentic",
         "--provider",
         "echo",
         "--timeout-ms",
@@ -2324,7 +2442,7 @@ defmodule AgentMachine.ClientRunnerTest do
 
     Run.run([
       "--workflow",
-      "basic",
+      "agentic",
       "--provider",
       "echo",
       "--timeout-ms",
@@ -2349,7 +2467,10 @@ defmodule AgentMachine.ClientRunnerTest do
       |> String.split("\n", trim: true)
       |> Enum.map(&JSON.decode!/1)
 
-    assert %{"type" => "event", "event" => %{"type" => "run_started"}} = hd(decoded)
+    assert %{"type" => "event", "event" => %{"type" => "execution_strategy_selected"}} =
+             hd(decoded)
+
+    assert Enum.any?(decoded, &match?(%{"event" => %{"type" => "run_started"}}, &1))
     assert %{"type" => "summary", "summary" => %{"status" => "completed"}} = List.last(decoded)
   end
 
@@ -2415,5 +2536,38 @@ defmodule AgentMachine.ClientRunnerTest do
     assert_raise Mix.Error, ~r/missing required --checkpoint-id option/, fn ->
       Rollback.run(["--tool-root", root])
     end
+  end
+
+  defp playwright_mcp_config do
+    Config.from_map!(%{
+      "servers" => [
+        %{
+          "id" => "playwright",
+          "transport" => "stdio",
+          "command" => "mcp-browser",
+          "args" => [],
+          "env" => %{},
+          "tools" => [
+            %{
+              "name" => "browser_navigate",
+              "permission" => "mcp_playwright_browser_navigate",
+              "risk" => "network",
+              "inputSchema" => %{
+                "type" => "object",
+                "required" => ["url"],
+                "properties" => %{"url" => %{"type" => "string"}},
+                "additionalProperties" => false
+              }
+            },
+            %{
+              "name" => "browser_snapshot",
+              "permission" => "mcp_playwright_browser_snapshot",
+              "risk" => "read",
+              "inputSchema" => %{"type" => "object"}
+            }
+          ]
+        }
+      ]
+    })
   end
 end

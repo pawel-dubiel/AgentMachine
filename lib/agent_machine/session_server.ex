@@ -9,6 +9,7 @@ defmodule AgentMachine.SessionServer do
     AgentTask,
     CapabilityRequired,
     ClientRunner,
+    ExecutionPlanner,
     Orchestrator,
     ProgressObserver,
     RunSpec,
@@ -19,8 +20,7 @@ defmodule AgentMachine.SessionServer do
     ToolHarness,
     ToolPolicy,
     WorkflowOptions,
-    WorkflowProvider,
-    WorkflowRouter
+    WorkflowProvider
   }
 
   @agent_output_tail_limit 20
@@ -229,7 +229,7 @@ defmodule AgentMachine.SessionServer do
 
   defp route_user_message(command) do
     spec = RunSpec.new!(command.run)
-    {:ok, WorkflowRouter.route!(spec)}
+    {:ok, ExecutionPlanner.plan!(spec)}
   rescue
     exception in CapabilityRequired -> {:error, exception}
     exception -> {:error, Exception.message(exception)}
@@ -249,7 +249,7 @@ defmodule AgentMachine.SessionServer do
 
   defp start_routed_user_message(command, route, state) do
     if coordinator_route?(route) do
-      case start_coordinator(command, state) do
+      case start_coordinator(command, state, route) do
         {:ok, task, state} ->
           put_started_user_message(state, {:coordinator, task}, command.message_id)
 
@@ -278,8 +278,8 @@ defmodule AgentMachine.SessionServer do
     maybe_write_primary_summary(command.message_id, summary, state)
   end
 
-  defp coordinator_route?(%{selected: "chat", tool_intent: "none"}), do: true
-  defp coordinator_route?(%{"selected" => "chat", "tool_intent" => "none"}), do: true
+  defp coordinator_route?(%{strategy: "direct", tool_intent: "none"}), do: true
+  defp coordinator_route?(%{"strategy" => "direct", "tool_intent" => "none"}), do: true
   defp coordinator_route?(_route), do: false
 
   defp put_started_user_message(state, {:coordinator, task}, message_id),
@@ -287,7 +287,7 @@ defmodule AgentMachine.SessionServer do
 
   defp put_started_user_message(state, {:agent, _agent}, _message_id), do: state
 
-  defp start_coordinator(command, state) do
+  defp start_coordinator(command, state, route) do
     attrs = command.run
     session_tool_opts = command.session_tool_opts
 
@@ -303,6 +303,7 @@ defmodule AgentMachine.SessionServer do
           writer: state.writer,
           log_file: Map.get(command, :log_file),
           session_server: session_server,
+          route: route,
           permission_control: state.permission_control
         })
       end)
@@ -375,8 +376,19 @@ defmodule AgentMachine.SessionServer do
   defp coordinator_opts(spec, context) do
     event_sink = fn event ->
       SessionRunLog.write_event(Map.get(context, :log_file), event)
-      SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
+      SessionWriter.write_line_async(context.writer, SessionProtocol.event_line!(event))
     end
+
+    execution_strategy =
+      context
+      |> Map.fetch!(:route)
+      |> Map.put(:session_coordinator, true)
+      |> Map.put(:session_tools, [
+        "spawn_agent",
+        "send_agent_message",
+        "read_agent_output",
+        "list_session_agents"
+      ])
 
     [
       timeout: spec.timeout_ms,
@@ -389,18 +401,8 @@ defmodule AgentMachine.SessionServer do
       tool_max_rounds: context.session_tool_opts.max_rounds,
       tool_approval_mode: :read_only,
       session_server: context.session_server,
-      workflow_route: %{
-        requested: "session",
-        selected: "session",
-        reason: "session daemon coordinator workflow",
-        tools_exposed: true,
-        session_tools: [
-          "spawn_agent",
-          "send_agent_message",
-          "read_agent_output",
-          "list_session_agents"
-        ]
-      },
+      execution_strategy: execution_strategy,
+      workflow_route: execution_strategy,
       event_sink: event_sink
     ]
     |> maybe_put_progress_observer(spec)

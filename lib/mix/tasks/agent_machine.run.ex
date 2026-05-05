@@ -310,7 +310,6 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp attrs_from_opts(opts, positional) do
     workflow = workflow_from_opts!(opts)
-    validate_agentic_persistence_opts!(opts, workflow)
 
     %{
       task: task_from_positional!(positional),
@@ -359,20 +358,6 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.raise("expected exactly one non-empty task argument, got: #{inspect(positional)}")
   end
 
-  defp validate_agentic_persistence_opts!(opts, :agentic) do
-    if Keyword.has_key?(opts, :agentic_persistence_rounds) do
-      :ok
-    end
-  end
-
-  defp validate_agentic_persistence_opts!(opts, workflow) do
-    if Keyword.has_key?(opts, :agentic_persistence_rounds) do
-      Mix.raise(
-        "--agentic-persistence-rounds requires --workflow agentic, got: #{inspect(workflow)}"
-      )
-    end
-  end
-
   defp planner_review_mode_from_opts!(opts) do
     case Keyword.fetch(opts, :planner_review) do
       {:ok, "prompt"} -> :prompt
@@ -383,23 +368,14 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp workflow_from_opts!(opts) do
     case Keyword.fetch(opts, :workflow) do
-      {:ok, "chat"} ->
-        :chat
-
-      {:ok, "basic"} ->
-        :basic
-
       {:ok, "agentic"} ->
         :agentic
 
-      {:ok, "auto"} ->
-        :auto
-
       {:ok, workflow} ->
-        Mix.raise("--workflow must be chat, basic, agentic, or auto, got: #{inspect(workflow)}")
+        Mix.raise("--workflow must be agentic or omitted, got: #{inspect(workflow)}")
 
       :error ->
-        Mix.raise("missing required --workflow option")
+        :agentic
     end
   end
 
@@ -575,7 +551,7 @@ defmodule Mix.Tasks.AgentMachine.Run do
 
   defp print_text_summary(summary) do
     Mix.shell().info("Run #{summary.run_id}: #{summary.status}")
-    print_workflow_route(summary.workflow_route)
+    print_execution_strategy(summary.execution_strategy || summary.workflow_route)
     Mix.shell().info("")
     Mix.shell().info("Final output:")
     Mix.shell().info(summary.final_output || "(none)")
@@ -588,10 +564,10 @@ defmodule Mix.Tasks.AgentMachine.Run do
     Mix.shell().info("  cost usd: #{summary.usage.cost_usd}")
   end
 
-  defp print_workflow_route(nil), do: :ok
+  defp print_execution_strategy(nil), do: :ok
 
-  defp print_workflow_route(%{requested: requested, selected: selected} = route) do
-    Mix.shell().info("Workflow route: #{requested} -> #{selected}")
+  defp print_execution_strategy(%{requested: requested, selected: selected} = route) do
+    Mix.shell().info("Execution strategy: #{requested} -> #{selected}")
     Mix.shell().info("  reason: #{Map.get(route, :reason) || "(none)"}")
     Mix.shell().info("  strategy: #{Map.get(route, :strategy) || "(none)"}")
     Mix.shell().info("  tool intent: #{Map.get(route, :tool_intent) || "(none)"}")

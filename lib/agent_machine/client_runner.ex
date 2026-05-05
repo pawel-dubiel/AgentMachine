@@ -7,6 +7,7 @@ defmodule AgentMachine.ClientRunner do
     CapabilityRequired,
     EventLog,
     EventSummary,
+    ExecutionPlanner,
     JSON,
     Orchestrator,
     ProgressObserver,
@@ -14,40 +15,55 @@ defmodule AgentMachine.ClientRunner do
     RunSpec,
     Telemetry,
     ToolPolicy,
-    Tools.RequestCapability,
-    WorkflowRouter
+    Tools.RequestCapability
   }
 
   alias AgentMachine.Secrets.Redactor
   alias AgentMachine.Skills.{Manifest, Prompt, Selector}
-  alias AgentMachine.Workflows.{Agentic, Basic, Chat, Tool}
+  alias AgentMachine.Workflows.{Agentic, Chat, Tool}
+
+  @minimum_code_edit_shell_timeout_ms 120_000
+  @minimum_code_edit_shell_max_rounds 16
+  @minimum_mcp_browser_timeout_ms 60_000
+  @code_edit_shell_tools [
+    AgentMachine.Tools.RunShellCommand,
+    AgentMachine.Tools.StartShellCommand,
+    AgentMachine.Tools.ReadShellCommandOutput,
+    AgentMachine.Tools.StopShellCommand,
+    AgentMachine.Tools.ListShellCommands
+  ]
 
   def run!(attrs, opts \\ []) when is_list(opts) do
     validate_opts!(opts)
     spec = RunSpec.new!(attrs)
 
-    case route_workflow(spec, opts) do
-      {:ok, workflow_route} ->
-        validate_planner_review_route!(spec, workflow_route)
-        spec = maybe_put_auto_time_harness(spec, workflow_route)
-        write_workflow_route_event(spec, workflow_route)
-        skill_selection = Selector.select!(spec)
-        {agents, run_opts} = build_workflow(spec, workflow_route)
-        run_opts = put_permission_control(run_opts, opts)
-        validate_runtime_opts!(run_opts, opts)
-        run_opts = put_skill_opts(run_opts, spec, skill_selection)
-        run_opts = put_timeout_lease_opts(run_opts, spec)
-        run_opts = Keyword.put(run_opts, :workflow_route, workflow_route)
-        run_opts = put_event_sink(run_opts, opts)
-        run_opts = put_progress_observer_opts(run_opts, spec)
-        run_opts = put_tool_approval_callback(run_opts, opts)
-        run_opts = put_planner_review_callback(run_opts, opts)
+    case plan_execution(spec, opts) do
+      {:ok, execution_strategy} ->
+        try do
+          spec = maybe_put_auto_time_harness(spec, execution_strategy)
+          write_execution_strategy_event(spec, execution_strategy, opts)
+          skill_selection = Selector.select!(spec)
+          {agents, run_opts} = build_strategy(spec, execution_strategy)
+          run_opts = put_permission_control(run_opts, opts)
+          validate_runtime_opts!(run_opts, opts)
+          run_opts = put_skill_opts(run_opts, spec, skill_selection)
+          run_opts = put_timeout_lease_opts(run_opts, spec)
+          run_opts = Keyword.put(run_opts, :execution_strategy, execution_strategy)
+          run_opts = Keyword.put(run_opts, :workflow_route, execution_strategy)
+          run_opts = put_event_sink(run_opts, opts)
+          run_opts = put_progress_observer_opts(run_opts, spec)
+          run_opts = put_tool_approval_callback(run_opts, opts)
+          run_opts = put_planner_review_callback(run_opts, opts)
 
-        case Orchestrator.run(agents, run_opts) do
-          {:ok, run} -> summarize_and_log(run)
-          {:error, {:failed, run}} -> summarize_and_log(run)
-          {:error, {:timeout, run}} -> summarize_timeout_and_log(run)
-          {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
+          case Orchestrator.run(agents, run_opts) do
+            {:ok, run} -> summarize_and_log(run)
+            {:error, {:failed, run}} -> summarize_and_log(run)
+            {:error, {:timeout, run}} -> summarize_timeout_and_log(run)
+            {:error, reason} -> raise RuntimeError, "run failed: #{inspect(reason)}"
+          end
+        rescue
+          exception in CapabilityRequired ->
+            summarize_capability_required(spec, opts, exception)
         end
 
       {:capability_required, summary} ->
@@ -55,33 +71,22 @@ defmodule AgentMachine.ClientRunner do
     end
   end
 
-  defp route_workflow(spec, opts) do
-    {:ok, WorkflowRouter.route!(spec)}
+  defp plan_execution(spec, opts) do
+    {:ok, ExecutionPlanner.plan!(spec)}
   rescue
     exception in CapabilityRequired ->
       {:capability_required, summarize_capability_required(spec, opts, exception)}
   end
 
-  defp workflow_module(%{selected: "chat"}), do: Chat
-  defp workflow_module(%{selected: "basic"}), do: Basic
-  defp workflow_module(%{selected: "agentic"}), do: Agentic
+  defp build_strategy(spec, %{strategy: "direct"}), do: Chat.build!(spec)
+  defp build_strategy(spec, %{strategy: "tool"} = route), do: Tool.build!(spec, route)
 
-  defp build_workflow(spec, %{selected: "tool"} = route), do: Tool.build!(spec, route)
-  defp build_workflow(spec, %{selected: "agentic"} = route), do: Agentic.build!(spec, route)
-  defp build_workflow(spec, route), do: workflow_module(route).build!(spec)
-
-  defp validate_planner_review_route!(%RunSpec{planner_review_mode: nil}, _route), do: :ok
-
-  defp validate_planner_review_route!(%RunSpec{} = spec, %{selected: "agentic"}), do: spec
-
-  defp validate_planner_review_route!(%RunSpec{}, %{selected: selected}) do
-    raise ArgumentError,
-          "planner review requires an agentic workflow route, got selected route #{inspect(selected)}"
-  end
+  defp build_strategy(spec, %{strategy: strategy} = route) when strategy in ["planned", "swarm"],
+    do: Agentic.build!(spec, route)
 
   defp maybe_put_auto_time_harness(
          %RunSpec{tool_harnesses: harnesses} = spec,
-         %{selected: "tool", tool_intent: "time"}
+         %{strategy: "tool", tool_intent: "time"}
        )
        when is_list(harnesses) do
     if Enum.any?(harnesses, &(&1 in [:time, :demo])) do
@@ -91,32 +96,42 @@ defmodule AgentMachine.ClientRunner do
     end
   end
 
-  defp maybe_put_auto_time_harness(spec, _workflow_route), do: spec
+  defp maybe_put_auto_time_harness(spec, _execution_strategy), do: spec
 
-  defp write_workflow_route_event(spec, route) do
+  defp write_execution_strategy_event(spec, strategy, opts) do
     Telemetry.execute(
-      [:agent_machine, :workflow, :route],
+      [:agent_machine, :execution_strategy, :selected],
       %{system_time: Telemetry.system_time()},
-      %{workflow_route: route}
+      %{execution_strategy: strategy}
     )
 
-    EventLog.write_event(%{
-      type: :workflow_routed,
-      requested: route.requested,
-      selected: route.selected,
-      reason: route.reason,
-      strategy: Map.get(route, :strategy),
-      tool_intent: route.tool_intent,
-      tools_exposed: route.tools_exposed,
-      classifier: Map.get(route, :classifier),
-      classifier_model: Map.get(route, :classifier_model),
-      classified_intent: Map.get(route, :classified_intent),
-      work_shape: Map.get(route, :work_shape),
-      route_hint: Map.get(route, :route_hint),
-      confidence: Map.get(route, :confidence),
+    event = %{
+      type: :execution_strategy_selected,
+      requested: strategy.requested,
+      selected: strategy.selected,
+      strategy: strategy.strategy,
+      reason: strategy.reason,
+      tool_intent: strategy.tool_intent,
+      tools_exposed: strategy.tools_exposed,
+      classifier: Map.get(strategy, :classifier),
+      classifier_model: Map.get(strategy, :classifier_model),
+      classified_intent: Map.get(strategy, :classified_intent),
+      work_shape: Map.get(strategy, :work_shape),
+      route_hint: Map.get(strategy, :route_hint),
+      confidence: Map.get(strategy, :confidence),
       active_harnesses: Enum.map(spec.tool_harnesses || [], &Atom.to_string/1),
       at: DateTime.utc_now()
-    })
+    }
+
+    emit_execution_strategy_event(opts, event)
+    EventLog.write_event(event)
+  end
+
+  defp emit_execution_strategy_event(opts, event) do
+    case Keyword.fetch(opts, :event_sink) do
+      {:ok, sink} -> sink.(event)
+      :error -> :ok
+    end
   end
 
   def json!(summary) when is_map(summary) do
@@ -227,6 +242,9 @@ defmodule AgentMachine.ClientRunner do
   end
 
   defp validate_runtime_opts!(run_opts, opts) do
+    validate_code_edit_shell_budget!(run_opts)
+    validate_mcp_browser_budget!(run_opts)
+
     if Keyword.get(run_opts, :tool_approval_mode) == :ask_before_write and
          approval_callback_required?(run_opts) and
          not Keyword.has_key?(opts, :tool_approval_callback) do
@@ -239,6 +257,79 @@ defmodule AgentMachine.ClientRunner do
       raise ArgumentError,
             ":planner_review_callback is required when planner review is enabled"
     end
+  end
+
+  defp validate_code_edit_shell_budget!(run_opts) do
+    if code_edit_shell_exposed?(run_opts) do
+      require_minimum_integer!(
+        Keyword.get(run_opts, :tool_timeout_ms),
+        :tool_timeout_ms,
+        @minimum_code_edit_shell_timeout_ms,
+        "code-edit shell access",
+        reason: :insufficient_tool_timeout,
+        intent: :code_mutation,
+        required_harness: :code_edit,
+        requested_root: Keyword.get(run_opts, :tool_root)
+      )
+
+      require_minimum_integer!(
+        Keyword.get(run_opts, :tool_max_rounds),
+        :tool_max_rounds,
+        @minimum_code_edit_shell_max_rounds,
+        "code-edit shell access",
+        reason: :insufficient_tool_max_rounds,
+        intent: :code_mutation,
+        required_harness: :code_edit,
+        requested_root: Keyword.get(run_opts, :tool_root)
+      )
+    end
+  end
+
+  defp code_edit_shell_exposed?(run_opts) do
+    allowed_tools = Keyword.get(run_opts, :allowed_tools, [])
+    Enum.any?(@code_edit_shell_tools, &(&1 in allowed_tools))
+  end
+
+  defp validate_mcp_browser_budget!(run_opts) do
+    if mcp_browser_exposed?(run_opts) do
+      require_minimum_integer!(
+        Keyword.get(run_opts, :tool_timeout_ms),
+        :tool_timeout_ms,
+        @minimum_mcp_browser_timeout_ms,
+        "MCP browser access",
+        reason: :insufficient_tool_timeout,
+        intent: :web_browse,
+        required_harness: :mcp,
+        required_mcp_tool: "browser_navigate"
+      )
+    end
+  end
+
+  defp mcp_browser_exposed?(run_opts) do
+    run_opts
+    |> Keyword.get(:allowed_tools, [])
+    |> Enum.any?(&mcp_browser_tool?/1)
+  end
+
+  defp mcp_browser_tool?(tool) when is_atom(tool) do
+    Code.ensure_loaded?(tool) and function_exported?(tool, :permission, 0) and
+      tool.permission() |> Atom.to_string() |> String.contains?("browser")
+  end
+
+  defp mcp_browser_tool?(_tool), do: false
+
+  defp require_minimum_integer!(value, _key, minimum, _label, _capability)
+       when is_integer(value) and value >= minimum,
+       do: :ok
+
+  defp require_minimum_integer!(value, key, minimum, label, capability) do
+    message = "#{label} requires #{inspect(key)} >= #{minimum}, got: #{inspect(value)}"
+
+    raise CapabilityRequired,
+          Keyword.merge(capability,
+            detail: message,
+            message: message
+          )
   end
 
   defp approval_callback_required?(run_opts) do
@@ -326,6 +417,7 @@ defmodule AgentMachine.ClientRunner do
       status: "failed",
       error: Exception.message(exception),
       final_output: nil,
+      execution_strategy: nil,
       workflow_route: nil,
       results: %{},
       artifacts: %{},
@@ -357,6 +449,7 @@ defmodule AgentMachine.ClientRunner do
       status: summary_status(run, unresolved_failed_results),
       error: summary_error(run, unresolved_failed_results),
       final_output: final_output(run, unresolved_failed_results),
+      execution_strategy: execution_strategy(run),
       workflow_route: workflow_route(run),
       results: summarize_results(run.results),
       artifacts: stringify_map(run.artifacts),
@@ -466,7 +559,7 @@ defmodule AgentMachine.ClientRunner do
          results: %{"assistant" => %{status: :ok, output: output}}
        })
        when is_binary(output) do
-    if workflow_route_selected?(opts, ["chat", "tool"]), do: output
+    if execution_strategy_selected?(opts, ["direct", "tool"]), do: output
   end
 
   defp single_assistant_output(_run), do: nil
@@ -476,22 +569,22 @@ defmodule AgentMachine.ClientRunner do
          results: %{"coordinator" => %{status: :ok, output: output}}
        })
        when is_binary(output) do
-    if workflow_route_selected?(opts, ["session"]), do: output
+    if execution_strategy_selected?(opts, ["session"]), do: output
   end
 
   defp single_coordinator_output(_run), do: nil
 
-  defp workflow_route_selected?(opts, selected) when is_list(opts) do
+  defp execution_strategy_selected?(opts, selected) when is_list(opts) do
     selected = List.wrap(selected)
 
-    case Keyword.get(opts, :workflow_route) do
+    case Keyword.get(opts, :execution_strategy) || Keyword.get(opts, :workflow_route) do
       %{selected: route_selected} -> route_selected in selected
       %{"selected" => route_selected} -> route_selected in selected
       _other -> false
     end
   end
 
-  defp workflow_route_selected?(_opts, _selected), do: false
+  defp execution_strategy_selected?(_opts, _selected), do: false
 
   defp summarize_results(results) do
     Map.new(results, fn {agent_id, result} ->
@@ -542,6 +635,12 @@ defmodule AgentMachine.ClientRunner do
     run
     |> Map.get(:opts, [])
     |> Keyword.get(:workflow_route)
+  end
+
+  defp execution_strategy(run) do
+    run
+    |> Map.get(:opts, [])
+    |> Keyword.get(:execution_strategy)
   end
 
   defp summarize_skills(run) do

@@ -7,7 +7,7 @@ defmodule AgentMachine.WorkflowProviderTest do
     spec =
       RunSpec.new!(%{
         task: "hello",
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 1,
@@ -27,7 +27,7 @@ defmodule AgentMachine.WorkflowProviderTest do
     spec =
       RunSpec.new!(%{
         task: "hello",
-        workflow: :basic,
+        workflow: :agentic,
         provider: "google_vertex",
         model: "openai/gpt-4o-mini",
         timeout_ms: 1_000,

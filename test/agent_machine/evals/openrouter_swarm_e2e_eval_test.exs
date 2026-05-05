@@ -174,8 +174,8 @@ defmodule AgentMachine.OpenRouterSwarmE2EEvalTest do
   end
 
   defp planner_json_valid?(summary) do
-    summary.workflow_route.selected == "agentic" and
-      summary.workflow_route.strategy == "swarm" and
+    summary.execution_strategy.selected == "swarm" and
+      summary.execution_strategy.strategy == "swarm" and
       get_in(summary.results, ["planner", :decision, :mode]) == "swarm"
   end
 

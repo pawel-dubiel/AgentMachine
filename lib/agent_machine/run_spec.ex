@@ -7,7 +7,7 @@ defmodule AgentMachine.RunSpec do
   alias AgentMachine.Skills.Manifest
   alias AgentMachine.Tools.RunTestCommand
 
-  @enforce_keys [:task, :workflow, :provider, :timeout_ms, :max_steps, :max_attempts]
+  @enforce_keys [:task, :provider, :timeout_ms, :max_steps, :max_attempts]
   # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :task,
@@ -53,7 +53,7 @@ defmodule AgentMachine.RunSpec do
 
   @type t :: %__MODULE__{
           task: binary(),
-          workflow: :chat | :basic | :agentic | :auto,
+          workflow: :agentic,
           provider: :echo | binary(),
           model: binary() | nil,
           timeout_ms: pos_integer(),
@@ -97,6 +97,7 @@ defmodule AgentMachine.RunSpec do
   def new!(attrs) when is_map(attrs) do
     attrs
     |> atomize_keys!()
+    |> Map.put_new(:workflow, :agentic)
     |> normalize_provider!()
     |> normalize_skills!()
     |> normalize_tool_harnesses!()
@@ -160,11 +161,11 @@ defmodule AgentMachine.RunSpec do
     end)
   end
 
-  defp require_workflow!(workflow) when workflow in [:chat, :basic, :agentic, :auto], do: :ok
+  defp require_workflow!(:agentic), do: :ok
 
   defp require_workflow!(workflow) do
     raise ArgumentError,
-          "run spec :workflow must be :chat, :basic, :agentic, or :auto, got: #{inspect(workflow)}"
+          "run spec :workflow must be :agentic or omitted, got: #{inspect(workflow)}"
   end
 
   defp require_provider!(:echo), do: :ok
@@ -329,9 +330,9 @@ defmodule AgentMachine.RunSpec do
          planner_review_max_revisions: revisions
        })
        when mode in [:prompt, :jsonl_stdio] do
-    if workflow not in [:agentic, :auto] do
+    if workflow != :agentic do
       raise ArgumentError,
-            "run spec :planner_review_mode requires :workflow :agentic or :auto, got: #{inspect(workflow)}"
+            "run spec :planner_review_mode requires :workflow :agentic, got: #{inspect(workflow)}"
     end
 
     require_positive_integer!(revisions, :planner_review_max_revisions)

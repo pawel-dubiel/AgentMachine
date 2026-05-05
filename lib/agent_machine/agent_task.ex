@@ -50,7 +50,7 @@ defmodule AgentMachine.AgentTask do
     fn event ->
       maybe_append_tool_record(context, event)
       SessionRunLog.write_event(Map.get(context, :log_file), event)
-      SessionWriter.write_line(context.writer, SessionProtocol.event_line!(event))
+      SessionWriter.write_line_async(context.writer, SessionProtocol.event_line!(event))
     end
   end
 

@@ -20,7 +20,7 @@ defmodule AgentMachine.RunContextPromptTest do
                "agent_machine" => %{
                  "role" => role,
                  "execution_model" => execution_model,
-                 "workflows" => workflows,
+                 "execution_strategies" => strategies,
                  "instruction" => agent_machine_instruction
                },
                "instruction" => instruction
@@ -32,8 +32,8 @@ defmodule AgentMachine.RunContextPromptTest do
     assert is_binary(timezone)
     assert role == "assistant running inside AgentMachine"
     assert execution_model =~ "Elixir runtime executes tools"
-    assert workflows["chat"] =~ "no tools"
-    assert workflows["agentic"] =~ "next_agents"
+    assert strategies["direct"] =~ "no tools"
+    assert strategies["planned"] =~ "next_agents"
     assert agent_machine_instruction =~ "Do not claim AgentMachine lacks agents"
     assert instruction =~ "Do not invent dates or times"
   end
@@ -46,19 +46,19 @@ defmodule AgentMachine.RunContextPromptTest do
              ""
   end
 
-  test "includes workflow route in runtime facts" do
+  test "includes execution strategy and compatibility route in runtime facts" do
     text =
       RunContextPrompt.text(
         run_context: %{results: %{}, artifacts: %{}},
         runtime_facts:
           RunContextPrompt.runtime_facts(
             now: ~U[2026-04-29 16:27:30Z],
-            workflow_route: %{
-              requested: "auto",
+            execution_strategy: %{
+              requested: "agentic",
               selected: "tool",
               reason: "time_intent_with_read_only_tool",
               tool_intent: "time",
-              strategy: "swarm",
+              strategy: "tool",
               work_shape: "generic_tool_use",
               route_hint: "tool"
             }
@@ -67,11 +67,19 @@ defmodule AgentMachine.RunContextPromptTest do
 
     assert %{
              "runtime" => %{
-               "workflow_route" => %{
-                 "requested" => "auto",
+               "execution_strategy" => %{
+                 "requested" => "agentic",
                  "selected" => "tool",
                  "tool_intent" => "time",
-                 "strategy" => "swarm",
+                 "strategy" => "tool",
+                 "work_shape" => "generic_tool_use",
+                 "route_hint" => "tool"
+               },
+               "workflow_route" => %{
+                 "requested" => "agentic",
+                 "selected" => "tool",
+                 "tool_intent" => "time",
+                 "strategy" => "tool",
                  "work_shape" => "generic_tool_use",
                  "route_hint" => "tool"
                }

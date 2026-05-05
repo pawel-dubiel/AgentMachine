@@ -131,40 +131,52 @@ defmodule AgentMachine.CapabilityRequired do
 
   defp message_for(:missing_read_harness, _attrs),
     do:
-      "auto workflow detected local read/search intent but no read-capable tool harness is configured"
+      "agentic runtime detected local read/search intent but no read-capable tool harness is configured"
 
   defp message_for(:missing_tool_harness, _attrs),
-    do: "auto workflow detected tool intent but no tool harness is configured"
+    do: "agentic runtime detected tool intent but no tool harness is configured"
 
   defp message_for(:missing_read_only_tool_capability, attrs) do
     detail = Map.get(attrs, :detail)
     suffix = if is_binary(detail), do: ": #{detail}", else: ""
-    "auto workflow detected tool intent but no read-only tool capability is configured" <> suffix
+
+    "agentic runtime detected tool intent but no read-only tool capability is configured" <>
+      suffix
   end
 
   defp message_for(:missing_write_harness, _attrs),
-    do: "auto workflow detected mutation intent but no write-capable tool harness is configured"
+    do: "agentic runtime detected mutation intent but no write-capable tool harness is configured"
 
   defp message_for(:missing_code_edit_harness, _attrs),
     do:
-      "auto workflow detected code mutation intent but :code_edit tool harness is not configured"
+      "agentic runtime detected code mutation intent but :code_edit tool harness is not configured"
 
   defp message_for(:missing_test_code_edit_harness, _attrs),
-    do: "auto workflow detected test intent but :code_edit tool harness is not configured"
+    do: "agentic runtime detected test intent but :code_edit tool harness is not configured"
 
   defp message_for(:missing_test_approval, _attrs),
     do:
-      "auto workflow detected test intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control"
+      "agentic runtime detected test intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control"
 
   defp message_for(:missing_test_commands, _attrs),
-    do: "auto workflow detected test intent but no allowlisted :test_commands are configured"
+    do: "agentic runtime detected test intent but no allowlisted :test_commands are configured"
 
   defp message_for(:missing_browser_mcp, _attrs),
-    do: "auto workflow detected web browse intent but no MCP browser network tool is configured"
+    do: "agentic runtime detected web browse intent but no MCP browser network tool is configured"
 
   defp message_for(:missing_browser_approval, _attrs),
     do:
-      "auto workflow detected web browse intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control for network-risk MCP browser tools"
+      "agentic runtime detected web browse intent but :tool_approval_mode must be :full_access or :ask_before_write with permission control for network-risk MCP browser tools"
+
+  defp message_for(:insufficient_tool_timeout, attrs),
+    do:
+      Map.get(attrs, :detail) ||
+        "agentic runtime detected tool intent but tool timeout is too low"
+
+  defp message_for(:insufficient_tool_max_rounds, attrs),
+    do:
+      Map.get(attrs, :detail) ||
+        "agentic runtime detected tool intent but tool max rounds is too low"
 
   defp message_for(reason, _attrs), do: "runtime capability required: #{inspect(reason)}"
 

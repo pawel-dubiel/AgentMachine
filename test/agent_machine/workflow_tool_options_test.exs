@@ -1,13 +1,14 @@
 defmodule AgentMachine.WorkflowToolOptionsTest do
   use ExUnit.Case, async: true
 
+  alias AgentMachine.MCP.Config
   alias AgentMachine.{RunSpec, ToolPolicy, WorkflowToolOptions}
 
   test "leaves options unchanged when no tool harness is configured" do
     spec =
       RunSpec.new!(%{
         task: "hello",
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 1,
@@ -21,7 +22,7 @@ defmodule AgentMachine.WorkflowToolOptionsTest do
     spec =
       RunSpec.new!(%{
         task: "read README.md",
-        workflow: :basic,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -47,7 +48,7 @@ defmodule AgentMachine.WorkflowToolOptionsTest do
     spec =
       RunSpec.new!(%{
         task: "read README.md",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -72,11 +73,50 @@ defmodule AgentMachine.WorkflowToolOptionsTest do
     assert Keyword.fetch!(opts, :tool_root) == "/tmp/project"
   end
 
+  test "builds agentic web browse options from only the MCP harness" do
+    spec =
+      RunSpec.new!(%{
+        task: "research latest AI news",
+        workflow: :agentic,
+        provider: :echo,
+        timeout_ms: 1_000,
+        max_steps: 6,
+        max_attempts: 1,
+        tool_harnesses: [:code_edit, :mcp],
+        tool_root: "/tmp/project",
+        tool_timeout_ms: 1_000,
+        tool_max_rounds: 16,
+        tool_approval_mode: :full_access,
+        mcp_config_path: "test-mcp.json",
+        mcp_config: playwright_mcp_config()
+      })
+
+    opts =
+      WorkflowToolOptions.put_agentic_tool_opts([timeout: 1_000], spec, %{
+        tool_intent: "web_browse",
+        tools_exposed: true
+      })
+
+    tools = Keyword.fetch!(opts, :allowed_tools)
+    refute AgentMachine.Tools.RunShellCommand in tools
+    refute AgentMachine.Tools.ReadFile in tools
+    refute Keyword.has_key?(opts, :tool_root)
+
+    assert %ToolPolicy{harness: :mcp} = Keyword.fetch!(opts, :tool_policy)
+
+    assert MapSet.member?(
+             Keyword.fetch!(opts, :tool_policy).permissions,
+             :mcp_playwright_browser_navigate
+           )
+
+    assert length(tools) == 2
+  end
+
   test "fails fast when read-only tool options are requested without harnesses" do
     spec =
       RunSpec.new!(%{
         task: "read README.md",
-        workflow: :auto,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 2,
@@ -94,5 +134,38 @@ defmodule AgentMachine.WorkflowToolOptionsTest do
                  fn ->
                    WorkflowToolOptions.put_full_tool_opts([], %{})
                  end
+  end
+
+  defp playwright_mcp_config do
+    Config.from_map!(%{
+      "servers" => [
+        %{
+          "id" => "playwright",
+          "transport" => "stdio",
+          "command" => "mcp-browser",
+          "args" => [],
+          "env" => %{},
+          "tools" => [
+            %{
+              "name" => "browser_navigate",
+              "permission" => "mcp_playwright_browser_navigate",
+              "risk" => "network",
+              "inputSchema" => %{
+                "type" => "object",
+                "required" => ["url"],
+                "properties" => %{"url" => %{"type" => "string"}},
+                "additionalProperties" => false
+              }
+            },
+            %{
+              "name" => "browser_snapshot",
+              "permission" => "mcp_playwright_browser_snapshot",
+              "risk" => "read",
+              "inputSchema" => %{"type" => "object"}
+            }
+          ]
+        }
+      ]
+    })
   end
 end

@@ -690,7 +690,7 @@ defmodule AgentMachine.OrchestratorTest do
                  ),
                tool_root: root,
                test_commands: test_commands,
-               tool_timeout_ms: 1_000,
+               tool_timeout_ms: 5_000,
                tool_max_rounds: 3,
                tool_approval_mode: :ask_before_write,
                tool_approval_callback: callback

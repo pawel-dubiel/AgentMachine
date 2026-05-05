@@ -239,7 +239,6 @@ Auto-select by task text:
 
 ```sh
 mix agent_machine.run \
-  --workflow agentic \
   --provider echo \
   --timeout-ms 30000 \
   --max-steps 6 \
@@ -253,7 +252,6 @@ Force exact skills:
 
 ```sh
 mix agent_machine.run \
-  --workflow agentic \
   --provider echo \
   --timeout-ms 30000 \
   --max-steps 6 \
@@ -281,7 +279,6 @@ Rules:
 
 ```sh
 mix agent_machine.run \
-  --workflow agentic \
   --provider openrouter \
   --model "YOUR_MODEL" \
   --timeout-ms 30000 \

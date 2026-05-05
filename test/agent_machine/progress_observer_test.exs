@@ -48,7 +48,7 @@ defmodule AgentMachine.ProgressObserverTest do
     spec =
       RunSpec.new!(%{
         task: "observe progress",
-        workflow: :chat,
+        workflow: :agentic,
         provider: :echo,
         timeout_ms: 1_000,
         max_steps: 1,
