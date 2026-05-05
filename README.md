@@ -317,6 +317,12 @@ Every run requires:
 - `--max-steps <positive-int>`;
 - `--max-attempts <positive-int>`.
 
+Clients may pass structured conversation context without changing the current
+task:
+
+- `--recent-context <text>` for reference-only prior context;
+- `--pending-action <text>` for affirmative follow-ups such as “yes, do it”.
+
 Remote providers also require:
 
 - `--model <id>`;

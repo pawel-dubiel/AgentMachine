@@ -4,6 +4,10 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Added structured conversation context fields (`recent_context` and
+  `pending_action`) across RunSpec, CLI, session payloads, routing, runtime
+  facts, and TUI follow-up handling so prior completed goals are not flattened
+  into new tasks.
 - Fixed TUI capability prompts so local-files mutation requests that explicitly
   name the home/current folder can open the approval selector even when the
   runtime reports `missing_write_harness` without a configured tool root.
