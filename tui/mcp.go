@@ -13,8 +13,9 @@ import (
 
 const (
 	defaultMCPToolTimeout   = "120000"
-	defaultMCPToolMaxRounds = "6"
+	defaultMCPToolMaxRounds = "50"
 	defaultMCPToolApproval  = "ask-before-write"
+	legacyMCPToolMaxRounds  = "6"
 )
 
 type mcpConfigFile struct {
@@ -155,6 +156,18 @@ func migrateManagedMCPConfig(configPath string, config *savedConfig) error {
 	}
 
 	return migrateManagedPlaywrightMCPConfig(path)
+}
+
+func migrateLegacyMCPToolMaxRounds(config *savedConfig) bool {
+	if strings.TrimSpace(config.MCPConfig) == "" {
+		return false
+	}
+	if strings.TrimSpace(config.ToolMaxRounds) != legacyMCPToolMaxRounds {
+		return false
+	}
+
+	config.ToolMaxRounds = defaultMCPToolMaxRounds
+	return true
 }
 
 func migrateManagedPlaywrightMCPConfig(path string) error {

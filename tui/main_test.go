@@ -3479,7 +3479,7 @@ func TestMCPAddPlaywrightCreatesManagedConfig(t *testing.T) {
 	if result.savedConfig.ToolHarness != "" || result.savedConfig.ToolRoot != "" {
 		t.Fatalf("expected MCP preset to disable filesystem tools, got %#v", result.savedConfig)
 	}
-	if result.savedConfig.ToolTimeout != "120000" || result.savedConfig.ToolMaxRounds != "6" || result.savedConfig.ToolApproval != "ask-before-write" {
+	if result.savedConfig.ToolTimeout != defaultMCPToolTimeout || result.savedConfig.ToolMaxRounds != defaultMCPToolMaxRounds || result.savedConfig.ToolApproval != defaultMCPToolApproval {
 		t.Fatalf("expected MCP tool budget, got %#v", result.savedConfig)
 	}
 
@@ -3593,6 +3593,36 @@ func TestManagedMCPMigrationLeavesStandaloneConfigAlone(t *testing.T) {
 
 	if err := migrateManagedMCPConfig(configPath, &config); err != nil {
 		t.Fatalf("expected standalone config to be ignored, got %v", err)
+	}
+}
+
+func TestInitialModelMigratesLegacyMCPToolMaxRounds(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("AGENT_MACHINE_TUI_CONFIG", configPath)
+
+	if err := saveSavedConfig(configPath, savedConfig{
+		MCPConfig:     "/tmp/agent-machine-standalone.mcp.json",
+		ToolTimeout:   defaultMCPToolTimeout,
+		ToolMaxRounds: legacyMCPToolMaxRounds,
+		ToolApproval:  defaultMCPToolApproval,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := initialModel()
+	if err != nil {
+		t.Fatalf("expected initial model, got %v", err)
+	}
+	if m.savedConfig.ToolMaxRounds != defaultMCPToolMaxRounds {
+		t.Fatalf("expected legacy MCP max rounds migration, got %#v", m.savedConfig)
+	}
+
+	loaded, err := loadSavedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ToolMaxRounds != defaultMCPToolMaxRounds {
+		t.Fatalf("expected persisted MCP max rounds migration, got %#v", loaded)
 	}
 }
 

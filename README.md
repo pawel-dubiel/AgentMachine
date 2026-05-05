@@ -488,7 +488,7 @@ Use the TUI Playwright preset:
 Use a standalone MCP config:
 
 ```text
-/mcp-config /path/to/mcp.json 120000 16 ask-before-write
+/mcp-config /path/to/mcp.json 120000 50 ask-before-write
 ```
 
 Or pass MCP to the CLI:
@@ -506,7 +506,7 @@ mix agent_machine.run \
   --tool-harness mcp \
   --mcp-config examples/playwright.mcp.json \
   --tool-timeout-ms 120000 \
-  --tool-max-rounds 16 \
+  --tool-max-rounds 50 \
   --tool-approval-mode ask-before-write \
   --permission-control jsonl-stdio \
   --jsonl \

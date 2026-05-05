@@ -571,6 +571,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err != nil {
 		return model{}, err
 	}
+	migratedMCPToolMaxRounds := migrateLegacyMCPToolMaxRounds(&savedConfig)
 	if err := applyStartupOptions(&savedConfig, startup); err != nil {
 		return model{}, err
 	}
@@ -581,7 +582,7 @@ func initialModelWithArgs(args []string) (model, error) {
 	if err != nil {
 		return model{}, err
 	}
-	if startup.hasOverrides() || migratedRouterDefault || migratedProviderSettings || migratedToolRoot || loadedLegacyConfig || initializedSkillsDir {
+	if startup.hasOverrides() || migratedRouterDefault || migratedProviderSettings || migratedToolRoot || migratedMCPToolMaxRounds || loadedLegacyConfig || initializedSkillsDir {
 		if err := saveSavedConfig(configPath, savedConfig); err != nil {
 			return model{}, err
 		}
