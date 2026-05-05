@@ -1145,7 +1145,7 @@ func (m model) setupView() string {
 
 	return strings.Join([]string{
 		styles.Label.Render("Setup"),
-		"mode: progressive auto (chat/tool/basic/agentic)",
+		"runtime: agentic strategy direct/tool/planned/swarm",
 		"theme: " + string(m.activeTheme()),
 		"provider: " + providerValue,
 		"model: " + emptyAsNone(m.modelID()),
@@ -1160,7 +1160,7 @@ func (m model) setupView() string {
 		"session log: " + emptyAsNone(m.eventLogFile),
 		"config: " + m.configPath,
 		"run idle timeout ms: " + defaultRunTimeoutMS,
-		"agentic/auto idle timeout ms: " + defaultAgenticRunTimeoutMS,
+		"planned/swarm idle timeout ms: " + defaultAgenticRunTimeoutMS,
 		"hard cap: 3x idle timeout",
 		"HTTP timeout ms: " + defaultHTTPTimeoutMS,
 		"",
@@ -1631,13 +1631,15 @@ func (m model) helpText() string {
 func helpTextForTheme(theme tuiTheme) string {
 	return strings.Join([]string{
 		stylesForTheme(theme).Label.Render("Help"),
-		"Progressive auto can select chat, read-only tool, basic, or agentic per run.",
+		"Agentic runtime selects direct, tool, planned, or swarm strategy per run.",
 		"",
 		"Keys:",
 		"Tab / Shift+Tab: switch views",
 		"Esc: back",
 		"Enter: submit or open selected agent",
 		"Up / Down: command history / provider/model picker / agent selection in Agents",
+		"Ctrl+B / Ctrl+F: scroll chat response by page",
+		"Ctrl+P / Ctrl+N: scroll chat response by line",
 		"Ctrl+A / Ctrl+E / Ctrl+U / Ctrl+K / Ctrl+W: edit input",
 		"Ctrl+C: quit",
 		"",
@@ -1679,6 +1681,7 @@ func helpTextForTheme(theme tuiTheme) string {
 		"/agents",
 		"/agent <id>",
 		"/queue [list]|edit <index> <message>|remove <index>|clear|run <index>",
+		"/scroll up|down|top|bottom",
 		"/back",
 		"/clear",
 		"/quit",

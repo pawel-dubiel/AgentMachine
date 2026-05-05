@@ -4,6 +4,17 @@ Add the newest changes at the top of the list. Keep each entry short and concret
 
 ## Latest Changes
 
+- Fixed TUI capability prompts so local-files mutation requests that explicitly
+  name the home/current folder can open the approval selector even when the
+  runtime reports `missing_write_harness` without a configured tool root.
+- Raised the TUI MCP browser tool budget from 6 to 50 provider/tool rounds and
+  migrated saved MCP configs that still use the old 6-round default.
+- Updated `AGENTS.md` to describe the single agentic runtime,
+  `AgentMachine.ExecutionPlanner`, ReqLLM remote providers, provider catalog
+  ownership, `execution_strategy` events, and TUI catalog responsibilities.
+- Added TUI chat transcript scrolling for long responses with Mac-friendly
+  `Ctrl+B`/`Ctrl+F` page scrolling, `Ctrl+P`/`Ctrl+N` line scrolling, and
+  `/scroll up|down|top|bottom`.
 - Changed session runtime event delivery to write TUI JSONL events
   asynchronously, preventing slow terminal/stdout writes from failing active
   provider streams while keeping final summaries synchronous.

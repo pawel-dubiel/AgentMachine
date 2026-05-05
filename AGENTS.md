@@ -51,12 +51,16 @@ boundaries, pause and simplify the design before adding code.
 - Agent execution belongs in `AgentMachine.AgentRunner`: call exactly one
   validated provider, normalize its payload, run explicitly allowed tools, and
   return an `AgentResult`.
-- Client workflow shape belongs in `AgentMachine.Workflows.*`: choose the initial
-  agents and finalizer for a high-level client run. Workflows must stay small and
-  must not duplicate orchestrator scheduling logic.
+- Public runtime strategy selection belongs in `AgentMachine.ExecutionPlanner`:
+  choose `direct`, `tool`, `planned`, or `swarm` for a validated high-level
+  client run. `AgentMachine.Workflows.*` modules are private strategy builders;
+  they must stay small and must not duplicate orchestrator scheduling logic.
 - Provider modules belong at the model/API boundary only: translate an agent and
   options into an external/local provider call, then return the provider payload.
   Providers must not spawn agents, manage run state, or know about TUI behavior.
+- Provider setup metadata belongs in `AgentMachine.ProviderCatalog`: supported
+  provider IDs, labels, required secret fields, required non-secret fields,
+  model metadata, pricing metadata, and provider capability metadata.
 - Structured model-output adapters belong in small runtime modules such as
   `AgentMachine.DelegationResponse`, not inside providers or the TUI.
 - Tool schema and provider tool-call adapters belong in `AgentMachine.ToolHarness`.
@@ -72,11 +76,12 @@ boundaries, pause and simplify the design before adding code.
   redacted text/JSON/JSONL output, and write explicit redacted run log files
   when requested.
 - `tui/` is only a thin Go client over the CLI boundary. All agent runtime logic
-  belongs in Elixir. The TUI may manage terminal state, local key storage, model
-  lists, pricing lookup, command history, and display live events, but it must
-  not reimplement orchestration, dependency scheduling, retries, workflow
-  behavior, delegation parsing, tool execution, usage aggregation, run context,
-  or provider contracts.
+  belongs in Elixir. The TUI may manage terminal state, local key storage,
+  provider-keyed settings, model/pricing metadata loaded through the Elixir
+  provider catalog boundary, command history, and live event display, but it
+  must not reimplement orchestration, dependency scheduling, retries, execution
+  strategy selection, delegation parsing, tool execution, usage aggregation,
+  run context, or provider contracts.
 - TUI code should keep a clean internal split: Bubble Tea model/update/view code,
   CLI process adapter, config persistence, provider model/pricing lookup, and
   rendering helpers should stay separate enough that the TUI remains easy to
@@ -87,8 +92,8 @@ boundaries, pause and simplify the design before adding code.
 ## Drift Checks
 
 - Do not track generated binaries or build artifacts.
-- Do not add a generic framework layer when one explicit workflow or helper will
-  solve the current problem.
+- Do not add a generic framework layer when one explicit runtime strategy or
+  helper will solve the current problem.
 - Do not let UI convenience create hidden runtime defaults.
 - Do not put runtime behavior into the TUI to avoid adding an Elixir API or CLI
   option. Add the explicit runtime boundary instead.
@@ -132,8 +137,12 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   session.
 - CLI runs write logs only when explicit paths are passed with `--log-file` or
   `--event-log-file`.
-- Treat log contents as redacted runtime evidence for workflow routing, agent
-  lifecycle, provider activity, tool calls, skills, and final summaries.
+- Treat log contents as redacted runtime evidence for execution strategy
+  selection, agent lifecycle, provider activity, tool calls, skills, and final
+  summaries.
+- Session/TUI streaming runtime events are best-effort observability and may be
+  written asynchronously; final summaries and required control decisions must
+  remain synchronous.
 
 ## Current Architecture
 
@@ -145,17 +154,25 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - `AgentMachine.RunRegistry` names run-scoped processes by `{type, run_id}`;
   each run subtree includes a run event collector, per-run task supervisor, tool
   session supervisor, and run server.
-- `AgentMachine.RunSpec`, `AgentMachine.Workflows.Basic`, `AgentMachine.Workflows.Agentic`, and `AgentMachine.ClientRunner` form the high-level client boundary.
+- `AgentMachine.RunSpec`, `AgentMachine.ExecutionPlanner`, and
+  `AgentMachine.ClientRunner` form the high-level client boundary.
+- `AgentMachine.Workflows.Chat`, `AgentMachine.Workflows.Tool`,
+  `AgentMachine.Workflows.Basic`, and `AgentMachine.Workflows.Agentic` are
+  private strategy builders used after execution strategy selection.
 - `AgentMachine.AgentRunner` executes one validated agent through its provider and normalizes provider output.
 - `AgentMachine.DelegationResponse` parses opt-in structured planner output into delegated worker specs.
 - `AgentMachine.RunContextPrompt` formats prior results and artifacts for remote provider prompts.
 - `AgentMachine.RunContextPrompt` also includes compact runtime facts such as
-  current UTC date/time, local timezone, and workflow route; keep these facts
-  factual and small.
+  current UTC date/time, local timezone, and execution strategy; keep these
+  facts factual and small. `workflow_route` is a temporary compatibility alias
+  for the same strategy facts.
 - `AgentMachine.ToolHarness` maps explicit tool harnesses to allowed tools and
   adapts tool definitions/calls for provider-native tool calling.
+- `AgentMachine.ProviderCatalog` is the source of truth for supported provider
+  IDs, setup fields, model metadata, pricing metadata, and capability metadata.
 - Providers implement `AgentMachine.Provider.complete/2`.
-- Built-in providers are Echo, OpenAI Responses, and OpenRouter Chat.
+- Built-in providers are Echo for local/offline tests and
+  `AgentMachine.Providers.ReqLLM` for every remote provider.
 - Tools implement `AgentMachine.Tool.run/2`.
 - Tools may implement `AgentMachine.Tool.definition/0` when they should be
   exposed to provider-native tool calling.
@@ -164,14 +181,17 @@ For documentation-only changes, running tests is optional. Say explicitly when t
 - Agents may return `tool_calls` for explicit tool execution.
 - Initial agents may use `depends_on` for dependency-ordered execution.
 - Runs may use `finalizer` to synthesize a final result after all other work.
-- Runs choose an explicit client `workflow`; `basic` starts an assistant plus
-  finalizer, `agentic` starts a planner that may delegate workers plus
-  finalizer, and `auto` may internally select a no-finalizer read-only `tool`
-  path that is not accepted as a public workflow value.
+- Runs expose one public runtime: `agentic`. External clients may omit workflow
+  or pass `agentic`; `chat`, `basic`, and `auto` are not public workflow values.
+- `AgentMachine.ExecutionPlanner` selects the internal execution strategy:
+  `direct` for one assistant without tools, `tool` for one assistant with a
+  narrow tool set, `planned` for planner/worker/finalizer orchestration, or
+  `swarm` for planner-created variants plus evaluator.
 - Runs may use `max_attempts` for explicit retry attempts.
 - Runs collect in-memory `events` for lightweight observability and emit
-  `:telemetry` events for run, agent, tool, MCP call, and workflow-route
-  activity alongside JSONL logs.
+  `:telemetry` events for run, agent, tool, MCP call, and execution-strategy
+  activity alongside JSONL logs. `workflow_route` remains only as a temporary
+  compatibility alias for `execution_strategy`.
 - High-level client runs treat `--timeout-ms` as an idle lease, derive a 3x hard
   cap, emit heartbeat/lease/timeout events, and cancel active agent/tool work on
   timeout.
@@ -222,11 +242,15 @@ For documentation-only changes, running tests is optional. Say explicitly when t
   JSONL events, and read-style tool results must pass through
   `AgentMachine.Secrets.Redactor`; the TUI must not duplicate redaction logic.
 - `tui/` contains the Go Bubble Tea conversation client with slash commands and should call the CLI boundary instead of reimplementing orchestration.
-- The TUI may persist workflow, provider, provider-specific selected model, tool
-  harness setup, and remote provider API keys in its local config file. It may
-  inject saved API keys into the `mix` child process environment.
-- The TUI resolves remote-provider pricing itself before calling the CLI; do not expose token price fields as normal user inputs.
-- The TUI loads remote provider model lists from OpenAI/OpenRouter and should keep model selection provider-specific.
+- The TUI may persist selected provider, selected model per provider,
+  provider-keyed secret fields, provider-keyed non-secret option fields, and
+  tool harness setup in its local config file. It must not persist workflow as
+  part of the active design. It may inject saved provider secrets into the `mix`
+  child process environment.
+- The TUI loads provider/model metadata through the Elixir provider catalog
+  tasks, not through direct OpenAI/OpenRouter HTTP APIs. It may cache returned
+  model and pricing metadata and pass explicit pricing to the CLI when required;
+  do not expose token price fields as normal user inputs.
 
 ## Deferred Direction
 

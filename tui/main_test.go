@@ -2906,15 +2906,15 @@ func TestStartRunPreparationErrorStaysInChatWhenProviderIsSet(t *testing.T) {
 	}
 }
 
-func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
+func TestSetupAndHelpUseAgenticRuntimeStrategies(t *testing.T) {
 	m := model{provider: providerEcho, providerSet: true}
 
 	setup := m.setupView()
-	if !strings.Contains(setup, "mode: progressive auto") {
-		t.Fatalf("expected progressive auto mode in setup view, got %q", setup)
+	if !strings.Contains(setup, "runtime: agentic") {
+		t.Fatalf("expected agentic runtime in setup view, got %q", setup)
 	}
-	if !strings.Contains(setup, "chat/tool/basic/agentic") {
-		t.Fatalf("expected setup view to describe selected routes, got %q", setup)
+	if !strings.Contains(setup, "direct/tool/planned/swarm") {
+		t.Fatalf("expected setup view to describe runtime strategies, got %q", setup)
 	}
 	if strings.Contains(setup, "/workflow") || strings.Contains(setup, "workflow:") {
 		t.Fatalf("expected setup view to omit workflow selection, got %q", setup)
@@ -2930,8 +2930,8 @@ func TestSetupAndHelpUseProgressiveAutoMode(t *testing.T) {
 	if !strings.Contains(help, "/skills list|show <name>|install <name>|generate <name> <description>|off") {
 		t.Fatalf("expected help to mention skill generation command, got %q", help)
 	}
-	if !strings.Contains(help, "read-only tool") {
-		t.Fatalf("expected help to mention read-only tool route, got %q", help)
+	if !strings.Contains(help, "direct, tool, planned, or swarm") {
+		t.Fatalf("expected help to mention agentic strategies, got %q", help)
 	}
 
 	status := m.statusLine()
