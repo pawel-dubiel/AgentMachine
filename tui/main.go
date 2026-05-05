@@ -1339,6 +1339,9 @@ func (m model) withCapabilityRequired(request capabilityRequired) (model, bool) 
 
 	root := strings.TrimSpace(request.RequestedRoot)
 	if root == "" {
+		root = strings.TrimSpace(m.inferCapabilityRoot(request, harness))
+	}
+	if root == "" {
 		m.messages = append(m.messages, chatMessage{Role: "system", Text: capabilityRootRequiredText(request, harness)})
 		m.view = viewChat
 		return m, true
@@ -1384,6 +1387,49 @@ func pendingHarnessForCapability(request capabilityRequired) string {
 		}
 	}
 	return ""
+}
+
+func (m model) inferCapabilityRoot(request capabilityRequired, harness string) string {
+	if harness != "local-files" || request.Reason != "missing_write_harness" {
+		return ""
+	}
+
+	task := strings.TrimSpace(m.latestUserTask())
+	if task == "" {
+		task = strings.TrimSpace(m.activeConfig.Task)
+	}
+	if task == "" {
+		return ""
+	}
+
+	normalized := strings.ToLower(task)
+	if mentionsHomeRoot(normalized) {
+		home, err := os.UserHomeDir()
+		if err == nil && strings.TrimSpace(home) != "" {
+			return filepath.Clean(home)
+		}
+	}
+	if mentionsWorkingDirectoryRoot(normalized) {
+		return filepath.Clean(m.toolRootBaseDir())
+	}
+	return ""
+}
+
+func mentionsHomeRoot(text string) bool {
+	return strings.Contains(text, "~/") ||
+		strings.Contains(text, "home folder") ||
+		strings.Contains(text, "home directory") ||
+		strings.Contains(text, "my home") ||
+		strings.Contains(text, "in home ")
+}
+
+func mentionsWorkingDirectoryRoot(text string) bool {
+	return strings.Contains(text, "current folder") ||
+		strings.Contains(text, "current directory") ||
+		strings.Contains(text, "working directory") ||
+		strings.Contains(text, "this folder") ||
+		strings.Contains(text, "this directory") ||
+		strings.Contains(text, "cwd")
 }
 
 func capabilityReasonText(request capabilityRequired) string {

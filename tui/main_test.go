@@ -4385,6 +4385,43 @@ func TestRouterFileMutationCapabilityErrorShowsLocalFilesSelector(t *testing.T) 
 	}
 }
 
+func TestRouterFileMutationCapabilityInfersHomeRootForSelector(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+
+	m := model{
+		provider:    providerOpenRouter,
+		providerSet: true,
+		savedConfig: savedConfig{
+			ToolHarness: "",
+		},
+		messages: []chatMessage{
+			{Role: "user", Text: "in home folder create mdp1 folder"},
+		},
+	}
+
+	updated, handled := m.withCapabilityRequired(capabilityRequired{
+		Reason:          "missing_write_harness",
+		Intent:          "file_mutation",
+		RequiredHarness: "local-files",
+	})
+
+	if !handled {
+		t.Fatal("expected capability requirement to be handled")
+	}
+	if updated.pendingToolHarness != "local-files" {
+		t.Fatalf("expected local-files harness, got %q", updated.pendingToolHarness)
+	}
+	if updated.pendingToolRoot != home {
+		t.Fatalf("expected inferred home root %q, got %q", home, updated.pendingToolRoot)
+	}
+	last := updated.messages[len(updated.messages)-1].Text
+	if !strings.Contains(last, "Use the selector below") ||
+		!strings.Contains(last, "requested root: "+home) {
+		t.Fatalf("expected local-files selector prompt with inferred home root, got %q", last)
+	}
+}
+
 func TestRouterTestIntentApprovalErrorShowsCodeEditSelector(t *testing.T) {
 	t.Setenv("HOME", "/tmp/agent-machine-home")
 
